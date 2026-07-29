@@ -1,0 +1,265 @@
+# 装柜方案助手：技术交接
+
+最后更新：2026-07-29
+
+## 1. 项目定位
+
+**装柜方案助手** 是一个面向外贸发货场景的轻量装柜测算试用版，已部署到：
+
+- `https://packing.xingshuwen.com`
+
+用户选择一个集装箱、录入散箱或已码好整托货物后，系统一次生成三个可比较的可行布局：
+
+| 方案 | 目标 |
+| --- | --- |
+| 装得多 | 尽可能提高有效装载体积、件数 |
+| 更稳妥 | 在保持第一方案货物集合的前提下，降低水平重心偏差 |
+| 易操作 | 在保持同一货物集合的前提下，集中同 SKU 的装载区域并减少装载步骤 |
+
+这不是数学全局最优求解器。它使用固定排序和确定性启发式，在受限时间内生成高质量、经校验的布局。对外应避免承诺“最优装柜”；实际发货前必须按实际箱单、柜体铭牌和现场条件复核。
+
+## 2. 当前功能
+
+- 单柜计算：20GP、40GP、40HQ 和自定义柜型。
+- 散箱与整托混装；整托仅按整体长方体计算，不进行托盘内部码放。
+- 最多 30 个 SKU、总计最多 5000 件。
+- 货物约束：尺寸、重量、数量、允许朝向、可叠放、最大层数、顶部承重、易碎、必装。
+- 可设置货物间隙与柜体安全边距；前端厘米/千克输入，后端统一使用整数毫米/克。
+- Excel 固定模板下载和浏览器内解析，原始 Excel 不上传。
+- 浏览器 `localStorage` 保存最近一次草稿；服务端不保存订单或布局。
+- 结果页提供 3D、俯视、侧视、柜门视图、分层查看、SKU 高亮、装载步骤和打印/PDF。
+- 结果页顶部提供“换柜”下拉框和“确认重算”；会保留原货物与计算设置并重新调用 API。
+- 首页使用 `frontend/src/assets/voyage-banner.jpg` 横幅，图片内已有“一帆风顺，满载启航”文案，不要在页面重复添加同一句。
+
+明确未做：账号/租户、计费、云端历史、多柜联算、自动码托、ERP/WMS、异形货、危险品规则、手动拖拽布局和复杂兼容矩阵。
+
+## 3. 工程结构
+
+```text
+backend/
+  app/
+    main.py        # FastAPI、静态文件、限流、超时、API
+    models.py      # Pydantic 请求/响应与领域模型
+    packing.py     # 候选生成、三方案、指标与说明
+    validator.py   # 独立布局校验器
+  tests/           # pytest：API、算法、校验、大订单
+frontend/src/
+  App.tsx          # 录入页状态、本地草稿、调用 API
+  components/
+    ContainerPicker.tsx
+    CargoTable.tsx
+    SolutionWorkspace.tsx  # 比较页、换柜重算、打印报告
+    LoadVisualizer.tsx     # Three.js 3D 和共享坐标的 2D 视图
+  lib/
+    api.ts          # 毫米/克转换及 API 请求
+    cargo.ts        # 货物默认值、输入校验、朝向映射
+    excel.ts        # Excel 模板和解析
+  styles.css
+Dockerfile          # 多阶段构建，FastAPI 同源托管前端 dist
+README.md           # 面向开发者的基础说明
+output/             # 发布包、systemd/nginx 示例和视觉验收产物
+```
+
+前端：React 19、TypeScript、Vite、Three.js、ExcelJS、Vitest。
+
+后端：Python 3.12、FastAPI、Pydantic、`rectpack`、pytest。项目根目录存在 `pnpm-lock.yaml`，优先使用 pnpm；Windows 上已验证的命令可使用 `npm.cmd` 执行同名脚本。
+
+## 4. 本地启动和验证
+
+前置：Node.js 20+、Python 3.12+。
+
+```powershell
+# 首次安装
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+pnpm install
+
+# 终端一：后端（从项目根目录执行）
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --app-dir backend --reload
+
+# 终端二：前端
+pnpm dev
+```
+
+打开 `http://127.0.0.1:5173`。`frontend/vite.config.mjs` 将 `/api` 和 `/health` 代理到本地 `http://127.0.0.1:8000`。
+
+修改算法或接口后，至少执行：
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest backend\tests -q
+npm.cmd test -- --run
+npm.cmd run build
+```
+
+前端修改还应启动页面，在 390px 手机、平板和桌面检查：货物录入、三方案切换、换柜重算、3D 画面、Excel 导入和打印。已有截图与 PDF 位于 `output/playwright/`，仅作参考，不应替代本次变更的验证。
+
+## 5. API 约定
+
+所有 API 与前端同源：
+
+| 方法和路径 | 用途 |
+| --- | --- |
+| `GET /health` | 返回 `{"status":"ok"}`，用于健康检查 |
+| `GET /api/v1/container-presets` | 返回标准柜型 |
+| `POST /api/v1/pack` | 接收柜型、货物、间隙，返回三个方案 |
+
+标准柜参数定义在 `backend/app/main.py` 的 `CONTAINER_PRESETS`。当前内尺寸、柜门尺寸和最大载重均为常用参考值；不要在没有业务确认的情况下修改。
+
+`POST /api/v1/pack` 请求中的关键字段：
+
+```json
+{
+  "container": {
+    "id": "20gp",
+    "name": "20GP",
+    "inner_length_mm": 5898,
+    "inner_width_mm": 2352,
+    "inner_height_mm": 2393,
+    "door_width_mm": 2340,
+    "door_height_mm": 2280,
+    "max_payload_g": 28200000,
+    "clearance_mm": 0
+  },
+  "item_gap_mm": 0,
+  "cargo_items": []
+}
+```
+
+响应 `solutions` 固定有 `high_fill`、`stable`、`easy` 三项。每项包含：
+
+- `placements`：逐件的坐标、实际朝向尺寸、朝向、重量和装载步骤。
+- `loaded_counts` / `unloaded_counts`：每个货物 ID 的装入与未装数量。
+- `metrics`：体积/重量利用率、重心、重量偏差、步骤数、货区数。
+- `pros` / `cons` / `warnings`：由指标直接生成，不使用 AI 文案。
+- `identical_to`：如果布局签名相同，标出与此前方案相同，避免制造虚假差异。
+
+错误统一为：`{"error":{"code":"...","message":"..."}}`。参数错误为 `422 INVALID_REQUEST`；必装失败为 `422 MUST_LOAD_UNSATISFIED`；请求过大为 `413`；频率限制为 `429`；繁忙为 `503`；计算超时为 `504`。
+
+## 6. 算法和正确性边界
+
+### 候选生成
+
+核心实现在 `backend/app/packing.py`：
+
+1. 根据允许朝向、门宽/门高、有效内尺寸和堆叠约束选择可用朝向。
+2. 货物按完整竖直货栈 `StackUnit` 处理。易碎或不可叠货固定为单层；可叠货受柜高、最大层数和顶部承重限制。
+3. 采用 `rectpack` 的 `MaxRectsBssf`、`MaxRectsBaf`、`GuillotineBssfSas` 生成多个二维栈位候选；所有排序固定，结果可复现。
+4. “装得多”从多组载重筛选策略和排列策略中按装载体积、件数、栈数选优。
+5. “更稳妥”重排第一方案的同一批货物，优先重货排序并平移布局以降低水平重心偏差。
+6. “易操作”重排第一方案的同一批货物，按 SKU 组织装载步骤，减少 SKU 切换。
+7. 每个候选在返回前必须调用 `validate_solution()`；任何校验失败均不返回给用户。
+
+### 校验器
+
+`backend/app/validator.py` 独立验证：
+
+- 柜内边界和安全边距。
+- 每件在当前朝向下可以通过柜门。
+- 朝向、实际尺寸、重量与货物定义一致。
+- 实例不重复、实例序号不越界、货物 ID 存在。
+- 三维碰撞与同层水平间隙。
+- 总重量不超过柜体载重。
+- 必装货物全部装入。
+- 高层货物底面完整支撑，不允许悬空或跨箱搭接。
+- 不可叠放/易碎货物上方不得放货。
+- 最大层数和顶部承重。
+
+重要限制：当前生成器使用“完整支撑的垂直货栈 + 二维平面排布”模型。它刻意保守，不生成局部支撑、错层搭接或复杂人工装载技巧可实现的布局。因此“未装入”不等同于物理上绝对装不下。
+
+`item_gap_mm` 只在水平方向执行。堆叠层之间不插入竖向间隙，避免把货物误判为悬空。
+
+## 7. 前端实现要点
+
+- `App.tsx` 是输入、结果和草稿状态的唯一协调层。切换到结果页时不丢失输入数据。
+- `CargoTable.tsx` 为数字输入维护短暂字符串草稿，使用户可以先删除默认 `0` 再输入；空值失焦后恢复到上一个有效数字。修改该逻辑时需保留此体验。
+- `SolutionWorkspace.tsx` 的换柜重算直接调用 `onRecalculate`，不能复制或改写原始货物数据。自定义柜会作为下拉框首项与标准柜一起显示。
+- `LoadVisualizer.tsx` 的 3D 和静态 2D 图都从 API 的 `placements` 坐标生成。不要在任一视图自行推导另一套布局数据。
+- Excel 解析在浏览器完成。不要改为上传原始 Excel，除非产品的隐私策略和服务端存储设计同步更新。
+- PDF 目前采用浏览器打印样式及 3D 快照，不依赖服务端 PDF 生成。
+
+## 8. 服务端保护和部署
+
+`backend/app/main.py` 当前包含以下保护：
+
+- `/api/v1/pack` 请求体最大 1 MB。
+- 单 IP 每分钟最多 60 次计算请求（进程内内存窗口）。
+- 同时最多 2 个计算任务；单个任务硬超时 15 秒。
+- 未处理异常以随机错误编号返回；日志只写错误类型/堆栈，不主动记录订单细节。
+- 前端静态路径经 `resolve_frontend_path()` 限制在 `frontend/dist` 内，防止路径穿越。
+
+生产环境当前信息：
+
+| 项目 | 当前值 |
+| --- | --- |
+| 域名 | `packing.xingshuwen.com` |
+| 服务名 | `packing-assistant` |
+| 服务目录 | `/data/packing-assistant/app` |
+| Uvicorn 监听 | `127.0.0.1:8500` |
+| 反向代理 | Nginx，HTTPS 由现有站点配置提供 |
+
+仓库中可参考的部署文件：
+
+- `output/packing-assistant.service`
+- `output/packing.xingshuwen.com.nginx`
+- `output/packing-frontend-dist.tar.gz`
+- `output/packing-assistant-release.tar.gz`
+
+前端单独发布的常用流程：
+
+```powershell
+npm.cmd run build
+tar -czf output\packing-frontend-dist.tar.gz -C . frontend\dist
+
+# 使用由运维人员安全保管的 SSH 凭据上传至服务器 /tmp
+```
+
+服务器侧解包并重启：
+
+```bash
+sudo tar -xzf /tmp/packing-frontend-dist.tar.gz -C /data/packing-assistant/app
+sudo systemctl restart packing-assistant
+curl -fsS http://127.0.0.1:8500/health
+```
+
+公网验证：
+
+```powershell
+curl.exe -fsS https://packing.xingshuwen.com/health
+curl.exe -fsS https://packing.xingshuwen.com/api/v1/container-presets
+```
+
+不要把 SSH 私钥、服务器密码或证书写入代码库、发布包或交接文档。后端修改时需要同步发布 `backend/app`，此时应使用完整发布包或容器镜像，而不是只替换 `frontend/dist`。部署前先在本地运行测试和构建；部署后必须检查 `/health`、首页静态资源和一次真实 `POST /api/v1/pack`。
+
+Docker 方式同样受支持：
+
+```powershell
+docker build -t container-loading-assistant .
+docker run --rm -p 8000:8000 container-loading-assistant
+```
+
+## 9. 测试现状和后续变更规则
+
+现有后端测试覆盖 API、确定性、混装、超量、必装失败、朝向、载重选择、重心、边界、碰撞、柜门、完整支撑、易碎/不可叠、层数、承重、间隙和大订单性能。
+
+前端测试覆盖货物数字输入、柜型选择、Excel 和可视化基础状态。历史验证结果为前端 5 个测试文件/9 个测试通过，构建通过；每次改动仍需重新执行第 4 节命令，不要依赖历史结果。
+
+修改原则：
+
+1. 涉及布局或指标时，先在 `backend/tests` 增加或更新场景测试，并确认返回布局能再次通过 `validate_solution()`。
+2. 涉及 API 契约时，同步更新 `backend/app/models.py`、`frontend/src/types.ts`、`frontend/src/lib/api.ts` 和相关组件。
+3. 涉及柜型参数时，保留来源、复核门洞尺寸和最大载重，并增加对应测试案例。
+4. 涉及视觉布局时，复用现有墨绿、灰白、海运工作台风格；不要将首页改为营销落地页。
+5. 修改视觉或 Three.js 后，要做浏览器截图和画布非空检查，避免 3D 画面空白或控件遮挡。
+
+## 10. 后续演进建议
+
+验证期应优先用客户历史装柜单校验：实际可装数量、现场可执行性、保守规则带来的差异、标准柜参数是否符合承运方柜型。
+
+若验证成功并进入 SaaS，建议按顺序增加：
+
+1. 账号、租户隔离和订单历史，同时调整隐私告知与数据保留策略。
+2. 任务队列/持久化计算，而不是继续依赖单进程内存限流。
+3. 审计日志、匿名错误监控和更严格的公网限流。
+4. 多柜联算、ERP/WMS 对接和更完整的货物兼容矩阵。
+
+核心算法应继续与前端和 SaaS 层隔离，确保新的账号/存储能力不改变 `POST /api/v1/pack` 的确定性与独立校验要求。

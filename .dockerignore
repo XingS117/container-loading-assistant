@@ -1,0 +1,13 @@
+.git
+.agents
+.venv
+.npm-cache
+.pnpm-store
+.uv-cache
+node_modules
+frontend/dist
+backend/**/__pycache__
+backend/.pytest_cache
+output
+*.log
+

@@ -1,0 +1,14 @@
+node_modules/
+.npm-cache/
+.pnpm-store/
+frontend/dist/
+backend/.pytest_cache/
+backend/.pytest-tmp/
+.pytest-tmp/
+backend/**/__pycache__/
+.venv/
+.uv-cache/
+.env
+coverage/
+output/
+*.log
