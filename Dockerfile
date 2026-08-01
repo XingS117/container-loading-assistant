@@ -5,6 +5,10 @@ RUN corepack enable
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json tsconfig.app.json ./
 COPY frontend ./frontend
 RUN pnpm install --frozen-lockfile
+ARG VITE_UMAMI_SCRIPT_URL
+ARG VITE_UMAMI_WEBSITE_ID
+ENV VITE_UMAMI_SCRIPT_URL=${VITE_UMAMI_SCRIPT_URL} \
+    VITE_UMAMI_WEBSITE_ID=${VITE_UMAMI_WEBSITE_ID}
 RUN pnpm run build
 
 FROM python:3.12-slim AS runtime

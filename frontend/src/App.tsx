@@ -8,6 +8,7 @@ import voyageBanner from "./assets/voyage-banner.jpg";
 import { getContainerPresets, packOrder } from "./lib/api";
 import { createCargo, validateCargo } from "./lib/cargo";
 import { downloadCargoTemplate, readCargoExcel } from "./lib/excel";
+import { trackAnalyticsEvent } from "./lib/analytics";
 import type { CargoInput, ContainerSpec, PackResponse } from "./types";
 
 const STORAGE_KEY = "container-loading-assistant-draft-v1";
@@ -67,6 +68,7 @@ export default function App() {
       const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm);
       setContainer(nextContainer);
       setResult(nextResult);
+      trackAnalyticsEvent("pack_solutions_generated");
     } finally {
       setLoading(false);
     }

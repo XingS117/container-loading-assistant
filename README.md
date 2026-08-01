@@ -50,3 +50,22 @@ docker run --rm -p 8000:8000 container-loading-assistant
 ## Excel 模板
 
 在货物清单右上角点击“模板”下载固定格式，在 Excel 中填写后点击“导入 Excel”。原始文件只在浏览器内解析，不会上传；计算服务只接收结构化货物参数，也不会保存订单。
+
+## 访问统计（可选）
+
+项目支持通过 Umami 统计页面访问和“生成方案”次数，不会发送 SKU、尺寸、重量、订单内容或客户信息。复制 `frontend/.env.example` 为构建环境变量，填写 Umami 创建的网站 ID：
+
+```powershell
+$env:VITE_UMAMI_SCRIPT_URL = "https://cloud.umami.is/script.js"
+$env:VITE_UMAMI_WEBSITE_ID = "你的 Umami website ID"
+pnpm build
+```
+
+Docker 部署时，需要在构建阶段传入同名变量；仅在运行容器时设置变量不会改变已经构建好的前端。未配置这两个变量时，统计功能不会加载任何第三方脚本。
+
+```powershell
+docker build `
+  --build-arg VITE_UMAMI_SCRIPT_URL="https://cloud.umami.is/script.js" `
+  --build-arg VITE_UMAMI_WEBSITE_ID="你的 Umami website ID" `
+  -t container-loading-assistant .
+```
