@@ -20,18 +20,36 @@ const profileShortName: Record<SolutionProfile, string> = {
   easy: "装载步骤",
 };
 
+export function recommendProfile(response: PackResponse): SolutionProfile {
+  const highFill = response.solutions.find((solution) => solution.profile === "high_fill");
+  const stable = response.solutions.find((solution) => solution.profile === "stable");
+  if (
+    highFill &&
+    stable &&
+    highFill.metrics.length_imbalance_pct > 10 &&
+    stable.metrics.length_imbalance_pct <= highFill.metrics.length_imbalance_pct - 5
+  ) {
+    return "stable";
+  }
+  return "high_fill";
+}
+
 export function SolutionWorkspace({ response, container, presets, cargoItems, onBack, onRecalculate, recalculating }: Props) {
-  const [selectedProfile, setSelectedProfile] = useState<SolutionProfile>("high_fill");
+  const [selectedProfile, setSelectedProfile] = useState<SolutionProfile>(() => recommendProfile(response));
   const [selectedCargoId, setSelectedCargoId] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<Partial<Record<SolutionProfile, string>>>({});
   const [recalculateContainerId, setRecalculateContainerId] = useState(container.id);
   const [recalculateError, setRecalculateError] = useState<string | null>(null);
   const selected = response.solutions.find((solution) => solution.profile === selectedProfile) ?? response.solutions[0];
   const cargoById = Object.fromEntries(cargoItems.map((item) => [item.id, item]));
+  const recommended = recommendProfile(response);
   const selectedLayers = useMemo(
     () => [...new Set(selected.placements.map((item) => item.z_mm))].sort((a, b) => a - b),
     [selected.placements],
   );
+  useEffect(() => {
+    setSelectedProfile(recommendProfile(response));
+  }, [response.request_id]);
   const handleSnapshot = useCallback((dataUrl: string) => {
     setSnapshots((current) => ({ ...current, [selectedProfile]: dataUrl }));
   }, [selectedProfile]);
@@ -75,11 +93,18 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
               <span className="solution-tab-name">{solution.name}</span>
               <strong>{primaryValue}</strong>
               <span>{profileShortName[solution.profile]} · {solution.metrics.loaded_pieces} 件</span>
+              {recommended === solution.profile && <em className="recommend-badge">推荐</em>}
               {solution.identical_to && <em>布局与另一方案相同</em>}
             </button>
           );
         })}
       </section>
+
+      {selected.profile !== "stable" && selected.metrics.length_imbalance_pct > 10 && (
+        <p className="balance-warning" role="alert">
+          前后重量偏差较大（{selected.metrics.length_imbalance_pct}%），建议查看「更稳妥」方案
+        </p>
+      )}
 
       <section className="workspace-grid">
         <LoadVisualizer container={container} solution={selected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={setSelectedCargoId} onSnapshot={handleSnapshot} />
@@ -87,7 +112,8 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
           <div className="metric-strip">
             <div><span>体积利用率</span><strong>{selected.metrics.volume_utilization_pct}%</strong></div>
             <div><span>重量利用率</span><strong>{selected.metrics.weight_utilization_pct}%</strong></div>
-            <div><span>重心偏差</span><strong>{selected.metrics.weight_imbalance_pct}%</strong></div>
+            <div><span>前后偏差</span><strong>{selected.metrics.length_imbalance_pct}%</strong></div>
+            <div><span>左右偏差</span><strong>{selected.metrics.width_imbalance_pct}%</strong></div>
           </div>
           <div className="pros-cons-grid">
             <div className="pros"><h2><CheckCircle2 size={17} /> 优点</h2>{selected.pros.map((item) => <p key={item}>{item}</p>)}</div>
@@ -130,13 +156,24 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
           </div>
           {snapshots[selected.profile] && <img className="print-snapshot" src={snapshots[selected.profile]} alt={`${selected.name}三维装柜布局`} />}
         </div>
-        <div className="print-layouts"><StaticLayout mode="top" container={container} placements={selected.placements} cargoItems={cargoItems} testId="print-top-layout" /><StaticLayout mode="side" container={container} placements={selected.placements} cargoItems={cargoItems} testId="print-side-layout" /></div>
+        <div className="print-layouts"><StaticLayout mode="top" container={container} placements={selected.placements} zones={selected.zones} cargoItems={cargoItems} testId="print-top-layout" /><StaticLayout mode="side" container={container} placements={selected.placements} zones={selected.zones} cargoItems={cargoItems} testId="print-side-layout" /></div>
         {selectedLayers.map((layer) => (
           <div className="print-layer" key={layer}>
             <h3>分层布局 · {(layer / 10).toFixed(1)} cm</h3>
-            <StaticLayout mode="layers" container={container} placements={selected.placements.filter((item) => item.z_mm === layer)} cargoItems={cargoItems} testId={`print-layer-${layer}`} />
+            <StaticLayout mode="layers" container={container} placements={selected.placements.filter((item) => item.z_mm === layer)} zones={selected.zones} cargoItems={cargoItems} testId={`print-layer-${layer}`} />
           </div>
         ))}
+        {selected.zones.length > 0 && selected.zones.length <= 30 && (
+          <div className="print-zones">
+            <h2>区域说明</h2>
+            {selected.zones.map((zone) => (
+              <p key={`${zone.step}-${zone.cargo_id}-${zone.x_mm}-${zone.y_mm}`}>
+                区域 {zone.step}：{cargoById[zone.cargo_id]?.sku ?? zone.cargo_id} ×{zone.piece_count} 件
+                （柜长 {zone.x_mm / 1000}–{(zone.x_mm + zone.length_mm) / 1000} m）
+              </p>
+            ))}
+          </div>
+        )}
         <h2>装入明细</h2>
         {Object.entries(selected.loaded_counts).map(([id, count]) => <p key={id}>{cargoById[id]?.sku ?? id}：{count} 件，未装 {selected.unloaded_counts[id] ?? 0} 件</p>)}
       </section>

@@ -52,10 +52,13 @@ const solution: PackingSolution = {
     volume_utilization_pct: 50,
     weight_utilization_pct: 2,
     center_of_gravity: { x_mm: 500, y_mm: 500, z_mm: 500 },
+    length_imbalance_pct: 0,
+    width_imbalance_pct: 0,
     weight_imbalance_pct: 50,
     loading_steps: 2,
     cargo_zones: 2,
   },
+  zones: [],
   pros: [],
   cons: [],
   warnings: [],
@@ -83,4 +86,18 @@ test("filters layout by loading step and layer", async () => {
 
   await userEvent.click(screen.getByRole("button", { name: "分层" }));
   expect(screen.getByRole("slider", { name: "查看层高" })).toBeInTheDocument();
+});
+
+
+test("renders numbered zone outlines in the top view", async () => {
+  render(<LoadVisualizer container={container} solution={{ ...solution, zones: [
+    { step: 1, cargo_id: "a", x_mm: 0, y_mm: 0, length_mm: 1000, width_mm: 1000, piece_count: 2 },
+  ] }} cargoItems={cargoItems} />);
+
+  await userEvent.click(screen.getByRole("button", { name: "俯视" }));
+
+  const zones = screen.getAllByTestId("layout-zone");
+  expect(zones).toHaveLength(1);
+  expect(zones[0]).toHaveTextContent("1");
+  expect(zones[0]).toHaveTextContent("A-01 ×2");
 });

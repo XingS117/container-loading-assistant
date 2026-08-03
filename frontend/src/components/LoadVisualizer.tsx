@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 
-import type { CargoInput, ContainerSpec, PackingSolution, Placement } from "../types";
+import type { CargoInput, ContainerSpec, PackingSolution, Placement, Zone } from "../types";
 
 type ViewMode = "3d" | "top" | "side" | "door" | "layers";
 
@@ -243,10 +243,11 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
   return <div className="three-scene" ref={hostRef} />;
 }
 
-export function StaticLayout({ mode, container, placements, cargoItems, selectedCargoId, onSelectCargo, testId = "layout-svg" }: {
+export function StaticLayout({ mode, container, placements, zones, cargoItems, selectedCargoId, onSelectCargo, testId = "layout-svg" }: {
   mode: Exclude<ViewMode, "3d">;
   container: ContainerSpec;
   placements: Placement[];
+  zones?: Zone[];
   cargoItems: CargoInput[];
   selectedCargoId?: string | null;
   onSelectCargo?: (cargoId: string | null) => void;
@@ -258,6 +259,10 @@ export function StaticLayout({ mode, container, placements, cargoItems, selected
   const totalWidth = isTop ? container.inner_length_mm : mode === "side" ? container.inner_length_mm : container.inner_width_mm;
   const totalHeight = isTop ? container.inner_width_mm : container.inner_height_mm;
   const fontSize = Math.max(totalWidth, totalHeight) / 42;
+  const zoneKeys = new Set(placements.map((placement) => `${placement.cargo_id}:${placement.step}`));
+  const visibleZones = (mode === "top" || mode === "layers" ? zones ?? [] : [])
+    .filter((zone) => mode !== "layers" || zoneKeys.has(`${zone.cargo_id}:${zone.step}`));
+  const showZones = visibleZones.length > 0 && visibleZones.length <= 30;
   return (
     <svg className="layout-svg" viewBox={`0 0 ${totalWidth} ${totalHeight}`} role="img" aria-label={`${mode} 装柜布局图`} data-testid={testId} data-visible-count={placements.length}>
       <rect width={totalWidth} height={totalHeight} fill="#f4f6f3" stroke="#59665f" strokeWidth={Math.max(totalWidth, totalHeight) / 300} />
@@ -276,6 +281,18 @@ export function StaticLayout({ mode, container, placements, cargoItems, selected
           </g>
         );
       })}
+      {showZones && visibleZones.map((zone) => (
+        <g key={`zone-${zone.step}-${zone.cargo_id}-${zone.x_mm}-${zone.y_mm}`} className="layout-zone" data-testid="layout-zone">
+          <rect x={zone.x_mm} y={zone.y_mm} width={zone.length_mm} height={zone.width_mm} className="zone-outline" />
+          <circle className="zone-badge" cx={zone.x_mm + fontSize * 1.4} cy={zone.y_mm + fontSize * 1.4} r={fontSize * 0.9} />
+          <text className="zone-badge-text" x={zone.x_mm + fontSize * 1.4} y={zone.y_mm + fontSize * 1.4} dominantBaseline="middle" textAnchor="middle" fontSize={fontSize} fill="white">{zone.step}</text>
+          {zone.length_mm > fontSize * 3.5 && zone.width_mm > fontSize * 2 && (
+            <text x={zone.x_mm + zone.length_mm / 2} y={zone.y_mm + zone.width_mm / 2 + fontSize * 1.3} textAnchor="middle" dominantBaseline="middle" fontSize={fontSize * 1.1} fontWeight="bold" fill="#173029" stroke="#ffffff" strokeWidth={fontSize * 0.22} paintOrder="stroke">
+              {cargoById[zone.cargo_id]?.sku ?? zone.cargo_id} ×{zone.piece_count}
+            </text>
+          )}
+        </g>
+      ))}
       {mode === "door" && <text x={totalWidth / 2} y={fontSize * 1.2} textAnchor="middle" fontSize={fontSize} fill="#46534d">柜门视角</text>}
     </svg>
   );
@@ -327,7 +344,7 @@ export function LoadVisualizer({ container, solution, cargoItems, selectedCargoI
       </div>
 
       <div className="visual-stage">
-        {mode === "3d" ? <ThreeScene container={container} placements={solution.placements} visibleStep={step} colors={colors} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onSnapshot={onSnapshot} /> : <StaticLayout mode={mode} container={container} placements={visible} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} />}
+        {mode === "3d" ? <ThreeScene container={container} placements={solution.placements} visibleStep={step} colors={colors} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onSnapshot={onSnapshot} /> : <StaticLayout mode={mode} container={container} placements={visible} zones={solution.zones} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} />}
       </div>
 
       {mode === "layers" && layers.length > 0 && <label className="layer-control no-print"><span>层高 {(layers[layerIndex] / 10).toFixed(1)} cm</span><input aria-label="查看层高" type="range" min="0" max={Math.max(0, layers.length - 1)} value={layerIndex} onChange={(event) => setLayerIndex(Number(event.target.value))} /></label>}

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
 from typing import Literal
 
@@ -21,6 +21,7 @@ from .models import (
     PackingSolution,
     Placement,
     SolutionMetrics,
+    Zone,
 )
 from .validator import validate_solution
 
@@ -65,6 +66,7 @@ class PackedStack:
     x_mm: int
     y_mm: int
     rotated: bool = False
+    step: int | None = None
 
     @property
     def length_mm(self) -> int:
@@ -78,15 +80,17 @@ class PackedStack:
     def orientation(self) -> Orientation:
         if not self.rotated:
             return self.unit.orientation
-        swapped = {
-            Orientation.LWH: Orientation.WLH,
-            Orientation.WLH: Orientation.LWH,
-            Orientation.LHW: Orientation.HLW,
-            Orientation.HLW: Orientation.LHW,
-            Orientation.WHL: Orientation.HWL,
-            Orientation.HWL: Orientation.WHL,
-        }
-        return swapped[self.unit.orientation]
+        return SWAP_ORIENTATIONS[self.unit.orientation]
+
+
+SWAP_ORIENTATIONS = {
+    Orientation.LWH: Orientation.WLH,
+    Orientation.WLH: Orientation.LWH,
+    Orientation.LHW: Orientation.HLW,
+    Orientation.HLW: Orientation.LHW,
+    Orientation.WHL: Orientation.HWL,
+    Orientation.HWL: Orientation.WHL,
+}
 
 
 PACK_ALGOS = (MaxRectsBssf, MaxRectsBaf, GuillotineBssfSas)
@@ -313,7 +317,13 @@ def _high_fill_candidate(request: PackRequest, units: list[StackUnit]) -> list[P
             "MUST_LOAD_UNSATISFIED",
             f"必装货物 {cargo_names} 无法全部放入当前柜型",
         )
-    return max(candidates, key=_candidate_score)
+    best_score = max(_candidate_score(candidate) for candidate in candidates)
+    best_candidates = [
+        candidate
+        for candidate in candidates
+        if _candidate_score(candidate) == best_score
+    ]
+    return min(best_candidates, key=lambda candidate: _stack_imbalance(request, candidate))
 
 
 def _repack_same_units(
@@ -381,11 +391,223 @@ def _center_stacks(request: PackRequest, stacks: list[PackedStack]) -> list[Pack
     return [replace(stack, x_mm=stack.x_mm + dx, y_mm=stack.y_mm + dy) for stack in stacks]
 
 
+def _swap_balance(
+    request: PackRequest,
+    stacks: list[PackedStack],
+    max_passes: int = 4,
+) -> list[PackedStack]:
+    """Swap stacks with identical footprints to lower length-axis imbalance first."""
+    if len(stacks) < 2:
+        return stacks
+    target_x = request.container.inner_length_mm / 2
+    target_y = request.container.inner_width_mm / 2
+    current = list(stacks)
+
+    def deviations(candidate: list[PackedStack]) -> tuple[float, float]:
+        total_weight = sum(stack.unit.total_weight_g for stack in candidate) or 1
+        cg_x = sum(
+            (stack.x_mm + stack.length_mm / 2) * stack.unit.total_weight_g
+            for stack in candidate
+        ) / total_weight
+        cg_y = sum(
+            (stack.y_mm + stack.width_mm / 2) * stack.unit.total_weight_g
+            for stack in candidate
+        ) / total_weight
+        return abs(cg_x - target_x) / (target_x or 1), abs(cg_y - target_y) / (target_y or 1)
+
+    for _ in range(max_passes):
+        current_x, current_y = deviations(current)
+        best_swap: tuple[int, int] | None = None
+        best_dev: tuple[float, float] | None = None
+        groups: dict[tuple[int, int], list[int]] = defaultdict(list)
+        for index, stack in enumerate(current):
+            groups[(stack.length_mm, stack.width_mm)].append(index)
+        total_weight = sum(stack.unit.total_weight_g for stack in current) or 1
+        cg_x = sum(
+            (stack.x_mm + stack.length_mm / 2) * stack.unit.total_weight_g
+            for stack in current
+        ) / total_weight
+        cg_y = sum(
+            (stack.y_mm + stack.width_mm / 2) * stack.unit.total_weight_g
+            for stack in current
+        ) / total_weight
+        for indexes in groups.values():
+            for first in range(len(indexes)):
+                for second in range(first + 1, len(indexes)):
+                    i, j = indexes[first], indexes[second]
+                    a, b = current[i], current[j]
+                    weight_a = a.unit.total_weight_g
+                    weight_b = b.unit.total_weight_g
+                    center_ax = a.x_mm + a.length_mm / 2
+                    center_bx = b.x_mm + b.length_mm / 2
+                    center_ay = a.y_mm + a.width_mm / 2
+                    center_by = b.y_mm + b.width_mm / 2
+                    next_cg_x = cg_x + (weight_a - weight_b) * (center_bx - center_ax) / total_weight
+                    next_cg_y = cg_y + (weight_a - weight_b) * (center_by - center_ay) / total_weight
+                    next_dev = (
+                        abs(next_cg_x - target_x) / (target_x or 1),
+                        abs(next_cg_y - target_y) / (target_y or 1),
+                    )
+                    if best_dev is None or next_dev < best_dev:
+                        best_dev = next_dev
+                        best_swap = (i, j)
+        if best_swap is None or best_dev >= (current_x, current_y):
+            break
+        i, j = best_swap
+        original_i = current[i]
+        current[i] = replace(original_i, x_mm=current[j].x_mm, y_mm=current[j].y_mm)
+        current[j] = replace(current[j], x_mm=original_i.x_mm, y_mm=original_i.y_mm)
+    return current
+
+
+def _refine_grid_length_balance(
+    stacks: list[PackedStack],
+    target_x: float,
+    max_passes: int = 4,
+) -> list[PackedStack]:
+    """Swap stacks inside the same grid column to center the length-axis CG."""
+    current = list(stacks)
+    total_weight = sum(stack.unit.total_weight_g for stack in current)
+    if not total_weight:
+        return current
+
+    def moment(stack: PackedStack) -> float:
+        return stack.unit.total_weight_g * (stack.x_mm + stack.length_mm / 2 - target_x)
+
+    for _ in range(max_passes):
+        residual = sum(moment(stack) for stack in current)
+        if abs(residual) < 1:
+            break
+        columns: dict[int, list[int]] = defaultdict(list)
+        for index, stack in enumerate(current):
+            columns[stack.y_mm].append(index)
+        best_swap: tuple[int, int] | None = None
+        best_gain = 0.0
+        for indexes in columns.values():
+            for first in range(len(indexes)):
+                for second in range(first + 1, len(indexes)):
+                    i, j = indexes[first], indexes[second]
+                    weight_i = current[i].unit.total_weight_g
+                    weight_j = current[j].unit.total_weight_g
+                    center_i = current[i].x_mm + current[i].length_mm / 2
+                    center_j = current[j].x_mm + current[j].length_mm / 2
+                    next_residual = residual + (weight_i - weight_j) * (center_j - center_i)
+                    gain = abs(residual) - abs(next_residual)
+                    if gain > best_gain:
+                        best_gain = gain
+                        best_swap = (i, j)
+        if best_swap is None or best_gain <= 0:
+            break
+        i, j = best_swap
+        original_i = current[i]
+        current[i] = replace(original_i, x_mm=current[j].x_mm)
+        current[j] = replace(current[j], x_mm=original_i.x_mm)
+    return current
+
+
+def _pallet_grid_layout(
+    request: PackRequest,
+    units: list[StackUnit],
+) -> list[PackedStack] | None:
+    """Balance single-layer pallets in a weight-aware grid, one step per row."""
+    if not units or any(unit.count != 1 or unit.cargo.kind != "pallet" for unit in units):
+        return None
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    usable_length = request.container.inner_length_mm - 2 * c
+    usable_width = request.container.inner_width_mm - 2 * c
+    door_usable_width = request.container.door_width_mm - 2 * c
+
+    options: list[set[tuple[int, int]]] = []
+    for unit in units:
+        candidates = {(unit.length_mm, unit.width_mm)}
+        swapped_orientation = SWAP_ORIENTATIONS.get(unit.orientation)
+        if swapped_orientation in unit.cargo.allowed_orientations:
+            swapped = (unit.width_mm, unit.length_mm)
+            if swapped[1] <= door_usable_width:
+                candidates.add(swapped)
+        options.append(candidates)
+    common_footprints = set.intersection(*options)
+    if not common_footprints:
+        return None
+
+    best: tuple[tuple[int, int, int], tuple[int, int]] | None = None
+    for footprint in sorted(common_footprints):
+        along_length, across_width = footprint
+        if across_width + gap > usable_width:
+            continue
+        columns = usable_width // (across_width + gap)
+        if columns < 1:
+            continue
+        rows = (len(units) + columns - 1) // columns
+        total_length = rows * along_length + (rows - 1) * gap
+        if total_length > usable_length:
+            continue
+        score = (columns, -total_length, along_length)
+        if best is None or score > best[0]:
+            best = (score, footprint)
+    if best is None:
+        return None
+
+    along_length, across_width = best[1]
+    columns = usable_width // (across_width + gap)
+    rows = (len(units) + columns - 1) // columns
+    oriented = []
+    for unit in units:
+        rotated = (unit.width_mm, unit.length_mm) == (along_length, across_width)
+        oriented.append((unit, rotated))
+    oriented.sort(key=lambda item: (-item[0].total_weight_g, item[0].id))
+
+    row_order = sorted(
+        range(rows),
+        key=lambda row: (abs(row - (rows - 1) / 2), row),
+    )
+    column_weights = [0] * columns
+    assignments: list[tuple[int, int, int]] = []
+    index = 0
+    for row in row_order:
+        for _ in range(columns):
+            if index >= len(oriented):
+                break
+            column = min(
+                range(columns),
+                key=lambda col: (column_weights[col], col),
+            )
+            column_weights[column] += oriented[index][0].total_weight_g
+            assignments.append((row, column, index))
+            index += 1
+
+    placed: list[PackedStack] = []
+    for row, column, unit_index in assignments:
+        unit, rotated = oriented[unit_index]
+        placed.append(
+            PackedStack(
+                unit=unit,
+                x_mm=c + row * (along_length + gap),
+                y_mm=c + column * (across_width + gap),
+                rotated=rotated,
+            )
+        )
+    placed = _refine_grid_length_balance(placed, request.container.inner_length_mm / 2)
+    return [
+        replace(
+            stack,
+            step=round((stack.x_mm - c) / (along_length + gap)) + 1,
+        )
+        for stack in placed
+    ]
+
+
 def _expand_stacks(
     request: PackRequest,
     stacks: list[PackedStack],
     profile: str,
 ) -> list[Placement]:
+    explicit_steps = {
+        stack.unit.id: stack.step
+        for stack in stacks
+        if stack.step is not None
+    }
     ordered = sorted(
         stacks,
         key=(
@@ -394,7 +616,9 @@ def _expand_stacks(
             else (lambda stack: (stack.x_mm, stack.y_mm, stack.unit.id))
         ),
     )
-    if profile == "easy":
+    if len(explicit_steps) == len(stacks):
+        step_by_id = explicit_steps
+    elif profile == "easy":
         cargo_order = list(dict.fromkeys(stack.unit.cargo.id for stack in ordered))
         step_by_cargo = {cargo_id: index + 1 for index, cargo_id in enumerate(cargo_order)}
         step_by_id = {stack.unit.id: step_by_cargo[stack.unit.cargo.id] for stack in ordered}
@@ -423,6 +647,298 @@ def _expand_stacks(
             )
     placements.sort(key=lambda item: (item.step, item.z_mm, item.id))
     return placements
+
+
+def _band_layout(
+    request: PackRequest,
+    units: list[StackUnit],
+) -> list[PackedStack] | None:
+    """Full-width contiguous band per SKU, one loading step per band."""
+    if not units:
+        return None
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    usable_length = request.container.inner_length_mm - 2 * c
+    usable_width = request.container.inner_width_mm - 2 * c
+    door_usable_width = request.container.door_width_mm - 2 * c
+    by_sku: dict[str, list[StackUnit]] = defaultdict(list)
+    for unit in units:
+        by_sku[unit.cargo.id].append(unit)
+
+    placed: list[PackedStack] = []
+    cursor = 0
+    band_index = 0
+    for cargo_id in (item.id for item in request.cargo_items):
+        group = by_sku.get(cargo_id)
+        if not group:
+            continue
+        base_length = group[0].length_mm
+        base_width = group[0].width_mm
+        variants: list[tuple[int, int, bool]] = [(base_length, base_width, False)]
+        swapped_orientation = SWAP_ORIENTATIONS.get(group[0].orientation)
+        if swapped_orientation in group[0].cargo.allowed_orientations:
+            swapped = (base_width, base_length)
+            if swapped[1] <= door_usable_width:
+                variants.append((swapped[0], swapped[1], True))
+        best: tuple[int, int, int, int, bool] | None = None
+        for along_length, across_width, rotated in variants:
+            if across_width + gap > usable_width:
+                continue
+            columns = usable_width // (across_width + gap)
+            if columns < 1:
+                continue
+            rows = (len(group) + columns - 1) // columns
+            depth = rows * along_length + (rows - 1) * gap
+            if best is None or (depth, -columns) < (best[0], best[1]):
+                best = (depth, columns, along_length, across_width, rotated)
+        if best is None:
+            return None
+        depth, columns, along_length, across_width, rotated = best
+        if cursor + depth > usable_length:
+            return None
+        x0 = c + cursor
+        for index, unit in enumerate(group):
+            row = index // columns
+            column = index % columns
+            placed.append(
+                PackedStack(
+                    unit=unit,
+                    x_mm=x0 + row * (along_length + gap),
+                    y_mm=c + column * (across_width + gap),
+                    rotated=rotated,
+                    step=band_index + 1,
+                )
+            )
+        cursor += depth + gap
+        band_index += 1
+    return placed
+
+
+def _shelf_layout(
+    request: PackRequest,
+    units: list[StackUnit],
+) -> list[PackedStack] | None:
+    """Full-width shelves with contiguous same-SKU blocks, one step per shelf."""
+    if not units:
+        return None
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    usable_length = request.container.inner_length_mm - 2 * c
+    usable_width = request.container.inner_width_mm - 2 * c
+    remaining = sorted(
+        units,
+        key=lambda unit: (-unit.length_mm, -unit.volume_mm3, unit.id),
+    )
+    sku_order = {
+        cargo_id: index
+        for index, cargo_id in enumerate(item.id for item in request.cargo_items)
+    }
+    placed: list[PackedStack] = []
+    cursor = 0
+    shelf_index = 0
+    while remaining:
+        shelf_depth = remaining[0].length_mm
+        if cursor + shelf_depth > usable_length:
+            return None
+        shelf_units: list[StackUnit] = []
+        width_left = usable_width
+        index = 0
+        while index < len(remaining):
+            unit = remaining[index]
+            if unit.length_mm <= shelf_depth and unit.width_mm + gap <= width_left:
+                shelf_units.append(unit)
+                width_left -= unit.width_mm + gap
+                del remaining[index]
+            else:
+                index += 1
+        if not shelf_units:
+            return None
+        shelf_units.sort(
+            key=lambda unit: (sku_order.get(unit.cargo.id, 10**9), unit.id)
+        )
+        y = c
+        for unit in shelf_units:
+            placed.append(
+                PackedStack(
+                    unit=unit,
+                    x_mm=c + cursor,
+                    y_mm=y,
+                    step=shelf_index + 1,
+                )
+            )
+            y += unit.width_mm + gap
+        cursor += shelf_depth + gap
+        shelf_index += 1
+    return placed
+
+
+def _try_region_layouts(
+    request: PackRequest,
+    units: list[StackUnit],
+) -> list[PackedStack] | None:
+    bands = _band_layout(request, units)
+    if bands is not None:
+        return bands
+    return _shelf_layout(request, units)
+
+
+def _easy_region_layout(
+    request: PackRequest,
+    units: list[StackUnit],
+) -> list[PackedStack] | None:
+    """Region-based easy layout; drops optional SKUs/stacks when needed."""
+    if not units:
+        return None
+    if all(unit.count == 1 and unit.cargo.kind == "pallet" for unit in units):
+        return _pallet_grid_layout(request, units)
+    full = _try_region_layouts(request, units)
+    if full is not None:
+        return full
+    required = [unit for unit in units if unit.required]
+    optional_by_sku: dict[str, list[StackUnit]] = defaultdict(list)
+    for unit in units:
+        if not unit.required:
+            optional_by_sku[unit.cargo.id].append(unit)
+    optional_order = [
+        cargo_id
+        for cargo_id in (item.id for item in request.cargo_items)
+        if cargo_id in optional_by_sku
+    ]
+    optional_order.sort(
+        key=lambda cargo_id: (
+            sum(unit.volume_mm3 for unit in optional_by_sku[cargo_id]),
+            cargo_id,
+        )
+    )
+    kept_optional = [unit for unit in units if not unit.required]
+    for cargo_id in optional_order:
+        candidate = _try_region_layouts(request, required + kept_optional)
+        if candidate is not None:
+            return candidate
+        kept_optional = [
+            unit for unit in kept_optional if unit.cargo.id != cargo_id
+        ]
+    candidate = _try_region_layouts(request, required)
+    if candidate is not None:
+        return candidate
+    optional_sorted = sorted(
+        [unit for unit in units if not unit.required],
+        key=lambda unit: (unit.volume_mm3, unit.id),
+    )
+    for skip in range(len(optional_sorted)):
+        candidate = _try_region_layouts(
+            request,
+            required + optional_sorted[skip + 1 :],
+        )
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def _rects_connected(
+    first: tuple[int, int, int, int],
+    second: tuple[int, int, int, int],
+    tolerance: int,
+) -> bool:
+    first_x1, first_y1, first_length, first_width = first
+    second_x1, second_y1, second_length, second_width = second
+    horizontal_gap = max(
+        0,
+        first_x1 - (second_x1 + second_length),
+        second_x1 - (first_x1 + first_length),
+    )
+    vertical_gap = max(
+        0,
+        first_y1 - (second_y1 + second_width),
+        second_y1 - (first_y1 + first_width),
+    )
+    return horizontal_gap <= tolerance and vertical_gap <= tolerance
+
+
+def _merge_zone_rects(
+    rects: list[tuple[int, int, int, int, int]],
+    tolerance: int,
+) -> list[tuple[int, int, int, int, int]]:
+    parent = list(range(len(rects)))
+
+    def find(node: int) -> int:
+        while parent[node] != node:
+            parent[node] = parent[parent[node]]
+            node = parent[node]
+        return node
+
+    for first in range(len(rects)):
+        for second in range(first + 1, len(rects)):
+            if _rects_connected(
+                rects[first][:4],
+                rects[second][:4],
+                tolerance,
+            ):
+                root_first = find(first)
+                root_second = find(second)
+                if root_first != root_second:
+                    parent[root_second] = root_first
+    merged: dict[int, list[int]] = defaultdict(list)
+    for index in range(len(rects)):
+        merged[find(index)].append(index)
+    zones: list[tuple[int, int, int, int, int]] = []
+    for indexes in merged.values():
+        min_x = min(rects[index][0] for index in indexes)
+        min_y = min(rects[index][1] for index in indexes)
+        max_x = max(rects[index][0] + rects[index][2] for index in indexes)
+        max_y = max(rects[index][1] + rects[index][3] for index in indexes)
+        piece_count = sum(rects[index][4] for index in indexes)
+        zones.append((min_x, min_y, max_x - min_x, max_y - min_y, piece_count))
+    return zones
+
+
+def _compute_zones(
+    request: PackRequest,
+    placements: list[Placement],
+) -> list[Zone]:
+    floor_z = request.container.clearance_mm
+    tolerance = request.item_gap_mm + 1
+    column_counts = Counter(
+        (placement.cargo_id, placement.x_mm, placement.y_mm)
+        for placement in placements
+    )
+    groups: dict[tuple[str, int], list[tuple[int, int, int, int, int]]] = defaultdict(list)
+    seen: set[tuple] = set()
+    for placement in placements:
+        if placement.z_mm != floor_z:
+            continue
+        rect = (
+            placement.x_mm,
+            placement.y_mm,
+            placement.length_mm,
+            placement.width_mm,
+        )
+        key = (placement.cargo_id, placement.step)
+        if (key, rect) in seen:
+            continue
+        seen.add((key, rect))
+        groups[key].append(
+            (
+                *rect,
+                column_counts[(placement.cargo_id, placement.x_mm, placement.y_mm)],
+            )
+        )
+    zones: list[Zone] = []
+    for (cargo_id, step), rects in groups.items():
+        for merged in _merge_zone_rects(rects, tolerance):
+            zones.append(
+                Zone(
+                    step=step,
+                    cargo_id=cargo_id,
+                    x_mm=merged[0],
+                    y_mm=merged[1],
+                    length_mm=merged[2],
+                    width_mm=merged[3],
+                    piece_count=merged[4],
+                )
+            )
+    zones.sort(key=lambda zone: (zone.step, zone.cargo_id, zone.x_mm, zone.y_mm))
+    return zones
 
 
 def _metrics(request: PackRequest, placements: list[Placement]) -> SolutionMetrics:
@@ -474,6 +990,8 @@ def _metrics(request: PackRequest, placements: list[Placement]) -> SolutionMetri
             y_mm=round(cg_y, 1),
             z_mm=round(cg_z, 1),
         ),
+        length_imbalance_pct=round(x_deviation * 100, 2),
+        width_imbalance_pct=round(y_deviation * 100, 2),
         weight_imbalance_pct=round(max(x_deviation, y_deviation) * 100, 2),
         loading_steps=len({item.step for item in placements}),
         cargo_zones=zones,
@@ -501,6 +1019,7 @@ def _build_solution(
         item.id: item.quantity - loaded[item.id] for item in request.cargo_items
     }
     metrics = _metrics(request, placements)
+    zones = _compute_zones(request, placements)
     names = {"high_fill": "装得多", "stable": "更稳妥", "easy": "易操作"}
     warnings = []
     if sum(unloaded_counts.values()):
@@ -513,10 +1032,14 @@ def _build_solution(
         cons = [f"重心最大偏差 {metrics.weight_imbalance_pct}%"]
     elif profile == "stable":
         pros = [
-            f"重心最大偏差控制在 {metrics.weight_imbalance_pct}%",
+            f"前后重心偏差 {metrics.length_imbalance_pct}%（左右 {metrics.width_imbalance_pct}%）",
             f"装入数量保持为 {metrics.loaded_pieces} 件",
         ]
-        cons = [f"需要按 {metrics.loading_steps} 个货物栈执行装载"]
+        if metrics.length_imbalance_pct > 10:
+            warnings.append(
+                f"前后重量偏差仍较大（{metrics.length_imbalance_pct}%），建议现场复核重货位置"
+            )
+        cons = [f"需要按 {metrics.loading_steps} 个区域执行装载"]
     else:
         pros = [
             f"同类货物按区域集中，共 {metrics.cargo_zones} 个货区",
@@ -530,6 +1053,7 @@ def _build_solution(
         loaded_counts=loaded_counts,
         unloaded_counts=unloaded_counts,
         metrics=metrics,
+        zones=zones,
         pros=pros,
         cons=cons,
         warnings=warnings,
@@ -560,8 +1084,14 @@ def pack_order(request: PackRequest) -> PackResponse:
     for unit in selected_units:
         selected_counts[unit.cargo.id] += unit.count
     stable_units = _build_stack_units(request, dict(selected_counts), "stable")
-    stable_stacks = _repack_same_units(request, stable_units, "stable") or _center_stacks(request, high_stacks)
-    easy_stacks = _repack_same_units(request, selected_units, "easy") or high_stacks
+    pallet_grid = _pallet_grid_layout(request, stable_units)
+    if pallet_grid is not None:
+        stable_stacks = pallet_grid
+    else:
+        stable_stacks = _repack_same_units(request, stable_units, "stable") or _center_stacks(request, high_stacks)
+        stable_stacks = _swap_balance(request, stable_stacks)
+    easy_region = _easy_region_layout(request, selected_units)
+    easy_stacks = easy_region if easy_region is not None else (_repack_same_units(request, selected_units, "easy") or high_stacks)
 
     solutions = [
         _build_solution(request, high_stacks, "high_fill"),
@@ -573,6 +1103,10 @@ def pack_order(request: PackRequest) -> PackResponse:
             if _layout_signature(solution) == _layout_signature(previous):
                 solution.identical_to = previous.profile
                 break
+    if solutions[2].metrics.loaded_pieces < solutions[0].metrics.loaded_pieces:
+        solutions[2].cons.append(
+            f"为便于装载少装 {solutions[0].metrics.loaded_pieces - solutions[2].metrics.loaded_pieces} 件"
+        )
 
     request_json = json.dumps(request.model_dump(mode="json"), sort_keys=True)
     request_id = hashlib.sha256(request_json.encode("utf-8")).hexdigest()[:12]

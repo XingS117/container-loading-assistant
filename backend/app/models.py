@@ -116,9 +116,21 @@ class SolutionMetrics(BaseModel):
     volume_utilization_pct: float
     weight_utilization_pct: float
     center_of_gravity: CenterOfGravity
+    length_imbalance_pct: float
+    width_imbalance_pct: float
     weight_imbalance_pct: float
     loading_steps: int
     cargo_zones: int
+
+
+class Zone(BaseModel):
+    step: int = Field(ge=1)
+    cargo_id: str
+    x_mm: int = Field(ge=0)
+    y_mm: int = Field(ge=0)
+    length_mm: int = Field(gt=0)
+    width_mm: int = Field(gt=0)
+    piece_count: int = Field(ge=1)
 
 
 class PackingSolution(BaseModel):
@@ -128,6 +140,7 @@ class PackingSolution(BaseModel):
     loaded_counts: dict[str, int]
     unloaded_counts: dict[str, int]
     metrics: SolutionMetrics
+    zones: list[Zone] = Field(default_factory=list)
     pros: list[str]
     cons: list[str]
     warnings: list[str] = Field(default_factory=list)

@@ -54,9 +54,21 @@ export interface SolutionMetrics {
   volume_utilization_pct: number;
   weight_utilization_pct: number;
   center_of_gravity: { x_mm: number; y_mm: number; z_mm: number };
+  length_imbalance_pct: number;
+  width_imbalance_pct: number;
   weight_imbalance_pct: number;
   loading_steps: number;
   cargo_zones: number;
+}
+
+export interface Zone {
+  step: number;
+  cargo_id: string;
+  x_mm: number;
+  y_mm: number;
+  length_mm: number;
+  width_mm: number;
+  piece_count: number;
 }
 
 export interface PackingSolution {
@@ -66,6 +78,7 @@ export interface PackingSolution {
   loaded_counts: Record<string, number>;
   unloaded_counts: Record<string, number>;
   metrics: SolutionMetrics;
+  zones: Zone[];
   pros: string[];
   cons: string[];
   warnings: string[];
@@ -76,4 +89,3 @@ export interface PackResponse {
   request_id: string;
   solutions: PackingSolution[];
 }
-
