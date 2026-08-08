@@ -62,9 +62,14 @@ class StackUnit:
 
 @dataclass(frozen=True)
 class CompositeUnit:
-    """A pallet (count=1) with carton stacks packed on its top surface."""
+    """A pallet (count=1) with carton stacks packed on its top surface.
+
+    Each on_top entry records the carton stack together with its (x, y)
+    offset inside the pallet top surface, so multi-stack top layouts keep
+    distinct footprints when expanded.
+    """
     pallet: StackUnit
-    on_top: tuple[StackUnit, ...] = ()
+    on_top: tuple[tuple[StackUnit, int, int], ...] = ()
 
     @property
     def id(self) -> str:
@@ -92,15 +97,15 @@ class CompositeUnit:
 
     @property
     def count(self) -> int:
-        return self.pallet.count + sum(unit.count for unit in self.on_top)
+        return self.pallet.count + sum(stack.count for stack, _, _ in self.on_top)
 
     @property
     def total_weight_g(self) -> int:
-        return self.pallet.total_weight_g + sum(unit.total_weight_g for unit in self.on_top)
+        return self.pallet.total_weight_g + sum(stack.total_weight_g for stack, _, _ in self.on_top)
 
     @property
     def volume_mm3(self) -> int:
-        return self.pallet.volume_mm3 + sum(unit.volume_mm3 for unit in self.on_top)
+        return self.pallet.volume_mm3 + sum(stack.volume_mm3 for stack, _, _ in self.on_top)
 
 
 @dataclass(frozen=True)
@@ -327,7 +332,7 @@ def _merge_pallet_cartons(
             merged.append(pallet)
             continue
         packer = MaxRectsBssf(pallet.length_mm, pallet.width_mm, rot=False)
-        assigned: list[StackUnit] = []
+        assigned: list[tuple[StackUnit, int, int]] = []
         load_left = pallet.cargo.max_top_load_g
         height_left = available_height - pallet.stack_height_mm
         still: list[StackUnit] = []
@@ -345,7 +350,7 @@ def _merge_pallet_cartons(
             if rect is None:
                 still.append(carton)
                 continue
-            assigned.append(placed_carton)
+            assigned.append((placed_carton, int(rect.x), int(rect.y)))
             load_left -= carton.total_weight_g
         remaining = still
         if assigned:
@@ -772,15 +777,15 @@ def _expand_stacks(
                     )
                 )
             top_z = base_z + pallet.stack_height_mm
-            for on_top in unit.on_top:
+            for on_top, offset_x, offset_y in unit.on_top:
                 for offset in range(on_top.count):
                     placements.append(
                         Placement(
                             id=f"{on_top.cargo.id}-{on_top.first_instance_index + offset}",
                             cargo_id=on_top.cargo.id,
                             instance_index=on_top.first_instance_index + offset,
-                            x_mm=stack.x_mm,
-                            y_mm=stack.y_mm,
+                            x_mm=stack.x_mm + offset_x,
+                            y_mm=stack.y_mm + offset_y,
                             z_mm=top_z + offset * on_top.item_height_mm,
                             length_mm=on_top.length_mm,
                             width_mm=on_top.width_mm,

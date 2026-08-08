@@ -1,6 +1,6 @@
 import pytest
 
-from app.models import CargoSpec, ContainerSpec, PackRequest
+from app.models import CargoSpec, ContainerSpec, Orientation, PackRequest
 from app.packing import (
     CompositeUnit,
     PackedStack,
@@ -170,3 +170,39 @@ def test_expand_composite_places_cartons_on_pallet_top():
         1100, 1400, 1700, 2000,
     ]
     assert all(p.step == 1 for p in placements)
+    # 散箱件使用散箱自身尺寸与朝向（未旋转，LWH）
+    assert all(p.length_mm == 500 for p in carton_p)
+    assert all(p.width_mm == 400 for p in carton_p)
+    assert all(p.rotation == Orientation.LWH for p in carton_p)
+
+
+def test_expand_composite_multiple_stacks_do_not_overlap():
+    request = PackRequest(
+        container=mixed_container(),
+        cargo_items=[pallet_box(), carton_box(quantity=8)],
+    )
+    merged = _merge_pallet_cartons(request, _build_stack_units(request))
+    composite = next(unit for unit in merged if isinstance(unit, CompositeUnit))
+    # 8 个散箱按 max_layers=4 拆成 2 个 on_top 栈（4 件 × 2 栈）
+    assert len(composite.on_top) == 2
+
+    placements = _expand_stacks(
+        request,
+        [PackedStack(unit=composite, x_mm=0, y_mm=0, step=1)],
+        "high_fill",
+    )
+
+    carton_p = [p for p in placements if p.cargo_id == "carton"]
+    assert len(carton_p) == 8
+    for p in carton_p:
+        # 每个栈内 4 件依次上叠，z = 托盘栈高 1100 + offset×300
+        assert p.z_mm == 1100 + (p.instance_index % 4) * 300
+        # 每件完整落在托盘顶面（1200×1000）内
+        assert 0 <= p.x_mm <= 1200
+        assert 0 <= p.y_mm <= 1000
+        assert p.x_mm + p.length_mm <= 1200
+        assert p.y_mm + p.width_mm <= 1000
+    # (x, y, z) 两两不同 → 互不重叠
+    assert len({(p.x_mm, p.y_mm, p.z_mm) for p in carton_p}) == 8
+    # 至少两个不同平面位置 → 托盘顶面内偏移已生效
+    assert len({(p.x_mm, p.y_mm) for p in carton_p}) >= 2
