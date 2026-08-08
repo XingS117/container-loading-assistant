@@ -367,3 +367,26 @@ def test_mixed_order_with_item_gap_valid():
         on_floor = [p for p in carton_p if p.z_mm == container.clearance_mm]
         assert on_pallet, "应有散箱叠在托盘顶面"
         assert on_floor, "应有独立散箱栈放在柜底"
+
+
+def test_mixed_order_with_must_load_carton_and_mixed_unavailable():
+    container = mixed_container()
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(),
+            pallet_box(id="pallet2", sku="P-200", length_mm=1100, width_mm=900),
+            carton_box(quantity=8, must_load=True),
+        ],
+    )
+
+    response = pack_order(request)
+
+    high_fill = response.solutions[0]
+    assert high_fill.loaded_counts["carton"] == 8
+    assert high_fill.loaded_counts["pallet"] == 1
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]

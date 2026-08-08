@@ -432,6 +432,29 @@ def _candidate_score(stacks: list[PackedStack]) -> tuple[int, int, int]:
     )
 
 
+def _required_satisfied(request: PackRequest, stacks: list[PackedStack]) -> bool:
+    """True if every must_load cargo is placed at its full quantity.
+
+    Counts by expanded cargo piece (CompositeUnit pallet + on_top stacks
+    counted separately) instead of by stack id, so must_load cartons merged
+    onto pallet tops are not misjudged as missing.
+    """
+    loaded: Counter[str] = Counter()
+    for stack in stacks:
+        unit = stack.unit
+        if isinstance(unit, CompositeUnit):
+            loaded[unit.pallet.cargo.id] += unit.pallet.count
+            for on_top, _, _ in unit.on_top:
+                loaded[on_top.cargo.id] += on_top.count
+        else:
+            loaded[unit.cargo.id] += unit.count
+    return all(
+        loaded[item.id] >= item.quantity
+        for item in request.cargo_items
+        if item.must_load
+    )
+
+
 def _high_fill_candidate(request: PackRequest, units: list[StackUnit]) -> list[PackedStack]:
     candidates: list[list[PackedStack]] = []
     for payload_strategy in ("volume", "footprint", "pieces", "lightweight"):
@@ -440,14 +463,13 @@ def _high_fill_candidate(request: PackRequest, units: list[StackUnit]) -> list[P
         for algo in PACK_ALGOS:
             for order in ("volume", "footprint", "weight", "lightweight"):
                 packed = _pack_units(request, merged, algo, order)
-                packed_ids = {stack.unit.id for stack in packed}
-                if all(not unit.required or unit.id in packed_ids for unit in units):
+                if _required_satisfied(request, packed):
                     candidates.append(packed)
     mixed_pool = _select_payload_units(request, units, "volume")
     mixed = _mixed_balance_layout(
         request, _merge_pallet_cartons(request, mixed_pool)
     )
-    if mixed is not None:
+    if mixed is not None and _required_satisfied(request, mixed):
         candidates.append(mixed)
     if not candidates:
         missing_required = [unit for unit in units if unit.required]
