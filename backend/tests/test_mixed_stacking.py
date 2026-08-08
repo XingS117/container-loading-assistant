@@ -568,3 +568,27 @@ def test_zones_include_pallet_top_cartons():
         assert carton_zones, "上叠散箱应在 zones 中各自成区"
         pallet_steps = {z.step for z in solution.zones if z.cargo_id == "pallet"}
         assert {z.step for z in carton_zones} == pallet_steps, "散箱区与托盘区同 step"
+
+
+def test_stackable_pallet_input_never_stacks():
+    """用户把整托配成可叠放（stackable=True）时，生成器必须强制整托单层，
+    否则展开为多层托盘栈触发 PALLET_STACKING → 500（生产已复现）。"""
+    container = mixed_container()
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(stackable=True, max_layers=6, quantity=2, must_load=True),
+            carton_box(quantity=4),
+        ],
+    )
+
+    response = pack_order(request)
+
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        pallets = [p for p in solution.placements if p.cargo_id == "pallet"]
+        assert all(p.z_mm == 0 for p in pallets), "整托不得垂直叠放"
+        assert len(pallets) == 2, "2 个整托应各自单层放入"

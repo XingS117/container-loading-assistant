@@ -153,6 +153,10 @@ def _stack_capacity(
     _, _, item_height = cargo.dimensions_for(orientation)
     # Horizontal clearance must not create a vertical air gap between stacked items.
     by_height = available_height // item_height
+    if cargo.kind == "pallet":
+        # 整托作为整体，不垂直叠放：即使输入将其配置为可叠（stackable=True/
+        # max_layers>1），也强制单层，避免产生"整托叠整托"（PALLET_STACKING）。
+        return min(1, by_height)
     if not cargo.stackable or cargo.fragile:
         return min(1, by_height)
     by_load = cargo.max_top_load_g // cargo.weight_g + 1

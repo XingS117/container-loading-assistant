@@ -67,7 +67,11 @@ export function CargoTable({ rows, onChange, onImportFile, onDownloadTemplate }:
               <input aria-label={`SKU ${index + 1}`} value={row.sku} onChange={(event) => update(index, "sku", event.target.value)} />
               <input aria-label={`货物名称 ${index + 1}`} value={row.name} onChange={(event) => update(index, "name", event.target.value)} />
             </div>
-            <label className="cargo-field"><span className="field-title">类型</span><select aria-label={`货物类型 ${row.sku}`} value={row.kind} onChange={(event) => update(index, "kind", event.target.value as CargoInput["kind"])}>
+            <label className="cargo-field"><span className="field-title">类型</span><select aria-label={`货物类型 ${row.sku}`} value={row.kind} onChange={(event) => {
+              const next = event.target.value as CargoInput["kind"];
+              update(index, "kind", next);
+              if (next === "pallet") update(index, "stackable", false);
+            }}>
               <option value="carton">散箱</option>
               <option value="pallet">整托</option>
             </select></label>
