@@ -292,8 +292,9 @@ def _try_add_to_pallet_top(
     stack was placed rotated, so expansion uses consistent dimensions.
     """
     c = request.container.clearance_mm
+    gap = request.item_gap_mm
     door_usable_width = request.container.door_width_mm - 2 * c
-    rect = packer.add_rect(carton.length_mm, carton.width_mm, rid=carton.id)
+    rect = packer.add_rect(carton.length_mm + gap, carton.width_mm + gap, rid=carton.id)
     if rect is not None:
         return rect, carton
     swapped_orientation = SWAP_ORIENTATIONS.get(carton.orientation)
@@ -301,7 +302,7 @@ def _try_add_to_pallet_top(
         swapped_orientation in carton.cargo.allowed_orientations
         and carton.length_mm <= door_usable_width
     ):
-        rect = packer.add_rect(carton.width_mm, carton.length_mm, rid=carton.id)
+        rect = packer.add_rect(carton.width_mm + gap, carton.length_mm + gap, rid=carton.id)
         if rect is not None:
             return rect, replace(
                 carton,
@@ -331,7 +332,10 @@ def _merge_pallet_cartons(
         if pallet.cargo.max_top_load_g <= 0:
             merged.append(pallet)
             continue
-        packer = MaxRectsBssf(pallet.length_mm, pallet.width_mm, rot=False)
+        gap = request.item_gap_mm
+        packer = MaxRectsBssf(
+            pallet.length_mm + gap, pallet.width_mm + gap, rot=False
+        )
         assigned: list[tuple[StackUnit, int, int]] = []
         load_left = pallet.cargo.max_top_load_g
         height_left = available_height - pallet.stack_height_mm
@@ -432,12 +436,19 @@ def _high_fill_candidate(request: PackRequest, units: list[StackUnit]) -> list[P
     candidates: list[list[PackedStack]] = []
     for payload_strategy in ("volume", "footprint", "pieces", "lightweight"):
         pool = _select_payload_units(request, units, payload_strategy)
+        merged = _merge_pallet_cartons(request, pool)
         for algo in PACK_ALGOS:
             for order in ("volume", "footprint", "weight", "lightweight"):
-                packed = _pack_units(request, pool, algo, order)
+                packed = _pack_units(request, merged, algo, order)
                 packed_ids = {stack.unit.id for stack in packed}
                 if all(not unit.required or unit.id in packed_ids for unit in units):
                     candidates.append(packed)
+    mixed_pool = _select_payload_units(request, units, "volume")
+    mixed = _mixed_balance_layout(
+        request, _merge_pallet_cartons(request, mixed_pool)
+    )
+    if mixed is not None:
+        candidates.append(mixed)
     if not candidates:
         missing_required = [unit for unit in units if unit.required]
         cargo_names = "、".join(sorted({unit.cargo.sku for unit in missing_required}))
@@ -826,13 +837,16 @@ def _mixed_balance_layout(
 
     cartons.sort(key=lambda unit: (-unit.volume_mm3, unit.id))
     remaining = cartons
-    for zone_x, zone_len, zone_step in (
-        (c, left_len, left_step),
-        (x0 + total_length, right_len, right_step),
+    for zone_x, zone_len, zone_step, start_offset in (
+        (c, left_len, left_step, 0),
+        (x0 + total_length, right_len, right_step, gap),
     ):
         if zone_step is None or not remaining:
             continue
-        packer = MaxRectsBssf(zone_len, usable_width, rot=False)
+        zone_usable = zone_len - gap
+        if zone_usable <= 0:
+            continue
+        packer = MaxRectsBssf(zone_usable + gap, usable_width + gap, rot=False)
         still: list[StackUnit] = []
         for carton in remaining:
             rect, _ = _try_add_to_pallet_top(packer, carton, request)
@@ -842,7 +856,7 @@ def _mixed_balance_layout(
             placed.append(
                 PackedStack(
                     unit=carton,
-                    x_mm=zone_x + int(rect.x),
+                    x_mm=zone_x + start_offset + int(rect.x),
                     y_mm=c + int(rect.y),
                     rotated=(
                         carton.length_mm != carton.width_mm
@@ -1086,13 +1100,17 @@ def _try_region_layouts(
 
 def _easy_region_layout(
     request: PackRequest,
-    units: list[StackUnit],
+    units: list[CompositeUnit | StackUnit],
 ) -> list[PackedStack] | None:
     """Region-based easy layout; drops optional SKUs/stacks when needed."""
     if not units:
         return None
     if all(unit.count == 1 and unit.cargo.kind == "pallet" for unit in units):
         return _pallet_grid_layout(request, units)
+    if any(unit.cargo.kind == "pallet" for unit in units):
+        mixed = _mixed_balance_layout(request, units)
+        if mixed is not None:
+            return mixed
     full = _try_region_layouts(request, units)
     if full is not None:
         return full
@@ -1381,19 +1399,26 @@ def _layout_signature(solution: PackingSolution) -> tuple:
 def pack_order(request: PackRequest) -> PackResponse:
     units = _build_stack_units(request)
     high_stacks = _high_fill_candidate(request, units)
-    selected_units = [stack.unit for stack in high_stacks]
-    selected_counts = Counter()
-    for unit in selected_units:
-        selected_counts[unit.cargo.id] += unit.count
+    high_placements = _expand_stacks(request, high_stacks, "high_fill")
+    selected_counts = Counter(item.cargo_id for item in high_placements)
     stable_units = _build_stack_units(request, dict(selected_counts), "stable")
+    merged_stable = _merge_pallet_cartons(request, stable_units)
     pallet_grid = _pallet_grid_layout(request, stable_units)
     if pallet_grid is not None:
         stable_stacks = pallet_grid
     else:
-        stable_stacks = _repack_same_units(request, stable_units, "stable") or _center_stacks(request, high_stacks)
+        mixed = _mixed_balance_layout(request, merged_stable)
+        if mixed is not None:
+            stable_stacks = mixed
+        else:
+            stable_stacks = _repack_same_units(
+                request, merged_stable, "stable"
+            ) or _center_stacks(request, high_stacks)
         stable_stacks = _swap_balance(request, stable_stacks)
-    easy_region = _easy_region_layout(request, selected_units)
-    easy_stacks = easy_region if easy_region is not None else (_repack_same_units(request, selected_units, "easy") or high_stacks)
+    easy_region = _easy_region_layout(request, merged_stable)
+    easy_stacks = easy_region if easy_region is not None else (
+        _repack_same_units(request, merged_stable, "easy") or high_stacks
+    )
 
     solutions = [
         _build_solution(request, high_stacks, "high_fill"),

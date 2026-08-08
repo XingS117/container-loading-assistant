@@ -9,6 +9,7 @@ from app.packing import (
     _expand_stacks,
     _merge_pallet_cartons,
     _mixed_balance_layout,
+    pack_order,
 )
 from app.validator import validate_solution
 
@@ -263,3 +264,106 @@ def test_mixed_balance_layout_returns_none_for_pure_carton():
     layout = _mixed_balance_layout(request, _build_stack_units(request))
 
     assert layout is None
+
+
+def test_mixed_order_pallets_on_bottom_cartons_on_top():
+    container = mixed_container()
+    request = PackRequest(
+        container=container,
+        cargo_items=[pallet_box(must_load=True), carton_box(quantity=8)],
+    )
+
+    response = pack_order(request)
+
+    assert response.solutions[0].loaded_counts == {"pallet": 1, "carton": 8}
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        pallet_p = [p for p in solution.placements if p.cargo_id == "pallet"]
+        carton_p = [p for p in solution.placements if p.cargo_id == "carton"]
+        assert pallet_p
+        pallet_top = pallet_p[0].z_mm + pallet_p[0].height_mm
+        assert any(p.z_mm == pallet_top for p in carton_p), "散箱应叠在整托顶面"
+
+
+def test_stable_keeps_high_fill_piece_count_and_centers_pallets():
+    container = mixed_container()
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(),
+            pallet_box(id="pallet2", sku="P-200", weight_g=600_000),
+            carton_box(quantity=8),
+        ],
+    )
+
+    response = pack_order(request)
+
+    high_fill = response.solutions[0]
+    stable = response.solutions[1]
+    assert stable.metrics.loaded_pieces == high_fill.metrics.loaded_pieces
+    pallet_p = [p for p in stable.placements if p.cargo_id == "pallet"]
+    total = sum(p.weight_g for p in pallet_p)
+    cg_x = sum((p.x_mm + p.length_mm / 2) * p.weight_g for p in pallet_p) / total
+    assert container.inner_length_mm / 3 <= cg_x <= container.inner_length_mm * 2 / 3
+
+
+def test_mixed_order_partial_pallet_top_loading():
+    container = mixed_container()
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(),
+            pallet_box(id="pallet2", sku="P-200"),
+            carton_box(quantity=40),
+        ],
+    )
+
+    response = pack_order(request)
+
+    for solution in response.solutions:
+        assert solution.loaded_counts == {"pallet": 1, "pallet2": 1, "carton": 40}
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        pallet_p = [p for p in solution.placements if p.cargo_id == "pallet"]
+        carton_p = [p for p in solution.placements if p.cargo_id == "carton"]
+        assert len(carton_p) == 40
+        pallet_top = pallet_p[0].z_mm + pallet_p[0].height_mm
+        on_pallet = [p for p in carton_p if p.z_mm == pallet_top]
+        on_floor = [p for p in carton_p if p.z_mm == container.clearance_mm]
+        assert on_pallet, "应有散箱叠在托盘顶面"
+        assert on_floor, "散箱放不下时应作为独立栈放在柜底"
+
+
+def test_mixed_order_with_item_gap_valid():
+    container = mixed_container()
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(must_load=True),
+            pallet_box(id="pallet2", sku="P-200"),
+            carton_box(quantity=40),
+        ],
+        item_gap_mm=10,
+    )
+
+    response = pack_order(request)
+
+    for solution in response.solutions:
+        assert solution.loaded_counts == {"pallet": 1, "pallet2": 1, "carton": 40}
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        pallet_p = [p for p in solution.placements if p.cargo_id == "pallet"]
+        carton_p = [p for p in solution.placements if p.cargo_id == "carton"]
+        assert len(carton_p) == 40
+        pallet_top = pallet_p[0].z_mm + pallet_p[0].height_mm
+        on_pallet = [p for p in carton_p if p.z_mm == pallet_top]
+        on_floor = [p for p in carton_p if p.z_mm == container.clearance_mm]
+        assert on_pallet, "应有散箱叠在托盘顶面"
+        assert on_floor, "应有独立散箱栈放在柜底"
