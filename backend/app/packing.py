@@ -61,6 +61,49 @@ class StackUnit:
 
 
 @dataclass(frozen=True)
+class CompositeUnit:
+    """A pallet (count=1) with carton stacks packed on its top surface."""
+    pallet: StackUnit
+    on_top: tuple[StackUnit, ...] = ()
+
+    @property
+    def id(self) -> str:
+        return self.pallet.id
+
+    @property
+    def cargo(self) -> CargoSpec:
+        return self.pallet.cargo
+
+    @property
+    def required(self) -> bool:
+        return self.pallet.required
+
+    @property
+    def orientation(self) -> Orientation:
+        return self.pallet.orientation
+
+    @property
+    def length_mm(self) -> int:
+        return self.pallet.length_mm
+
+    @property
+    def width_mm(self) -> int:
+        return self.pallet.width_mm
+
+    @property
+    def count(self) -> int:
+        return self.pallet.count + sum(unit.count for unit in self.on_top)
+
+    @property
+    def total_weight_g(self) -> int:
+        return self.pallet.total_weight_g + sum(unit.total_weight_g for unit in self.on_top)
+
+    @property
+    def volume_mm3(self) -> int:
+        return self.pallet.volume_mm3 + sum(unit.volume_mm3 for unit in self.on_top)
+
+
+@dataclass(frozen=True)
 class PackedStack:
     unit: StackUnit
     x_mm: int
@@ -231,6 +274,86 @@ def _select_payload_units(
                 f"必装货物 {unit.cargo.sku} 导致总重量超过柜体载重",
             )
     return selected
+
+
+def _try_add_to_pallet_top(
+    packer,
+    carton: StackUnit,
+    request: PackRequest,
+) -> tuple[object, StackUnit] | tuple[None, None]:
+    """Add a carton stack to a pallet-top bin; rotation only if allowed.
+
+    Returns (rect, placed_unit); placed_unit is a rotated variant when the
+    stack was placed rotated, so expansion uses consistent dimensions.
+    """
+    c = request.container.clearance_mm
+    door_usable_width = request.container.door_width_mm - 2 * c
+    rect = packer.add_rect(carton.length_mm, carton.width_mm, rid=carton.id)
+    if rect is not None:
+        return rect, carton
+    swapped_orientation = SWAP_ORIENTATIONS.get(carton.orientation)
+    if (
+        swapped_orientation in carton.cargo.allowed_orientations
+        and carton.length_mm <= door_usable_width
+    ):
+        rect = packer.add_rect(carton.width_mm, carton.length_mm, rid=carton.id)
+        if rect is not None:
+            return rect, replace(
+                carton,
+                length_mm=carton.width_mm,
+                width_mm=carton.length_mm,
+                orientation=swapped_orientation,
+            )
+    return None, None
+
+
+def _merge_pallet_cartons(
+    request: PackRequest,
+    units: list[StackUnit],
+) -> list[CompositeUnit | StackUnit]:
+    """Merge stackable carton stacks onto pallet tops (greedy, deterministic)."""
+    pallets = [unit for unit in units if unit.cargo.kind == "pallet"]
+    cartons = [unit for unit in units if unit.cargo.kind == "carton"]
+    if not pallets or not cartons:
+        return list(units)
+    c = request.container.clearance_mm
+    available_height = request.container.inner_height_mm - 2 * c
+    pallets.sort(key=lambda unit: (-unit.total_weight_g, unit.id))
+    cartons.sort(key=lambda unit: (-unit.volume_mm3, unit.id))
+    merged: list[CompositeUnit | StackUnit] = []
+    remaining: list[StackUnit] = cartons
+    for pallet in pallets:
+        if pallet.cargo.max_top_load_g <= 0:
+            merged.append(pallet)
+            continue
+        packer = MaxRectsBssf(pallet.length_mm, pallet.width_mm, rot=False)
+        assigned: list[StackUnit] = []
+        load_left = pallet.cargo.max_top_load_g
+        height_left = available_height - pallet.stack_height_mm
+        still: list[StackUnit] = []
+        for carton in remaining:
+            if carton.cargo.fragile:
+                still.append(carton)
+                continue
+            if (
+                carton.stack_height_mm > height_left
+                or carton.total_weight_g > load_left
+            ):
+                still.append(carton)
+                continue
+            rect, placed_carton = _try_add_to_pallet_top(packer, carton, request)
+            if rect is None:
+                still.append(carton)
+                continue
+            assigned.append(placed_carton)
+            load_left -= carton.total_weight_g
+        remaining = still
+        if assigned:
+            merged.append(CompositeUnit(pallet=pallet, on_top=tuple(assigned)))
+        else:
+            merged.append(pallet)
+    merged.extend(remaining)
+    return merged
 
 
 def _ordered_units(units: list[StackUnit], strategy: str) -> list[StackUnit]:
