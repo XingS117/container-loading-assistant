@@ -8,6 +8,7 @@ from app.packing import (
     _build_stack_units,
     _expand_stacks,
     _merge_pallet_cartons,
+    _mixed_balance_layout,
 )
 from app.validator import validate_solution
 
@@ -206,3 +207,59 @@ def test_expand_composite_multiple_stacks_do_not_overlap():
     assert len({(p.x_mm, p.y_mm, p.z_mm) for p in carton_p}) == 8
     # 至少两个不同平面位置 → 托盘顶面内偏移已生效
     assert len({(p.x_mm, p.y_mm) for p in carton_p}) >= 2
+
+
+def test_mixed_balance_layout_centers_pallets():
+    request = PackRequest(
+        container=mixed_container(),
+        cargo_items=[
+            pallet_box(),
+            pallet_box(id="pallet2", sku="P-200", weight_g=600_000),
+            carton_box(quantity=8),
+        ],
+    )
+    merged = _merge_pallet_cartons(request, _build_stack_units(request))
+
+    layout = _mixed_balance_layout(request, merged)
+
+    assert layout is not None
+    pallet_stacks = [s for s in layout if s.unit.cargo.kind == "pallet"]
+    assert len(pallet_stacks) == 2
+    total = sum(s.unit.total_weight_g for s in pallet_stacks)
+    cg_x = (
+        sum((s.x_mm + s.length_mm / 2) * s.unit.total_weight_g for s in pallet_stacks)
+        / total
+    )
+    assert mixed_container().inner_length_mm / 3 <= cg_x <= mixed_container().inner_length_mm * 2 / 3
+
+
+def test_mixed_balance_layout_passes_validator():
+    request = PackRequest(
+        container=mixed_container(),
+        cargo_items=[
+            pallet_box(),
+            pallet_box(id="pallet2", sku="P-200", weight_g=600_000),
+            carton_box(quantity=8),
+        ],
+    )
+    merged = _merge_pallet_cartons(request, _build_stack_units(request))
+
+    layout = _mixed_balance_layout(request, merged)
+
+    assert layout is not None
+    placements = _expand_stacks(request, layout, "stable")
+    result = validate_solution(
+        request.container, request.cargo_items, placements, request.item_gap_mm
+    )
+    assert result.valid, [error.code for error in result.errors]
+
+
+def test_mixed_balance_layout_returns_none_for_pure_carton():
+    request = PackRequest(
+        container=mixed_container(),
+        cargo_items=[carton_box(quantity=4)],
+    )
+
+    layout = _mixed_balance_layout(request, _build_stack_units(request))
+
+    assert layout is None

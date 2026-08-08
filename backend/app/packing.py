@@ -726,6 +726,139 @@ def _pallet_grid_layout(
     ]
 
 
+def _mixed_balance_layout(
+    request: PackRequest,
+    units: list[CompositeUnit | StackUnit],
+) -> list[PackedStack] | None:
+    """Center pallet units along container length; carton stacks fill both ends."""
+    if not units:
+        return None
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    usable_length = request.container.inner_length_mm - 2 * c
+    usable_width = request.container.inner_width_mm - 2 * c
+    door_usable_width = request.container.door_width_mm - 2 * c
+    pallets = [unit for unit in units if unit.cargo.kind == "pallet"]
+    cartons = [unit for unit in units if unit.cargo.kind == "carton"]
+    if not pallets:
+        return None  # 纯散箱走 rectpack；纯整托/散箱全上托时仍返回居中托盘带
+
+    options: list[set[tuple[int, int]]] = []
+    for unit in pallets:
+        candidates = {(unit.length_mm, unit.width_mm)}
+        swapped_orientation = SWAP_ORIENTATIONS.get(unit.orientation)
+        if swapped_orientation in unit.cargo.allowed_orientations:
+            swapped = (unit.width_mm, unit.length_mm)
+            if swapped[1] <= door_usable_width:
+                candidates.add(swapped)
+        options.append(candidates)
+    common_footprints = set.intersection(*options)
+    if not common_footprints:
+        return None
+
+    best: tuple[tuple[int, int, int], tuple[int, int]] | None = None
+    for footprint in sorted(common_footprints):
+        along_length, across_width = footprint
+        if across_width + gap > usable_width:
+            continue
+        columns = usable_width // (across_width + gap)
+        if columns < 1:
+            continue
+        rows = (len(pallets) + columns - 1) // columns
+        total_length = rows * along_length + (rows - 1) * gap
+        if total_length > usable_length:
+            continue
+        score = (columns, -total_length, along_length)
+        if best is None or score > best[0]:
+            best = (score, footprint)
+    if best is None:
+        return None
+
+    along_length, across_width = best[1]
+    columns = usable_width // (across_width + gap)
+    rows = (len(pallets) + columns - 1) // columns
+    total_length = rows * along_length + (rows - 1) * gap
+    x0 = c + (usable_length - total_length) // 2
+
+    pallets.sort(key=lambda unit: (-unit.total_weight_g, unit.id))
+    row_order = sorted(
+        range(rows),
+        key=lambda row: (abs(row - (rows - 1) / 2), row),
+    )
+    column_weights = [0] * columns
+    assignments: list[tuple[int, int, int]] = []
+    index = 0
+    for row in row_order:
+        for _ in range(columns):
+            if index >= len(pallets):
+                break
+            column = min(
+                range(columns),
+                key=lambda col: (column_weights[col], col),
+            )
+            column_weights[column] += pallets[index].total_weight_g
+            assignments.append((row, column, index))
+            index += 1
+
+    left_len = x0 - c
+    right_len = usable_length - total_length - left_len
+    # 装载区域按 x 升序编号：左端区、托盘带（按行）、右端区
+    next_step = 1
+    left_step = next_step if left_len > 0 else None
+    if left_step is not None:
+        next_step += 1
+    pallet_row_first_step = next_step
+    next_step += rows
+    right_step = next_step if right_len > 0 else None
+
+    placed: list[PackedStack] = []
+    for row, column, unit_index in assignments:
+        unit = pallets[unit_index]
+        placed.append(
+            PackedStack(
+                unit=unit,
+                x_mm=x0 + row * (along_length + gap),
+                y_mm=c + column * (across_width + gap),
+                rotated=(unit.length_mm, unit.width_mm) == (across_width, along_length),
+                step=pallet_row_first_step + row,
+            )
+        )
+
+    cartons.sort(key=lambda unit: (-unit.volume_mm3, unit.id))
+    remaining = cartons
+    for zone_x, zone_len, zone_step in (
+        (c, left_len, left_step),
+        (x0 + total_length, right_len, right_step),
+    ):
+        if zone_step is None or not remaining:
+            continue
+        packer = MaxRectsBssf(zone_len, usable_width, rot=False)
+        still: list[StackUnit] = []
+        for carton in remaining:
+            rect, _ = _try_add_to_pallet_top(packer, carton, request)
+            if rect is None:
+                still.append(carton)
+                continue
+            placed.append(
+                PackedStack(
+                    unit=carton,
+                    x_mm=zone_x + int(rect.x),
+                    y_mm=c + int(rect.y),
+                    rotated=(
+                        carton.length_mm != carton.width_mm
+                        and int(rect.width) == carton.width_mm
+                        and int(rect.height) == carton.length_mm
+                    ),
+                    step=zone_step,
+                )
+            )
+        remaining = still
+    if remaining:
+        return None  # 两端放不下全部散箱 → 布局失败，由调用方回退
+    placed.sort(key=lambda stack: stack.unit.id)
+    return placed
+
+
 def _expand_stacks(
     request: PackRequest,
     stacks: list[PackedStack],
