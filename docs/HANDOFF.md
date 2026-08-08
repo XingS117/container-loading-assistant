@@ -1,6 +1,41 @@
 # 装柜方案助手：技术交接
 
-最后更新：2026-08-03
+最后更新：2026-08-08
+
+## 0. 最新交接摘要
+
+### 当前结论
+
+- 项目已完成试用版开发并部署到 `https://packing.xingshuwen.com`。
+- 当前生产服务为服务器上的 `packing-assistant.service`，后端监听 `127.0.0.1:8500`，Nginx 负责 HTTPS 和反向代理。
+- GitHub 仓库：`https://github.com/XingS117/container-loading-assistant`，当前主分支包含最新代码。
+- 当前工作区唯一无关未跟踪目录是 `.playwright-cli/`，不要为了清理它而删除用户文件。
+
+### 已完成的最新变更
+
+- 增加 Umami 隐私友好统计：页面访问和 `pack_solutions_generated` 事件。
+- 不向统计服务发送 SKU、名称、尺寸、重量、数量、订单内容或客户信息。
+- Umami 统计看板：`https://cloud.umami.is/analytics/us/websites`，进入后选择“装柜方案助手”。
+- 真实 Website ID 只保存在本地被忽略的 `frontend/.env` 和生产构建产物中，不在 GitHub 源码中保存。
+- Dockerfile 已支持在构建阶段传入 `VITE_UMAMI_SCRIPT_URL` 和 `VITE_UMAMI_WEBSITE_ID`；只在运行容器时设置变量不会改变已构建的前端。
+- 最新统计接入提交：`3bb7689 feat: add privacy-friendly usage analytics`。
+- 后续算法平衡和易操作区域优化提交：`08b4f42 feat: balance pallet loads and simplify easy-loading regions`。
+
+### 已验证
+
+- 前端测试：5 个测试文件、9 个测试通过。
+- 前端生产构建通过。
+- 生产服务器 `http://127.0.0.1:8500/health` 返回 `{"status":"ok"}`。
+- 生产前端资源已确认包含 Umami 脚本地址、Website ID 和 `pack_solutions_generated` 事件。
+- 浏览器实际打开生产网站成功，页面标题为“装柜方案助手”，输入页和柜型选择正常。
+- 本地 Docker 镜像完整构建曾因 Docker Hub 基础镜像网络连接失败未完成；生产发布使用已有 systemd 服务完成，不代表 Dockerfile 有语法错误。网络恢复后可重试。
+
+### 接手后的第一步
+
+1. 先阅读本摘要，再阅读第 5、6、8 节，了解 API、算法正确性边界和部署方式。
+2. 修改前运行 `git status --short`，不要覆盖用户已有改动。
+3. 若继续调整算法，先增加 `backend/tests` 场景测试，再改 `backend/app/packing.py` 或 `backend/app/validator.py`。
+4. 若需要重新发布统计配置，从本机 `frontend/.env` 读取配置；不要把它提交到 GitHub，也不要把 SSH 私钥、密码或证书写入仓库。
 
 ## 1. 项目定位
 
