@@ -425,3 +425,146 @@ def test_easy_keeps_pallets_when_cartons_overflow():
     # 发生少装时通过 warnings 披露未装入件数
     if sum(easy.unloaded_counts.values()) > 0:
         assert any("未装入" in message for message in easy.warnings)
+
+
+def test_end_zone_rotated_carton_with_gap_valid():
+    """C1 回归：端区散箱旋转放置且 item_gap>0 时不再 OVERLAP。
+
+    20GP 风格柜（5898×2352×2393）+ 4 托盘（max_top_load_g=0，不上托）+
+    散箱 1800×400×300（沿柜长放不进端区 → 旋转 400×1800）。修复前端区
+    旋转判定用含 gap 的 rect 尺寸对比原始尺寸，gap=10 时恒 False，散箱按
+    未旋转尺寸落位 → OVERLAP → INTERNAL_INVALID_LAYOUT。
+    """
+    container = ContainerSpec(
+        id="gp20",
+        name="20GP",
+        inner_length_mm=5898,
+        inner_width_mm=2352,
+        inner_height_mm=2393,
+        door_width_mm=2340,
+        door_height_mm=2280,
+        max_payload_g=10_000_000,
+    )
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(quantity=4, max_top_load_g=0),
+            carton_box(
+                quantity=2,
+                length_mm=1800,
+                width_mm=400,
+                height_mm=300,
+                max_layers=2,
+            ),
+        ],
+        item_gap_mm=10,
+    )
+
+    response = pack_order(request)
+
+    for solution in response.solutions:
+        assert solution.loaded_counts == {"pallet": 4, "carton": 2}
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        carton_p = [p for p in solution.placements if p.cargo_id == "carton"]
+        # 端区散箱 1800 沿柜长放不下 → 旋转为 400×1800
+        assert any(
+            p.length_mm == 400 and p.width_mm == 1800 for p in carton_p
+        ), "端区散箱应旋转放置"
+
+
+def test_easy_never_drops_required_cartons():
+    """C2 回归：easy 的 allow_partial 不得丢弃必装散箱。
+
+    2 托盘（max_top_load_g=0，不上托）+ 200 必装散箱：端区放不下全部散箱，
+    修复前 allow_partial=True 直接丢弃 remaining（含必装）→ validator
+    MUST_LOAD_MISSING → 500。修复后含必装则返回 None，easy 回退保护路径，
+    必装 200 件全部装入。
+    """
+    container = mixed_container()
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(max_top_load_g=0),
+            pallet_box(id="pallet2", sku="P-200", max_top_load_g=0),
+            carton_box(quantity=200, must_load=True),
+        ],
+    )
+
+    response = pack_order(request)
+
+    for solution in response.solutions:
+        assert solution.loaded_counts["carton"] >= 200, "必装散箱不得少装"
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+
+
+def test_rotatable_pallet_composite_stays_unrotated():
+    """I1 回归：CompositeUnit 托盘不得被旋转放置。
+
+    长柜（12032×2450×2698）+ 可旋转托盘（LWH/WLH）+ 8 散箱（全上托）。
+    修复前 CompositeUnit 候选含旋转 footprint，公共 footprint 选中旋转后托盘
+    rotated=True，但 on_top 偏移基于未旋转托盘顶面 → 散箱悬空 →
+    UNSUPPORTED → 500。修复后复合单位只保留未旋转候选。
+    """
+    container = ContainerSpec(
+        id="long",
+        name="长柜",
+        inner_length_mm=12032,
+        inner_width_mm=2450,
+        inner_height_mm=2698,
+        door_width_mm=2400,
+        door_height_mm=2585,
+        max_payload_g=10_000_000,
+    )
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(allowed_orientations=["LWH", "WLH"]),
+            carton_box(quantity=8),
+        ],
+    )
+
+    response = pack_order(request)
+
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        pallet_p = [p for p in solution.placements if p.cargo_id == "pallet"]
+        assert pallet_p
+        # 托盘按未旋转 footprint（1200×1000）放置，on_top 偏移坐标系一致
+        assert all(
+            (p.length_mm, p.width_mm) == (1200, 1000) for p in pallet_p
+        ), "托盘不得旋转放置"
+
+
+def test_zones_include_pallet_top_cartons():
+    """I2 回归：zones 应包含上叠散箱（规格 3.4 各自成区）。
+
+    1 托盘 + 8 散箱全上托：修复前 _compute_zones 过滤 z != floor_z 的
+    placement，zones 缺散箱 SKU → 打印报告区域说明缺失。修复后托盘与其上
+    叠散箱（step 相同、cargo_id 不同）各自成区。
+    """
+    container = mixed_container()
+    request = PackRequest(
+        container=container,
+        cargo_items=[pallet_box(), carton_box(quantity=8)],
+    )
+
+    response = pack_order(request)
+
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        carton_zones = [z for z in solution.zones if z.cargo_id == "carton"]
+        assert carton_zones, "上叠散箱应在 zones 中各自成区"
+        pallet_steps = {z.step for z in solution.zones if z.cargo_id == "pallet"}
+        assert {z.step for z in carton_zones} == pallet_steps, "散箱区与托盘区同 step"

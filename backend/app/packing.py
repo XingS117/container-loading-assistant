@@ -786,11 +786,12 @@ def _mixed_balance_layout(
     options: list[set[tuple[int, int]]] = []
     for unit in pallets:
         candidates = {(unit.length_mm, unit.width_mm)}
-        swapped_orientation = SWAP_ORIENTATIONS.get(unit.orientation)
-        if swapped_orientation in unit.cargo.allowed_orientations:
-            swapped = (unit.width_mm, unit.length_mm)
-            if swapped[1] <= door_usable_width:
-                candidates.add(swapped)
+        if not isinstance(unit, CompositeUnit):
+            swapped_orientation = SWAP_ORIENTATIONS.get(unit.orientation)
+            if swapped_orientation in unit.cargo.allowed_orientations:
+                swapped = (unit.width_mm, unit.length_mm)
+                if swapped[1] <= door_usable_width:
+                    candidates.add(swapped)
         options.append(candidates)
     common_footprints = set.intersection(*options)
     if not common_footprints:
@@ -878,26 +879,21 @@ def _mixed_balance_layout(
         packer = MaxRectsBssf(zone_usable + gap, usable_width + gap, rot=False)
         still: list[StackUnit] = []
         for carton in remaining:
-            rect, _ = _try_add_to_pallet_top(packer, carton, request)
+            rect, placed_carton = _try_add_to_pallet_top(packer, carton, request)
             if rect is None:
                 still.append(carton)
                 continue
             placed.append(
                 PackedStack(
-                    unit=carton,
+                    unit=placed_carton,
                     x_mm=zone_x + start_offset + int(rect.x),
                     y_mm=c + int(rect.y),
-                    rotated=(
-                        carton.length_mm != carton.width_mm
-                        and int(rect.width) == carton.width_mm
-                        and int(rect.height) == carton.length_mm
-                    ),
                     step=zone_step,
                 )
             )
         remaining = still
-    if remaining and not allow_partial:
-        return None  # 两端放不下全部散箱 → 布局失败，由调用方回退
+    if remaining and (not allow_partial or any(unit.required for unit in remaining)):
+        return None  # 两端放不下全部散箱（或剩余含必装）→ 布局失败，由调用方回退
     placed.sort(key=lambda stack: stack.unit.id)
     return placed
 
@@ -1246,7 +1242,6 @@ def _compute_zones(
     request: PackRequest,
     placements: list[Placement],
 ) -> list[Zone]:
-    floor_z = request.container.clearance_mm
     tolerance = request.item_gap_mm + 1
     column_counts = Counter(
         (placement.cargo_id, placement.x_mm, placement.y_mm)
@@ -1255,8 +1250,6 @@ def _compute_zones(
     groups: dict[tuple[str, int], list[tuple[int, int, int, int, int]]] = defaultdict(list)
     seen: set[tuple] = set()
     for placement in placements:
-        if placement.z_mm != floor_z:
-            continue
         rect = (
             placement.x_mm,
             placement.y_mm,
