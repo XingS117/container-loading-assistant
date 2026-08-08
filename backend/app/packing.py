@@ -750,6 +750,47 @@ def _expand_stacks(
     placements: list[Placement] = []
     for stack in stacks:
         unit = stack.unit
+        base_z = request.container.clearance_mm
+        step = step_by_id[unit.id]
+        if isinstance(unit, CompositeUnit):
+            pallet = unit.pallet
+            for offset in range(pallet.count):
+                placements.append(
+                    Placement(
+                        id=f"{pallet.cargo.id}-{pallet.first_instance_index + offset}",
+                        cargo_id=pallet.cargo.id,
+                        instance_index=pallet.first_instance_index + offset,
+                        x_mm=stack.x_mm,
+                        y_mm=stack.y_mm,
+                        z_mm=base_z + offset * pallet.item_height_mm,
+                        length_mm=stack.length_mm,
+                        width_mm=stack.width_mm,
+                        height_mm=pallet.item_height_mm,
+                        rotation=stack.orientation,
+                        weight_g=pallet.cargo.weight_g,
+                        step=step,
+                    )
+                )
+            top_z = base_z + pallet.stack_height_mm
+            for on_top in unit.on_top:
+                for offset in range(on_top.count):
+                    placements.append(
+                        Placement(
+                            id=f"{on_top.cargo.id}-{on_top.first_instance_index + offset}",
+                            cargo_id=on_top.cargo.id,
+                            instance_index=on_top.first_instance_index + offset,
+                            x_mm=stack.x_mm,
+                            y_mm=stack.y_mm,
+                            z_mm=top_z + offset * on_top.item_height_mm,
+                            length_mm=on_top.length_mm,
+                            width_mm=on_top.width_mm,
+                            height_mm=on_top.item_height_mm,
+                            rotation=on_top.orientation,
+                            weight_g=on_top.cargo.weight_g,
+                            step=step,
+                        )
+                    )
+            continue
         for offset in range(unit.count):
             instance_index = unit.first_instance_index + offset
             placements.append(
@@ -759,13 +800,13 @@ def _expand_stacks(
                     instance_index=instance_index,
                     x_mm=stack.x_mm,
                     y_mm=stack.y_mm,
-                    z_mm=request.container.clearance_mm + offset * unit.item_height_mm,
+                    z_mm=base_z + offset * unit.item_height_mm,
                     length_mm=stack.length_mm,
                     width_mm=stack.width_mm,
                     height_mm=unit.item_height_mm,
                     rotation=stack.orientation,
                     weight_g=unit.cargo.weight_g,
-                    step=step_by_id[unit.id],
+                    step=step,
                 )
             )
     placements.sort(key=lambda item: (item.step, item.z_mm, item.id))

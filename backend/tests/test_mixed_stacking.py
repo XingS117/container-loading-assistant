@@ -3,8 +3,10 @@ import pytest
 from app.models import CargoSpec, ContainerSpec, PackRequest
 from app.packing import (
     CompositeUnit,
+    PackedStack,
     StackUnit,
     _build_stack_units,
+    _expand_stacks,
     _merge_pallet_cartons,
 )
 from app.validator import validate_solution
@@ -142,3 +144,29 @@ def test_pure_carton_or_pallet_order_unchanged():
 
     assert all(isinstance(unit, StackUnit) for unit in merged_cartons)
     assert all(isinstance(unit, StackUnit) for unit in merged_pallets)
+
+
+def test_expand_composite_places_cartons_on_pallet_top():
+    request = PackRequest(
+        container=mixed_container(),
+        cargo_items=[pallet_box(), carton_box(quantity=4)],
+    )
+    merged = _merge_pallet_cartons(request, _build_stack_units(request))
+    composite = next(unit for unit in merged if isinstance(unit, CompositeUnit))
+
+    placements = _expand_stacks(
+        request,
+        [PackedStack(unit=composite, x_mm=0, y_mm=0, step=1)],
+        "high_fill",
+    )
+
+    pallet_p = [p for p in placements if p.cargo_id == "pallet"]
+    carton_p = [p for p in placements if p.cargo_id == "carton"]
+    assert len(pallet_p) == 1
+    assert len(carton_p) == 4
+    assert pallet_p[0].z_mm == 0
+    assert pallet_p[0].height_mm == 1100
+    assert [p.z_mm for p in sorted(carton_p, key=lambda p: p.instance_index)] == [
+        1100, 1400, 1700, 2000,
+    ]
+    assert all(p.step == 1 for p in placements)
