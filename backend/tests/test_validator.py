@@ -197,3 +197,59 @@ def test_enforces_horizontal_item_gap_without_separating_stack_layers():
     result = validate_solution(container(), [item], placements, item_gap_mm=10)
 
     assert "CLEARANCE_VIOLATION" in error_codes(result)
+
+
+def test_accepts_cartons_on_top_of_pallet():
+    pallet_item = cargo(
+        "P", kind="pallet", quantity=1, stackable=False, max_layers=1,
+        max_top_load_g=1_000_000, length_mm=1200, width_mm=1000, height_mm=1000,
+    )
+    carton_item = cargo(
+        "B", quantity=1, length_mm=500, width_mm=400, height_mm=300,
+    )
+    placements = [
+        placement("P-0", cargo_id="P", length_mm=1200, width_mm=1000, height_mm=1000),
+        placement("B-0", cargo_id="B", z_mm=1000, length_mm=500, width_mm=400, height_mm=300),
+    ]
+
+    result = validate_solution(container(), [pallet_item, carton_item], placements)
+
+    assert result.valid is True
+    assert result.errors == []
+
+
+def test_rejects_pallet_stacked_on_pallet():
+    pallet_item = cargo(
+        "P", kind="pallet", quantity=1, stackable=False, max_layers=1,
+        max_top_load_g=1_000_000, length_mm=1200, width_mm=1000, height_mm=1000,
+    )
+    pallet2 = cargo(
+        "Q", kind="pallet", quantity=1, stackable=False, max_layers=1,
+        max_top_load_g=0, length_mm=1000, width_mm=1000, height_mm=1000,
+    )
+    placements = [
+        placement("P-0", cargo_id="P", length_mm=1200, width_mm=1000, height_mm=1000),
+        placement("Q-0", cargo_id="Q", z_mm=1000),
+    ]
+
+    result = validate_solution(container(), [pallet_item, pallet2], placements)
+
+    assert "PALLET_STACKING" in error_codes(result)
+
+
+def test_rejects_cartons_exceeding_pallet_top_load():
+    pallet_item = cargo(
+        "P", kind="pallet", quantity=1, stackable=False, max_layers=1,
+        max_top_load_g=50_000, length_mm=1200, width_mm=1000, height_mm=1000,
+    )
+    carton_item = cargo(
+        "B", quantity=1, weight_g=100_000, length_mm=500, width_mm=400, height_mm=300,
+    )
+    placements = [
+        placement("P-0", cargo_id="P", length_mm=1200, width_mm=1000, height_mm=1000),
+        placement("B-0", cargo_id="B", z_mm=1000, length_mm=500, width_mm=400, height_mm=300),
+    ]
+
+    result = validate_solution(container(), [pallet_item, carton_item], placements)
+
+    assert "TOP_LOAD_EXCEEDED" in error_codes(result)

@@ -165,14 +165,17 @@ def validate_solution(
         if not above:
             continue
 
-        if not item.stackable:
-            add("NON_STACKABLE", "不可叠放货物上方存在其他货物", support.id)
-        if item.fragile:
-            add("FRAGILE_STACKING", "易碎货物上方存在其他货物", support.id)
-
-        levels = 1 + len({other.z_mm for other in above})
-        if levels > item.max_layers:
-            add("MAX_LAYERS_EXCEEDED", "货物堆叠层数超过限制", support.id)
+        if item.kind == "pallet":
+            if any(cargo_by_id[other.cargo_id].kind == "pallet" for other in above):
+                add("PALLET_STACKING", "整托上方不能叠放整托", support.id)
+        else:
+            if not item.stackable:
+                add("NON_STACKABLE", "不可叠放货物上方存在其他货物", support.id)
+            if item.fragile:
+                add("FRAGILE_STACKING", "易碎货物上方存在其他货物", support.id)
+            levels = 1 + len({other.z_mm for other in above})
+            if levels > item.max_layers:
+                add("MAX_LAYERS_EXCEEDED", "货物堆叠层数超过限制", support.id)
 
         top_load = sum(cargo_by_id[other.cargo_id].weight_g for other in above)
         if top_load > item.max_top_load_g:
