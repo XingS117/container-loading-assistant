@@ -19,9 +19,9 @@ def test_30_sku_order_finishes_within_service_budget():
             weight_g=8_000 + index * 500,
             quantity=167 if index < 20 else 166,
             allowed_orientations=["LWH", "WLH"],
-            stackable=True,
-            max_layers=6,
-            max_top_load_g=200_000,
+            stackable=False if index % 11 == 0 else True,
+            max_layers=1 if index % 11 == 0 else 6,
+            max_top_load_g=0 if index % 11 == 0 else 200_000,
             must_load=False,
         )
         for index in range(30)

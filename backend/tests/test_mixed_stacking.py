@@ -390,3 +390,38 @@ def test_mixed_order_with_must_load_carton_and_mixed_unavailable():
             container, request.cargo_items, solution.placements, request.item_gap_mm
         )
         assert result.valid, [error.code for error in result.errors]
+
+
+def test_easy_keeps_pallets_when_cartons_overflow():
+    """回归：混装大订单端区放不下全部散箱时，easy 少装优先删散箱而保留托盘。
+
+    容器 6000×2400×2400，2 个托盘（1200×1000）+ 300 散箱（max_layers=4，
+    拆 75 栈，其中 8 栈叠上托盘顶）。托盘带两侧端区（各 2400×2400）最多
+    各容纳 24 栈 500×400 散箱栈（共 48 栈），独立散箱栈远超端区容量，
+    触发 _mixed_balance_layout(allow_partial=True) 丢弃溢出的散箱路径。
+    """
+    container = mixed_container()
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(),
+            pallet_box(id="pallet2", sku="P-200"),
+            carton_box(quantity=300),
+        ],
+    )
+
+    response = pack_order(request)
+
+    easy = response.solutions[2]
+    # 少装/端区溢出时托盘不得被优先删掉
+    assert easy.loaded_counts["pallet"] >= 1
+    assert easy.loaded_counts["pallet2"] >= 1
+    # 三个方案均通过装载校验
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+    # 发生少装时通过 warnings 披露未装入件数
+    if sum(easy.unloaded_counts.values()) > 0:
+        assert any("未装入" in message for message in easy.warnings)

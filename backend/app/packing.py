@@ -762,8 +762,15 @@ def _pallet_grid_layout(
 def _mixed_balance_layout(
     request: PackRequest,
     units: list[CompositeUnit | StackUnit],
+    allow_partial: bool = False,
 ) -> list[PackedStack] | None:
-    """Center pallet units along container length; carton stacks fill both ends."""
+    """Center pallet units along container length; carton stacks fill both ends.
+
+    When ``allow_partial`` is True and the two end zones cannot hold every
+    remaining carton stack, the overflow cartons are dropped and the layout
+    with the placed pallet band plus the packed cartons is returned.  When
+    False (default) the layout returns None so callers can fall back.
+    """
     if not units:
         return None
     c = request.container.clearance_mm
@@ -889,7 +896,7 @@ def _mixed_balance_layout(
                 )
             )
         remaining = still
-    if remaining:
+    if remaining and not allow_partial:
         return None  # 两端放不下全部散箱 → 布局失败，由调用方回退
     placed.sort(key=lambda stack: stack.unit.id)
     return placed
@@ -1130,7 +1137,7 @@ def _easy_region_layout(
     if all(unit.count == 1 and unit.cargo.kind == "pallet" for unit in units):
         return _pallet_grid_layout(request, units)
     if any(unit.cargo.kind == "pallet" for unit in units):
-        mixed = _mixed_balance_layout(request, units)
+        mixed = _mixed_balance_layout(request, units, allow_partial=True)
         if mixed is not None:
             return mixed
     full = _try_region_layouts(request, units)
@@ -1148,6 +1155,7 @@ def _easy_region_layout(
     ]
     optional_order.sort(
         key=lambda cargo_id: (
+            optional_by_sku[cargo_id][0].cargo.kind != "carton",
             sum(unit.volume_mm3 for unit in optional_by_sku[cargo_id]),
             cargo_id,
         )
