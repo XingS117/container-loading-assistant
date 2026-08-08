@@ -106,9 +106,12 @@ CONTAINER_PRESETS = [
 
 @app.exception_handler(PackingFailure)
 async def packing_failure_handler(_: Request, exc: PackingFailure) -> JSONResponse:
+    content: dict[str, object] = {"error": {"code": exc.code, "message": exc.message}}
+    if exc.hint:
+        content["error"]["hint"] = exc.hint  # type: ignore[index]
     return JSONResponse(
         status_code=422,
-        content={"error": {"code": exc.code, "message": exc.message}},
+        content=content,
     )
 
 

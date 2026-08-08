@@ -23,17 +23,42 @@ from .models import (
     SolutionMetrics,
     Zone,
 )
-from .validator import validate_solution
+from .validator import ValidationResult, validate_solution
 
 
 class PackingFailure(Exception):
-    def __init__(self, code: str, message: str):
+    def __init__(self, code: str, message: str, hint: str | None = None):
         super().__init__(message)
         self.code = code
         self.message = message
+        self.hint = hint
 
     def __reduce__(self):
-        return type(self), (self.code, self.message)
+        return type(self), (self.code, self.message, self.hint)
+
+
+#: 布局校验错误码 → 用户可执行的调整建议（中文）。
+#: 校验失败且错误码全部命中此表时，返回 422 并附建议；否则视为内部缺陷返回 500。
+LAYOUT_ADVICE: dict[str, str] = {
+    "UNKNOWN_CARGO": "请求数据异常，请刷新页面后重新提交",
+    "DUPLICATE_INSTANCE": "请求数据异常，请刷新页面后重新提交",
+    "INSTANCE_OUT_OF_RANGE": "货物数量与输入不符，请检查各货物的数量",
+    "ORIENTATION_NOT_ALLOWED": "货物使用了未允许的摆放朝向，请调整“摆放朝向”",
+    "DIMENSIONS_MISMATCH": "请求数据异常，请刷新页面后重新提交",
+    "WEIGHT_MISMATCH": "货物重量与输入不符，请检查各货物的重量",
+    "OUT_OF_BOUNDS": "货物超出柜体有效边界，请检查货物尺寸或减少数量",
+    "DOOR_FIT": "部分货物按当前朝向无法通过柜门，请调整“摆放朝向”或改小货物尺寸",
+    "OVERLAP": "货物在柜内发生空间重叠，请检查货物尺寸或减少数量",
+    "CLEARANCE_VIOLATION": "货物之间的间隙小于设置值，请减小“货物间隙”或调整货物尺寸",
+    "PAYLOAD_EXCEEDED": "装载总重量超过柜体最大载重，请减少货物数量或更换更大柜型",
+    "MUST_LOAD_MISSING": "必装货物未能全部装入，请减少其他货物数量或更换更大柜型",
+    "UNSUPPORTED": "高层货物底面未得到完整支撑，请调整货物尺寸/数量或摆放方式",
+    "PALLET_STACKING": "整托不可叠放，请取消整托的“可叠”选项，或减少整托数量",
+    "NON_STACKABLE": "不可叠放货物的上方不应有其他货物，请取消该货物的“可叠”选项",
+    "FRAGILE_STACKING": "易碎货物上方不能叠放其他货物，请移除其上方的货物或关闭“可叠”",
+    "MAX_LAYERS_EXCEEDED": "货物堆叠层数超过限制，请调大“最大层数”或减少数量",
+    "TOP_LOAD_EXCEEDED": "货物顶部承重不足，请调大“顶部承重”或减少该位置货物数量",
+}
 
 
 @dataclass(frozen=True)
@@ -219,6 +244,7 @@ def _build_stack_units(
                 raise PackingFailure(
                     "MUST_LOAD_UNSATISFIED",
                     f"必装货物 {cargo.sku} 无法按允许方向通过柜门或放入柜内",
+                    hint="请调整该货物的“摆放朝向”或改小尺寸，或更换更大柜型",
                 )
             continue
         length, width, height = cargo.dimensions_for(orientation)
@@ -281,6 +307,7 @@ def _select_payload_units(
             raise PackingFailure(
                 "MUST_LOAD_UNSATISFIED",
                 f"必装货物 {unit.cargo.sku} 导致总重量超过柜体载重",
+                hint="请减少其他货物数量，或更换载重更大的柜型",
             )
     return selected
 
@@ -481,6 +508,7 @@ def _high_fill_candidate(request: PackRequest, units: list[StackUnit]) -> list[P
         raise PackingFailure(
             "MUST_LOAD_UNSATISFIED",
             f"必装货物 {cargo_names} 无法全部放入当前柜型",
+            hint="请减少其他货物数量或更换更大柜型，确保必装货物能全部装入",
         )
     best_score = max(_candidate_score(candidate) for candidate in candidates)
     best_candidates = [
@@ -1345,6 +1373,21 @@ def _metrics(request: PackRequest, placements: list[Placement]) -> SolutionMetri
     )
 
 
+def _raise_for_invalid_layout(validation: ValidationResult) -> None:
+    """布局校验失败时抛出可读错误：错误码全部可解释 → 422（含中文调整建议），
+    否则视为内部缺陷抛 INTERNAL_INVALID_LAYOUT（500 兜底）。"""
+    codes_list = sorted({issue.code for issue in validation.errors})
+    known_codes = [code for code in codes_list if code in LAYOUT_ADVICE]
+    if len(known_codes) == len(codes_list) and codes_list:
+        advice = "；".join(LAYOUT_ADVICE[code] for code in codes_list)
+        raise PackingFailure(
+            "LAYOUT_NOT_FEASIBLE",
+            "当前货物参数无法生成有效的装柜方案，请根据下方提示调整后重试",
+            hint=advice,
+        )
+    raise PackingFailure("INTERNAL_INVALID_LAYOUT", f"候选布局校验失败：{', '.join(codes_list)}")
+
+
 def _build_solution(
     request: PackRequest,
     stacks: list[PackedStack],
@@ -1358,8 +1401,7 @@ def _build_solution(
         item_gap_mm=request.item_gap_mm,
     )
     if not validation.valid:
-        codes = ", ".join(sorted({issue.code for issue in validation.errors}))
-        raise PackingFailure("INTERNAL_INVALID_LAYOUT", f"候选布局校验失败：{codes}")
+        _raise_for_invalid_layout(validation)
     loaded = Counter(item.cargo_id for item in placements)
     loaded_counts = {item.id: loaded[item.id] for item in request.cargo_items}
     unloaded_counts = {

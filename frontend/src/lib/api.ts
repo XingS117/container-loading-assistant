@@ -39,7 +39,9 @@ export async function packOrder(
   });
   const payload = await response.json();
   if (!response.ok) {
-    throw new Error(payload?.error?.message ?? "计算失败，请检查货物参数");
+    const message = payload?.error?.message ?? "计算失败，请检查货物参数";
+    const hint = payload?.error?.hint as string | undefined;
+    throw new Error(hint ? `${message}\n${hint}` : message);
   }
   return payload;
 }

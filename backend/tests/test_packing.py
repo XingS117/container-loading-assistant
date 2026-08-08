@@ -576,3 +576,59 @@ def test_easy_fallback_keeps_must_load_counts():
         request.cargo_items,
         easy.placements,
     ).valid
+
+
+def test_raise_for_invalid_layout_known_codes_gives_chinese_advice():
+    from app.models import ValidationIssue, ValidationResult
+    from app.packing import LAYOUT_ADVICE, _raise_for_invalid_layout
+
+    validation = ValidationResult(
+        valid=False,
+        errors=[
+            ValidationIssue(code="PALLET_STACKING", message="整托上方不能叠放整托"),
+            ValidationIssue(code="TOP_LOAD_EXCEEDED", message="货物顶部承重超过限制"),
+        ]
+    )
+
+    with pytest.raises(PackingFailure) as exc_info:
+        _raise_for_invalid_layout(validation)
+
+    failure = exc_info.value
+    assert failure.code == "LAYOUT_NOT_FEASIBLE"
+    assert "无法生成有效" in failure.message
+    assert failure.hint is not None
+    assert LAYOUT_ADVICE["PALLET_STACKING"] in failure.hint
+    assert LAYOUT_ADVICE["TOP_LOAD_EXCEEDED"] in failure.hint
+
+
+def test_raise_for_invalid_layout_unknown_code_stays_internal():
+    from app.models import ValidationIssue, ValidationResult
+    from app.packing import _raise_for_invalid_layout
+
+    validation = ValidationResult(
+        valid=False,
+        errors=[ValidationIssue(code="MYSTERY_BUG", message="未知错误")]
+    )
+
+    with pytest.raises(PackingFailure) as exc_info:
+        _raise_for_invalid_layout(validation)
+
+    assert exc_info.value.code == "INTERNAL_INVALID_LAYOUT"
+    assert exc_info.value.hint is None
+
+
+def test_layout_advice_covers_every_validator_error_code():
+    """LAYOUT_ADVICE 必须覆盖 validator 的全部错误码，否则新错误码会退回 500。"""
+    import re
+    from pathlib import Path
+
+    from app.packing import LAYOUT_ADVICE
+
+    validator_source = (
+        Path(__file__).resolve().parents[1] / "app" / "validator.py"
+    ).read_text(encoding="utf-8")
+    validator_codes = set(re.findall(r'add\("([A-Z_]+)",', validator_source))
+
+    assert validator_codes, "应能从 validator.py 提取错误码"
+    missing = sorted(validator_codes - set(LAYOUT_ADVICE))
+    assert not missing, f"LAYOUT_ADVICE 缺少以下错误码的建议：{missing}"

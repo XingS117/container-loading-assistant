@@ -181,3 +181,57 @@ def test_timeout_releases_calculation_slot(monkeypatch):
     third = client.post("/api/v1/pack", json=payload)
 
     assert [first.status_code, second.status_code, third.status_code] == [504, 504, 504]
+
+
+def test_packing_failure_response_includes_chinese_hint(monkeypatch):
+    from app import main
+    from app.packing import PackingFailure
+
+    payload = {
+        "container": {
+            "id": "small",
+            "name": "小型测试柜",
+            "inner_length_mm": 2000,
+            "inner_width_mm": 1000,
+            "inner_height_mm": 1000,
+            "door_width_mm": 1000,
+            "door_height_mm": 1000,
+            "max_payload_g": 1000000,
+            "clearance_mm": 0,
+        },
+        "cargo_items": [
+            {
+                "id": "a",
+                "sku": "A",
+                "name": "标准箱",
+                "kind": "carton",
+                "length_mm": 1000,
+                "width_mm": 1000,
+                "height_mm": 1000,
+                "weight_g": 100000,
+                "quantity": 1,
+                "allowed_orientations": ["LWH"],
+                "stackable": False,
+                "max_layers": 1,
+                "max_top_load_g": 0,
+                "fragile": False,
+                "must_load": False,
+            }
+        ],
+    }
+
+    def failing_calculation(_request):
+        raise PackingFailure(
+            "LAYOUT_NOT_FEASIBLE",
+            "当前货物参数无法生成有效的装柜方案，请根据下方提示调整后重试",
+            hint="整托不可叠放，请取消整托的“可叠”选项，或减少整托数量",
+        )
+
+    monkeypatch.setattr(main, "run_pack_calculation", failing_calculation)
+
+    response = client.post("/api/v1/pack", json=payload)
+
+    assert response.status_code == 422
+    body = response.json()
+    assert body["error"]["code"] == "LAYOUT_NOT_FEASIBLE"
+    assert body["error"]["hint"] == "整托不可叠放，请取消整托的“可叠”选项，或减少整托数量"
