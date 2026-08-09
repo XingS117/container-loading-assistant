@@ -592,3 +592,54 @@ def test_stackable_pallet_input_never_stacks():
         pallets = [p for p in solution.placements if p.cargo_id == "pallet"]
         assert all(p.z_mm == 0 for p in pallets), "整托不得垂直叠放"
         assert len(pallets) == 2, "2 个整托应各自单层放入"
+
+
+def test_pallet_top_merge_splits_oversized_stacks():
+    """托盘上方空间不够整栈时拆层上托：能放的层数叠托盘顶面，其余保留独立栈。"""
+    container = mixed_container()
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(height_mm=1400, max_top_load_g=500_000),
+            carton_box(quantity=8, max_layers=8),  # 8 层×300=2400 > 托盘上方(2400-1400=1000)
+        ],
+    )
+    merged = _merge_pallet_cartons(request, _build_stack_units(request))
+
+    composites = [u for u in merged if isinstance(u, CompositeUnit)]
+    assert composites, "应生成复合单位（拆层上托）"
+    composite = composites[0]
+    on_top_total = sum(stack.count for stack, _, _ in composite.on_top)
+    assert on_top_total >= 1, "应有散箱叠上托盘"
+    # 全部散箱件数 = 上托 + 独立
+    independent = [
+        u for u in merged if isinstance(u, StackUnit) and u.cargo.id == "carton"
+    ]
+    independent_total = sum(u.count for u in independent)
+    assert on_top_total + independent_total == 8, "拆层不得丢件"
+
+
+def test_split_stacks_do_not_duplicate_instance_indices():
+    """拆层后的上托栈与独立栈 instance_index 不得重叠（validator 防重复）。"""
+    container = mixed_container()
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(height_mm=1400, max_top_load_g=500_000),
+            carton_box(quantity=8, max_layers=8),
+        ],
+    )
+
+    response = pack_order(request)
+
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        indices = [
+            p.instance_index
+            for p in solution.placements
+            if p.cargo_id == "carton"
+        ]
+        assert len(indices) == len(set(indices)), "instance_index 不得重复"

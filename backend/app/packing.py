@@ -375,18 +375,47 @@ def _merge_pallet_cartons(
             if carton.cargo.fragile:
                 still.append(carton)
                 continue
-            if (
-                carton.stack_height_mm > height_left
-                or carton.total_weight_g > load_left
-            ):
+            if carton.total_weight_g > load_left:
                 still.append(carton)
                 continue
-            rect, placed_carton = _try_add_to_pallet_top(packer, carton, request)
+            on_top_unit = carton
+            remainder: StackUnit | None = None
+            if carton.stack_height_mm > height_left:
+                # 托盘上方空间不够整栈：拆层，能放的层数上托，其余保留独立栈
+                max_layers = height_left // carton.item_height_mm
+                if max_layers < 1:
+                    still.append(carton)
+                    continue
+                if carton.count > max_layers:
+                    on_top_unit = replace(
+                        carton,
+                        count=max_layers,
+                        stack_height_mm=max_layers * carton.item_height_mm,
+                        total_weight_g=max_layers * carton.cargo.weight_g,
+                    )
+                    remainder = replace(
+                        carton,
+                        count=carton.count - max_layers,
+                        stack_height_mm=(carton.count - max_layers)
+                        * carton.item_height_mm,
+                        total_weight_g=(carton.count - max_layers)
+                        * carton.cargo.weight_g,
+                        id=f"{carton.id}#{pallet.id}",
+                        first_instance_index=carton.first_instance_index
+                        + max_layers,
+                    )
+                else:
+                    on_top_unit = replace(carton, stack_height_mm=carton.stack_height_mm)
+            rect, placed_carton = _try_add_to_pallet_top(
+                packer, on_top_unit, request
+            )
             if rect is None:
                 still.append(carton)
                 continue
             assigned.append((placed_carton, int(rect.x), int(rect.y)))
-            load_left -= carton.total_weight_g
+            load_left -= placed_carton.total_weight_g
+            if remainder is not None:
+                still.append(remainder)
         remaining = still
         if assigned:
             merged.append(CompositeUnit(pallet=pallet, on_top=tuple(assigned)))
