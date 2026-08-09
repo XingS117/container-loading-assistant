@@ -31,7 +31,10 @@ export async function packOrder(
         allowed_orientations: orientationsFor(item.orientation_mode),
         stackable: item.stackable,
         max_layers: item.stackable ? item.max_layers : 1,
-        max_top_load_g: item.stackable ? Math.round(item.max_top_load_kg * 1000) : 0,
+        max_top_load_g:
+          item.stackable || item.kind === "pallet"
+            ? Math.round(item.max_top_load_kg * 1000)
+            : 0,
         fragile: item.fragile,
         must_load: item.must_load,
       })),

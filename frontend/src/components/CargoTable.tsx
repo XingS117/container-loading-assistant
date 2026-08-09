@@ -70,7 +70,10 @@ export function CargoTable({ rows, onChange, onImportFile, onDownloadTemplate }:
             <label className="cargo-field"><span className="field-title">类型</span><select aria-label={`货物类型 ${row.sku}`} value={row.kind} onChange={(event) => {
               const next = event.target.value as CargoInput["kind"];
               update(index, "kind", next);
-              if (next === "pallet") update(index, "stackable", false);
+              if (next === "pallet") {
+                update(index, "stackable", false);
+                update(index, "max_top_load_kg", 500);
+              }
             }}>
               <option value="carton">散箱</option>
               <option value="pallet">整托</option>
@@ -90,7 +93,7 @@ export function CargoTable({ rows, onChange, onImportFile, onDownloadTemplate }:
             <div className="stack-controls cargo-field" data-label="叠放">
               <label className="toggle-label"><input type="checkbox" checked={row.stackable} onChange={(event) => update(index, "stackable", event.target.checked)} />可叠</label>
               {row.stackable && <label className="mini-input">层<input type="number" min="1" max="100" aria-label={`最大层数 ${row.sku}`} value={numericValue(row, "max_layers")} onChange={(event) => updateNumber(index, "max_layers", event.target.value)} onBlur={() => clearNumericDraft(row.id, "max_layers")} /></label>}
-              {row.stackable && <label className="mini-input top-load-input">承重<input type="number" min="0" step="0.1" aria-label={`顶部承重 ${row.sku}`} value={numericValue(row, "max_top_load_kg")} onChange={(event) => updateNumber(index, "max_top_load_kg", event.target.value)} onBlur={() => clearNumericDraft(row.id, "max_top_load_kg")} /><span>kg</span></label>}
+              {(row.stackable || row.kind === "pallet") && <label className="mini-input top-load-input">承重<input type="number" min="0" step="0.1" aria-label={`顶部承重 ${row.sku}`} value={numericValue(row, "max_top_load_kg")} onChange={(event) => updateNumber(index, "max_top_load_kg", event.target.value)} onBlur={() => clearNumericDraft(row.id, "max_top_load_kg")} /><span>kg</span></label>}
             </div>
             <div className="constraint-flags cargo-field" data-label="约束">
               <label><input type="checkbox" checked={row.fragile} onChange={(event) => update(index, "fragile", event.target.checked)} />易碎</label>
