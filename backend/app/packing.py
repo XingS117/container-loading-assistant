@@ -459,7 +459,10 @@ def _pack_units(
             y_mm=0,
             rotated=True,
         ).orientation
-        packing_bin.rot = swapped_orientation in unit.cargo.allowed_orientations
+        packing_bin.rot = (
+            not isinstance(unit, CompositeUnit)
+            and swapped_orientation in unit.cargo.allowed_orientations
+        )
         rect = packing_bin.add_rect(
             unit.length_mm + gap,
             unit.width_mm + gap,

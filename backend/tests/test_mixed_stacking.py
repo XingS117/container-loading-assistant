@@ -643,3 +643,37 @@ def test_split_stacks_do_not_duplicate_instance_indices():
             if p.cargo_id == "carton"
         ]
         assert len(indices) == len(set(indices)), "instance_index 不得重复"
+
+
+def test_rotatable_pallets_mixed_order_no_layout_failure():
+    """整托允许旋转（LWH+WLH，前端"保持正放"真实提交）+ 混装散箱：
+    不得产生 OVERLAP/UNSUPPORTED（_pack_units 曾对 CompositeUnit 旋转导致上叠散箱错位）。"""
+    container = ContainerSpec(id="40hq", name="40HQ", inner_length_mm=12032,
+        inner_width_mm=2352, inner_height_mm=2698, door_width_mm=2340,
+        door_height_mm=2585, max_payload_g=28600000, clearance_mm=0)
+    items = [
+        pallet_box(id="pa", sku="PA", height_mm=1400, weight_g=175000, quantity=10,
+                   allowed_orientations=["LWH", "WLH"]),
+        pallet_box(id="pb", sku="PB", height_mm=1600, weight_g=100000, quantity=8,
+                   allowed_orientations=["LWH", "WLH"]),
+        pallet_box(id="pc", sku="PC", height_mm=1800, weight_g=95000, quantity=6,
+                   allowed_orientations=["LWH", "WLH"]),
+        carton_box(id="ca", sku="CA", quantity=200,
+                   allowed_orientations=["LWH", "WLH", "LHW", "WHL"]),
+        carton_box(id="cb", sku="CB", length_mm=340, width_mm=320, height_mm=500,
+                   weight_g=4200, quantity=150, max_layers=6, max_top_load_g=50000,
+                   allowed_orientations=["LWH", "WLH", "LHW", "WHL"]),
+        carton_box(id="cc", sku="CC", length_mm=420, width_mm=420, height_mm=420,
+                   weight_g=9000, quantity=100, max_layers=5, max_top_load_g=60000,
+                   allowed_orientations=["LWH", "WLH", "LHW", "WHL"]),
+    ]
+    request = PackRequest(container=container, cargo_items=items)
+
+    response = pack_order(request)
+
+    assert len(response.solutions) == 3
+    for solution in response.solutions:
+        result = validate_solution(
+            container, items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
