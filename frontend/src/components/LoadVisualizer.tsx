@@ -243,7 +243,7 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
   return <div className="three-scene" ref={hostRef} />;
 }
 
-export function StaticLayout({ mode, container, placements, zones, cargoItems, selectedCargoId, onSelectCargo, testId = "layout-svg" }: {
+export function StaticLayout({ mode, container, placements, zones, cargoItems, selectedCargoId, onSelectCargo, testId = "layout-svg", compact }: {
   mode: Exclude<ViewMode, "3d">;
   container: ContainerSpec;
   placements: Placement[];
@@ -252,6 +252,7 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
   selectedCargoId?: string | null;
   onSelectCargo?: (cargoId: string | null) => void;
   testId?: string;
+  compact?: boolean;
 }) {
   const colors = cargoColorMap(cargoItems);
   const cargoById = Object.fromEntries(cargoItems.map((cargo) => [cargo.id, cargo]));
@@ -277,11 +278,11 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
         return (
           <g key={placement.id} onClick={() => onSelectCargo?.(placement.cargo_id)} className="layout-item" opacity={dimmed ? 0.2 : 1}>
             <rect x={x} y={y} width={width} height={height} fill={colors[placement.cargo_id] ?? "#7b8680"} stroke="#173029" strokeWidth={Math.max(totalWidth, totalHeight) / 850} />
-            {width > fontSize * 3 && height > fontSize * 1.5 && <text x={x + width / 2} y={y + height / 2} dominantBaseline="middle" textAnchor="middle" fontSize={fontSize} fill="white">{cargoById[placement.cargo_id]?.sku ?? placement.cargo_id}</text>}
+            {!compact && width > fontSize * 3 && height > fontSize * 1.5 && <text x={x + width / 2} y={y + height / 2} dominantBaseline="middle" textAnchor="middle" fontSize={fontSize} fill="white">{cargoById[placement.cargo_id]?.sku ?? placement.cargo_id}</text>}
           </g>
         );
       })}
-      {showZones && visibleZones.map((zone) => (
+      {!compact && showZones && visibleZones.map((zone) => (
         <g key={`zone-${zone.step}-${zone.cargo_id}-${zone.x_mm}-${zone.y_mm}`} className="layout-zone" data-testid="layout-zone">
           <rect x={zone.x_mm} y={zone.y_mm} width={zone.length_mm} height={zone.width_mm} className="zone-outline" />
           <circle className="zone-badge" cx={zone.x_mm + fontSize * 1.4} cy={zone.y_mm + fontSize * 1.4} r={fontSize * 0.9} />

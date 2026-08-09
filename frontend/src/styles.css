@@ -233,22 +233,26 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
   body { background: white; }
   .no-print, .solution-tabs, .workspace-grid { display: none !important; }
   .print-only { display: block; }
-  .print-report { padding: 24px; }
-  .print-report h1 { margin-bottom: 5px; }
-  .print-report h2 { margin-bottom: 12px; }
-  .print-report p { margin: 7px 0; }
-  .print-meta { color: #59665f; }
-  .print-comparison { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 14px 0 24px; }
-  .print-comparison > div { padding: 12px; border: 1px solid #cfd6d1; }
-  .print-comparison strong { font-size: 22px; }
-  .print-comparison p { font-size: 11px; }
-  .print-page-break { break-before: page; }
-  .print-pros-cons { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .print-pros-cons > div { padding: 12px; border: 1px solid #d7ddd8; }
-  .print-snapshot { width: 100%; max-height: 480px; object-fit: contain; margin: 16px 0; }
-  .print-layouts { display: grid; grid-template-columns: 1fr; gap: 18px; margin: 18px 0; }
-  .print-layouts .layout-svg { min-height: 0; max-height: 340px; padding: 0; page-break-inside: avoid; }
-  .print-layer { break-before: page; }
-  .print-layer .layout-svg { width: 100%; max-height: 560px; min-height: 0; padding: 0; }
-  .print-zones { margin-top: 14px; }
+  .print-report { padding: 16px; }
+  .print-report h1 { margin-bottom: 4px; font-size: 20px; }
+  .print-report h2 { margin: 14px 0 8px; font-size: 15px; }
+  .print-report h3 { margin: 10px 0 6px; font-size: 13px; }
+  .print-report h4 { margin: 3px 0; font-size: 11px; }
+  .print-report p { margin: 5px 0; font-size: 12px; }
+  .print-meta { color: #59665f; font-size: 12px; }
+  .print-table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 8px 0; }
+  .print-table th, .print-table td { border: 1px solid #b9c2bc; padding: 5px 8px; text-align: left; }
+  .print-table th { background: #eef2ef; font-weight: 600; }
+  .print-recommend { font-weight: 600; margin: 10px 0; }
+  .print-solution-page { break-before: page; }
+  .print-pros-cons { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 8px 0; }
+  .print-pros-cons > div { padding: 8px; border: 1px solid #d7ddd8; }
+  .print-snapshot { width: 100%; max-height: 300px; object-fit: contain; margin: 8px 0; }
+  .print-layouts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
+  .print-layouts .layout-svg { min-height: 0; max-height: 300px; padding: 0; page-break-inside: avoid; }
+  .print-zones { font-size: 11px; color: #46534d; line-height: 1.6; }
+  .print-zones span { white-space: normal; }
+  .print-layer-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+  .print-layer { page-break-inside: avoid; break-inside: avoid; }
+  .print-layer .layout-svg { width: 100%; max-height: 170px; min-height: 0; padding: 0; }
 }
