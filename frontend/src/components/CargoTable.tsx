@@ -69,10 +69,15 @@ export function CargoTable({ rows, onChange, onImportFile, onDownloadTemplate }:
             </div>
             <label className="cargo-field"><span className="field-title">类型</span><select aria-label={`货物类型 ${row.sku}`} value={row.kind} onChange={(event) => {
               const next = event.target.value as CargoInput["kind"];
-              update(index, "kind", next);
               if (next === "pallet") {
-                update(index, "stackable", false);
-                update(index, "max_top_load_kg", 500);
+                // 一次更新多个字段：update() 基于闭包旧 rows，连续多次调用会互相覆盖
+                onChange(rows.map((item, rowIndex) => (
+                  rowIndex === index
+                    ? { ...item, kind: "pallet", stackable: false, max_top_load_kg: 500 }
+                    : item
+                )));
+              } else {
+                update(index, "kind", next);
               }
             }}>
               <option value="carton">散箱</option>

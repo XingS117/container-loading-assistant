@@ -84,3 +84,23 @@ test("loads presets and switches from input to comparable solutions", async () =
   await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(3));
   expect(screen.getByRole("combobox", { name: "重算柜型" })).toHaveValue("40hq");
 });
+
+
+test("selecting pallet kind keeps the selection and applies pallet defaults", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify([preset, secondPreset]), { status: 200 }),
+  );
+
+  render(<App />);
+  await screen.findByRole("button", { name: /20GP/ });
+
+  const kindSelect = screen.getByRole("combobox", { name: "货物类型 SKU-001" });
+  await userEvent.selectOptions(kindSelect, "pallet");
+
+  // 关键回归：选中整托后下拉必须保持整托（此前多次 update 互相覆盖导致跳回散箱）
+  expect(screen.getByRole("combobox", { name: "货物类型 SKU-001" })).toHaveValue("pallet");
+  // 整托不可叠（可叠复选框不勾选）
+  expect(screen.getByRole("checkbox", { name: /可叠/ })).not.toBeChecked();
+  // 整托默认顶部承重 500kg（允许散箱上托）
+  expect(screen.getByLabelText("顶部承重 SKU-001")).toHaveValue(500);
+});
