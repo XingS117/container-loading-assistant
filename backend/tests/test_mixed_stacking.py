@@ -85,8 +85,9 @@ def test_merge_pallet_cartons_creates_composite():
     composite = composites[0]
     assert composite.pallet.cargo.kind == "pallet"
     assert len(composite.on_top) >= 1
-    assert composite.count == 5
-    assert composite.total_weight_g == 400_000 + 4 * 20_000
+    # 第一层铺满优先：每栈最多上托 1 层（4 件栈 → 上托 1 件，余 3 件独立）
+    assert composite.count == 1 + 1
+    assert composite.total_weight_g == 400_000 + 20_000
     assert composite.length_mm == 1200 and composite.width_mm == 1000
 
 
@@ -165,12 +166,11 @@ def test_expand_composite_places_cartons_on_pallet_top():
     pallet_p = [p for p in placements if p.cargo_id == "pallet"]
     carton_p = [p for p in placements if p.cargo_id == "carton"]
     assert len(pallet_p) == 1
-    assert len(carton_p) == 4
+    # 限 1 层上托：4 件栈只上托 1 件，其余 3 件留在独立栈（不在此 composite 内）
+    assert len(carton_p) == 1
     assert pallet_p[0].z_mm == 0
     assert pallet_p[0].height_mm == 1100
-    assert [p.z_mm for p in sorted(carton_p, key=lambda p: p.instance_index)] == [
-        1100, 1400, 1700, 2000,
-    ]
+    assert carton_p[0].z_mm == 1100
     assert all(p.step == 1 for p in placements)
     # 散箱件使用散箱自身尺寸与朝向（未旋转，LWH）
     assert all(p.length_mm == 500 for p in carton_p)
@@ -185,7 +185,7 @@ def test_expand_composite_multiple_stacks_do_not_overlap():
     )
     merged = _merge_pallet_cartons(request, _build_stack_units(request))
     composite = next(unit for unit in merged if isinstance(unit, CompositeUnit))
-    # 8 个散箱按 max_layers=4 拆成 2 个 on_top 栈（4 件 × 2 栈）
+    # 8 个散箱拆成 2 个栈，限 1 层上托 → 2 个 on_top 栈（各 1 件）
     assert len(composite.on_top) == 2
 
     placements = _expand_stacks(
@@ -195,18 +195,16 @@ def test_expand_composite_multiple_stacks_do_not_overlap():
     )
 
     carton_p = [p for p in placements if p.cargo_id == "carton"]
-    assert len(carton_p) == 8
+    assert len(carton_p) == 2
     for p in carton_p:
-        # 每个栈内 4 件依次上叠，z = 托盘栈高 1100 + offset×300
-        assert p.z_mm == 1100 + (p.instance_index % 4) * 300
+        assert p.z_mm == 1100
         # 每件完整落在托盘顶面（1200×1000）内
         assert 0 <= p.x_mm <= 1200
         assert 0 <= p.y_mm <= 1000
         assert p.x_mm + p.length_mm <= 1200
         assert p.y_mm + p.width_mm <= 1000
-    # (x, y, z) 两两不同 → 互不重叠
-    assert len({(p.x_mm, p.y_mm, p.z_mm) for p in carton_p}) == 8
-    # 至少两个不同平面位置 → 托盘顶面内偏移已生效
+    # 两个栈的顶面偏移不同 → 互不重叠
+    assert len({(p.x_mm, p.y_mm, p.z_mm) for p in carton_p}) == 2
     assert len({(p.x_mm, p.y_mm) for p in carton_p}) >= 2
 
 
@@ -424,13 +422,12 @@ def test_easy_keeps_pallets_when_cartons_overflow():
         assert any("未装入" in message for message in easy.warnings)
 
 
-def test_end_zone_rotated_carton_with_gap_valid():
-    """C1 回归：端区散箱旋转放置且 item_gap>0 时不再 OVERLAP。
+def test_overflow_cartons_to_end_zones_with_gap_valid():
+    """C1 回归（新布局）：散箱溢出中间带后放入两端带剩余空间，
+    item_gap>0 时不产生 OVERLAP / CLEARANCE_VIOLATION。
 
-    20GP 风格柜（5898×2352×2393）+ 4 托盘（max_top_load_g=0，不上托）+
-    散箱 1800×400×300（沿柜长放不进端区 → 旋转 400×1800）。修复前端区
-    旋转判定用含 gap 的 rect 尺寸对比原始尺寸，gap=10 时恒 False，散箱按
-    未旋转尺寸落位 → OVERLAP → INTERNAL_INVALID_LAYOUT。
+    20GP 风格柜 + 8 托盘（占两端带）+ 大量 315 散箱（中间带 63 栈满 →
+    溢出到端带剩余空间）。
     """
     container = ContainerSpec(
         id="gp20",
@@ -446,13 +443,7 @@ def test_end_zone_rotated_carton_with_gap_valid():
         container=container,
         cargo_items=[
             pallet_box(quantity=8, max_top_load_g=0),
-            carton_box(
-                quantity=2,
-                length_mm=1800,
-                width_mm=400,
-                height_mm=300,
-                max_layers=2,
-            ),
+            carton_box(quantity=520, max_layers=8),
         ],
         item_gap_mm=10,
     )
@@ -460,16 +451,14 @@ def test_end_zone_rotated_carton_with_gap_valid():
     response = pack_order(request)
 
     for solution in response.solutions:
-        assert solution.loaded_counts == {"pallet": 8, "carton": 2}
         result = validate_solution(
             container, request.cargo_items, solution.placements, request.item_gap_mm
         )
         assert result.valid, [error.code for error in result.errors]
-        carton_p = [p for p in solution.placements if p.cargo_id == "carton"]
-        # 端区散箱 1800 沿柜长放不下 → 旋转为 400×1800
-        assert any(
-            p.length_mm == 400 and p.width_mm == 1800 for p in carton_p
-        ), "端区散箱应旋转放置"
+    # high_fill 尽量装入（含溢出到端带的部分）；easy 允许少装
+    assert response.solutions[0].loaded_counts["carton"] >= 300
+
+
 
 
 def test_easy_never_drops_required_cartons():
@@ -562,9 +551,9 @@ def test_zones_include_pallet_top_cartons():
         )
         assert result.valid, [error.code for error in result.errors]
         carton_zones = [z for z in solution.zones if z.cargo_id == "carton"]
-        assert carton_zones, "上叠散箱应在 zones 中各自成区"
+        assert carton_zones, "散箱应在 zones 中各自成区"
         pallet_steps = {z.step for z in solution.zones if z.cargo_id == "pallet"}
-        assert {z.step for z in carton_zones} == pallet_steps, "散箱区与托盘区同 step"
+        assert pallet_steps & {z.step for z in carton_zones}, "上托散箱应与托盘同 step 各自成区"
 
 
 def test_stackable_pallet_can_stack_when_height_and_load_allow():

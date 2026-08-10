@@ -376,32 +376,32 @@ def _merge_pallet_cartons(
                 continue
             on_top_unit = carton
             remainder: StackUnit | None = None
-            if carton.stack_height_mm > height_left:
-                # 托盘上方空间不够整栈：拆层，能放的层数上托，其余保留独立栈
-                max_layers = height_left // carton.item_height_mm
-                if max_layers < 1:
-                    still.append(carton)
-                    continue
-                if carton.count > max_layers:
-                    on_top_unit = replace(
-                        carton,
-                        count=max_layers,
-                        stack_height_mm=max_layers * carton.item_height_mm,
-                        total_weight_g=max_layers * carton.cargo.weight_g,
-                    )
-                    remainder = replace(
-                        carton,
-                        count=carton.count - max_layers,
-                        stack_height_mm=(carton.count - max_layers)
-                        * carton.item_height_mm,
-                        total_weight_g=(carton.count - max_layers)
-                        * carton.cargo.weight_g,
-                        id=f"{carton.id}#{pallet.id}",
-                        first_instance_index=carton.first_instance_index
-                        + max_layers,
-                    )
-                else:
-                    on_top_unit = replace(carton, stack_height_mm=carton.stack_height_mm)
+            # 第一层铺满优先：散箱尽量保留独立栈铺底面，托盘顶面最多叠 1 层
+            # （高度不够 1 层则按实际可放层数；整栈可放 1 层则整栈上托）
+            max_layers = min(1, height_left // carton.item_height_mm)
+            if max_layers < 1:
+                still.append(carton)
+                continue
+            if carton.count > max_layers:
+                on_top_unit = replace(
+                    carton,
+                    count=max_layers,
+                    stack_height_mm=max_layers * carton.item_height_mm,
+                    total_weight_g=max_layers * carton.cargo.weight_g,
+                )
+                remainder = replace(
+                    carton,
+                    count=carton.count - max_layers,
+                    stack_height_mm=(carton.count - max_layers)
+                    * carton.item_height_mm,
+                    total_weight_g=(carton.count - max_layers)
+                    * carton.cargo.weight_g,
+                    id=f"{carton.id}#{pallet.id}",
+                    first_instance_index=carton.first_instance_index
+                    + max_layers,
+                )
+            else:
+                on_top_unit = replace(carton, stack_height_mm=carton.stack_height_mm)
             rect, placed_carton = _try_add_to_pallet_top(
                 packer, on_top_unit, request
             )
@@ -824,12 +824,13 @@ def _mixed_balance_layout(
     units: list[CompositeUnit | StackUnit],
     allow_partial: bool = False,
 ) -> list[PackedStack] | None:
-    """Center pallet units along container length; carton stacks fill both ends.
+    """第一层铺满 + 上层集中中间。
 
-    When ``allow_partial`` is True and the two end zones cannot hold every
-    remaining carton stack, the overflow cartons are dropped and the layout
-    with the placed pallet band plus the packed cartons is returned.  When
-    False (default) the layout returns None so callers can fall back.
+    散箱栈（可叠）排柜长中间带，上层件自然集中在中间（两头空）；
+    托盘（不可叠）排两端带，填满底面；溢出互相借用剩余空间。
+
+    ``allow_partial`` 为 True 时散箱溢出可丢弃（少装并披露）；False 时
+    放不下返回 None 由调用方回退。
     """
     if not units:
         return None
@@ -837,126 +838,112 @@ def _mixed_balance_layout(
     gap = request.item_gap_mm
     usable_length = request.container.inner_length_mm - 2 * c
     usable_width = request.container.inner_width_mm - 2 * c
-    door_usable_width = request.container.door_width_mm - 2 * c
     pallets = [unit for unit in units if unit.cargo.kind == "pallet"]
     cartons = [unit for unit in units if unit.cargo.kind == "carton"]
     if not pallets:
-        return None  # 纯散箱走 rectpack；纯整托/散箱全上托时仍返回居中托盘带
+        return None  # 纯散箱走 rectpack
+    if not cartons:
+        return None  # 纯整托走 _pallet_grid_layout
 
-    options: list[set[tuple[int, int]]] = []
-    for unit in pallets:
-        candidates = {(unit.length_mm, unit.width_mm)}
-        if not isinstance(unit, CompositeUnit):
-            swapped_orientation = SWAP_ORIENTATIONS.get(unit.orientation)
-            if swapped_orientation in unit.cargo.allowed_orientations:
-                swapped = (unit.width_mm, unit.length_mm)
-                if swapped[1] <= door_usable_width:
-                    candidates.add(swapped)
-        options.append(candidates)
-    common_footprints = set.intersection(*options)
-    if not common_footprints:
-        return None
-
-    best: tuple[tuple[int, int, int], tuple[int, int]] | None = None
-    for footprint in sorted(common_footprints):
-        along_length, across_width = footprint
-        if across_width + gap > usable_width:
-            continue
-        columns = usable_width // (across_width + gap)
-        if columns < 1:
-            continue
-        rows = (len(pallets) + columns - 1) // columns
-        total_length = rows * along_length + (rows - 1) * gap
-        if total_length > usable_length:
-            continue
-        score = (columns, -total_length, along_length)
-        if best is None or score > best[0]:
-            best = (score, footprint)
-    if best is None:
-        return None
-
-    along_length, across_width = best[1]
-    columns = usable_width // (across_width + gap)
-    rows = (len(pallets) + columns - 1) // columns
-    total_length = rows * along_length + (rows - 1) * gap
-    # 先铺满底面：托盘带从柜头开始，不居中留空两端；重托盘由 row_order 中心向外配平
-    x0 = c
-
-    pallets.sort(key=lambda unit: (-unit.total_weight_g, unit.id))
-    row_order = sorted(
-        range(rows),
-        key=lambda row: (abs(row - (rows - 1) / 2), row),
-    )
-    column_weights = [0] * columns
-    assignments: list[tuple[int, int, int]] = []
-    index = 0
-    for row in row_order:
-        for _ in range(columns):
-            if index >= len(pallets):
-                break
-            column = min(
-                range(columns),
-                key=lambda col: (column_weights[col], col),
-            )
-            column_weights[column] += pallets[index].total_weight_g
-            assignments.append((row, column, index))
-            index += 1
-
-    left_len = x0 - c
-    right_len = usable_length - total_length - left_len
-    # 装载区域按 x 升序编号：左端区、托盘带（按行）、右端区
+    # 中间带（散箱区）= 柜长中段 50%；两端带（托盘区）各 25%
+    quarter = usable_length // 4
+    mid_start = c + quarter
+    mid_end = c + usable_length - quarter
+    left_len = mid_start - c
+    right_len = usable_length - (mid_end - c)
     next_step = 1
-    left_step = next_step if left_len > 0 else None
-    if left_step is not None:
-        next_step += 1
-    pallet_row_first_step = next_step
-    next_step += rows
-    right_step = next_step if right_len > 0 else None
 
+    # 1) 散箱栈 → 中间带（rectpack，含旋转/门宽检查）
+    cartons.sort(key=lambda unit: (-unit.volume_mm3, unit.id))
+    mid_packer = MaxRectsBssf(mid_end - mid_start, usable_width, rot=False)
     placed: list[PackedStack] = []
-    for row, column, unit_index in assignments:
-        unit = pallets[unit_index]
+    overflow_cartons: list[StackUnit] = []
+    for carton in cartons:
+        rect, placed_unit = _try_add_to_pallet_top(mid_packer, carton, request)
+        if rect is None:
+            overflow_cartons.append(carton)
+            continue
         placed.append(
             PackedStack(
-                unit=unit,
-                x_mm=x0 + row * (along_length + gap),
-                y_mm=c + column * (across_width + gap),
-                rotated=(unit.length_mm, unit.width_mm) == (across_width, along_length),
-                step=pallet_row_first_step + row,
+                unit=placed_unit,
+                x_mm=mid_start + int(rect.x),
+                y_mm=c + int(rect.y),
+                step=next_step,
             )
         )
+    mid_step = next_step
+    next_step += 1
 
-    cartons.sort(key=lambda unit: (-unit.volume_mm3, unit.id))
-    remaining = cartons
-    for zone_x, zone_len, zone_step, start_offset in (
-        (c, left_len, left_step, 0),
-        (x0 + total_length, right_len, right_step, gap),
-    ):
-        if zone_step is None or not remaining:
-            continue
-        zone_usable = zone_len - gap
-        if zone_usable <= 0:
-            continue
-        packer = MaxRectsBssf(zone_usable + gap, usable_width + gap, rot=False)
-        still: list[StackUnit] = []
-        for carton in remaining:
-            rect, placed_carton = _try_add_to_pallet_top(packer, carton, request)
+    # 2) 托盘 → 两端带（rectpack，重托盘先排）
+    pallets.sort(key=lambda unit: (-unit.total_weight_g, unit.id))
+    end_packers: list[object] = []
+    for zone_x, zone_len in ((c, left_len), (mid_end, right_len)):
+        packer = MaxRectsBssf(zone_len, usable_width, rot=False)
+        end_packers.append(packer)
+        still_pallets: list[CompositeUnit | StackUnit] = []
+        for unit in pallets:
+            rect, placed_unit = _try_add_to_pallet_top(packer, unit, request)
             if rect is None:
-                still.append(carton)
+                still_pallets.append(unit)
                 continue
             placed.append(
                 PackedStack(
-                    unit=placed_carton,
-                    x_mm=zone_x + start_offset + int(rect.x),
+                    unit=placed_unit,
+                    x_mm=zone_x + int(rect.x),
                     y_mm=c + int(rect.y),
-                    step=zone_step,
+                    step=mid_step + 1 + len(placed) % 2,
                 )
             )
-        remaining = still
-    if remaining and (not allow_partial or any(unit.required for unit in remaining)):
-        return None  # 两端放不下全部散箱（或剩余含必装）→ 布局失败，由调用方回退
-    placed.sort(key=lambda stack: stack.unit.id)
+        pallets = still_pallets
+
+    # 3) 托盘溢出 → 中间带剩余空间（复用 mid_packer，感知散箱已占空间）
+    if pallets:
+        still_pallets = []
+        for unit in pallets:
+            rect, placed_unit = _try_add_to_pallet_top(mid_packer, unit, request)
+            if rect is None:
+                still_pallets.append(unit)
+                continue
+            placed.append(
+                PackedStack(
+                    unit=placed_unit,
+                    x_mm=mid_start + int(rect.x),
+                    y_mm=c + int(rect.y),
+                    step=next_step,
+                )
+            )
+        next_step += 1
+        if still_pallets and (not allow_partial or any(unit.required for unit in still_pallets)):
+            return None  # 托盘也放不下 → 布局失败，回退
+
+    # 4) 散箱溢出 → 两端带剩余空间（复用端带 packers，感知托盘占位）
+    if overflow_cartons:
+        still_cartons: list[StackUnit] = []
+        for packer, zone_x in zip(end_packers, (c, mid_end)):
+            for carton in overflow_cartons:
+                rect, placed_unit = _try_add_to_pallet_top(packer, carton, request)
+                if rect is None:
+                    still_cartons.append(carton)
+                    continue
+                placed.append(
+                    PackedStack(
+                        unit=placed_unit,
+                        x_mm=zone_x + int(rect.x),
+                        y_mm=c + int(rect.y),
+                        step=next_step,
+                    )
+                )
+            next_step += 1
+            overflow_cartons = still_cartons
+            still_cartons = []
+        if overflow_cartons and (not allow_partial or any(unit.required for unit in overflow_cartons)):
+            return None
+
+
+    placed.sort(key=lambda stack: (stack.x_mm, stack.y_mm))
     return placed
+
+
 
 
 def _expand_stacks(
