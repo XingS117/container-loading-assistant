@@ -528,11 +528,10 @@ def _high_fill_candidate(request: PackRequest, units: list[StackUnit]) -> list[P
                 if _required_satisfied(request, packed):
                     candidates.append(packed)
     mixed_pool = _select_payload_units(request, units, "volume")
-    mixed = _mixed_balance_layout(
-        request, _merge_pallet_cartons(request, mixed_pool)
-    )
+    mixed = _layer_layout(request, mixed_pool)
     if mixed is not None and _required_satisfied(request, mixed):
-        candidates.append(mixed)
+        # 分层铺满优先：混装订单以“底层铺满 + 逐层叠高”为基准布局
+        return mixed
     if not candidates:
         missing_required = [unit for unit in units if unit.required]
         cargo_names = "、".join(sorted({unit.cargo.sku for unit in missing_required}))
@@ -820,6 +819,115 @@ def _pallet_grid_layout(
         )
         for stack in placed
     ]
+
+
+def _layer_layout(
+    request: PackRequest,
+    units: list[CompositeUnit | StackUnit],
+    allow_partial: bool = False,
+) -> list[PackedStack] | None:
+    """分层铺满（floor-layer-first）。
+
+    第 1 层：托盘（含上叠散箱的 CompositeUnit）与散箱单件用 2D 装箱铺满
+    整个柜底（贴壁、密集）；放不下的散箱单件按“柱高”叠到第 1 层同 SKU
+    位置正上方（同 footprint → 100% 完整支撑）。每位置叠高层数不超过
+    该 SKU 的栈容量（max_layers/高度/承重）。
+
+    ``allow_partial`` 为 True 时托盘或散箱放不下可丢弃（少装并披露）；
+    False 时放不下返回 None 由调用方回退。
+    """
+    if not units:
+        return None
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    usable_length = request.container.inner_length_mm - 2 * c
+    usable_width = request.container.inner_width_mm - 2 * c
+    pallets = [unit for unit in units if unit.cargo.kind == "pallet"]
+    cartons = [unit for unit in units if unit.cargo.kind == "carton"]
+    if not pallets:
+        return None  # 纯散箱走 rectpack（_pack_units）
+    if not cartons:
+        return None  # 纯整托走 _pallet_grid_layout
+
+    packer = MaxRectsBssf(usable_length, usable_width, rot=False)
+    placed: list[PackedStack] = []
+
+    # 1) 托盘（含 CompositeUnit）→ 第 1 层（贴壁，从柜头铺）
+    pallets.sort(key=lambda unit: (-unit.total_weight_g, unit.id))
+    for unit in pallets:
+        rect, placed_unit = _try_add_to_pallet_top(packer, unit, request)
+        if rect is None:
+            if not allow_partial or unit.required:
+                return None
+            continue  # allow_partial：托盘丢弃（披露）
+        placed.append(
+            PackedStack(
+                unit=placed_unit,
+                x_mm=c + int(rect.x),
+                y_mm=c + int(rect.y),
+                step=1,
+            )
+        )
+
+    # 2) 散箱单件铺第 1 层：逐个尝试，放不下的归入“待叠”
+    cartons.sort(key=lambda unit: (-unit.volume_mm3, unit.id))
+    slot_units: dict[str, list[StackUnit]] = {}  # cargo_id -> 第 1 层已放单件（旋转后）
+    slot_rects: dict[str, list[tuple[int, int]]] = {}
+    for carton in cartons:
+        sku_id = carton.cargo.id
+        for _ in range(carton.count):
+            single = replace(
+                carton,
+                count=1,
+                stack_height_mm=carton.item_height_mm,
+                total_weight_g=carton.cargo.weight_g,
+            )
+            rect, placed_unit = _try_add_to_pallet_top(packer, single, request)
+            if rect is None:
+                continue  # 第 1 层放不下 → 该件随后叠高（柱高分配覆盖）
+            slot_units.setdefault(sku_id, []).append(placed_unit)
+            slot_rects.setdefault(sku_id, []).append((int(rect.x), int(rect.y)))
+
+    # 3) 柱高分配：每 SKU 的 n 件分到第 1 层 k 个位置（每位置 ≤ 栈容量），
+    #    同 footprint 垂直叠（100% 完整支撑）。按 cargo_id 聚合处理，
+    #    避免同 SKU 多个栈共享 slot 导致重复放置。
+    by_sku: dict[str, list[StackUnit]] = {}
+    for carton in cartons:
+        by_sku.setdefault(carton.cargo.id, []).append(carton)
+    for sku_id, sku_cartons in by_sku.items():
+        units_k = slot_units.get(sku_id, [])
+        if not units_k:
+            continue  # 该 SKU 无第 1 层位置（底面放不下）→ 无法叠（无支撑）→ 不装
+        total = sum(carton.count for carton in sku_cartons)
+        capacity = max(carton.count for carton in sku_cartons)
+        k = len(units_k)
+        base = total // k
+        rem = total % k
+        if base > capacity:
+            heights = [capacity] * k  # 每位置最多 capacity 件，其余少装
+        else:
+            heights = [base + (1 if i < rem else 0) for i in range(k)]
+        first = min(carton.first_instance_index for carton in sku_cartons)
+        for unit, (rx, ry), height in zip(units_k, slot_rects[sku_id], heights):
+            placed_unit = replace(
+                unit,
+                count=height,
+                stack_height_mm=height * unit.item_height_mm,
+                total_weight_g=height * unit.cargo.weight_g,
+                first_instance_index=first,
+            )
+            first += height
+            placed.append(
+                PackedStack(
+                    unit=placed_unit,
+                    x_mm=c + rx,
+                    y_mm=c + ry,
+                    step=1,
+                )
+            )
+
+    placed.sort(key=lambda stack: (stack.y_mm, stack.x_mm))
+    return placed
 
 
 def _mixed_balance_layout(
@@ -1184,7 +1292,7 @@ def _easy_region_layout(
     if all(unit.count == 1 and unit.cargo.kind == "pallet" for unit in units):
         return _pallet_grid_layout(request, units)
     if any(unit.cargo.kind == "pallet" for unit in units):
-        mixed = _mixed_balance_layout(request, units, allow_partial=True)
+        mixed = _layer_layout(request, units, allow_partial=True)
         if mixed is not None:
             return mixed
     full = _try_region_layouts(request, units)
@@ -1495,7 +1603,7 @@ def pack_order(request: PackRequest) -> PackResponse:
     if pallet_grid is not None:
         stable_stacks = pallet_grid
     else:
-        mixed = _mixed_balance_layout(request, merged_stable)
+        mixed = _layer_layout(request, stable_units)
         if mixed is not None:
             stable_stacks = mixed
         else:
@@ -1503,7 +1611,7 @@ def pack_order(request: PackRequest) -> PackResponse:
                 request, merged_stable, "stable"
             ) or _center_stacks(request, high_stacks)
         stable_stacks = _swap_balance(request, stable_stacks)
-    easy_region = _easy_region_layout(request, merged_stable)
+    easy_region = _easy_region_layout(request, stable_units)
     easy_stacks = easy_region if easy_region is not None else (
         _repack_same_units(request, merged_stable, "easy") or high_stacks
     )
