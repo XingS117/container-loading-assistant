@@ -166,8 +166,20 @@ def validate_solution(
             continue
 
         if item.kind == "pallet":
-            if any(cargo_by_id[other.cargo_id].kind == "pallet" for other in above):
-                add("PALLET_STACKING", "整托上方不能叠放整托", support.id)
+            pallet_above = [
+                other for other in above if cargo_by_id[other.cargo_id].kind == "pallet"
+            ]
+            if pallet_above and not item.stackable:
+                add(
+                    "PALLET_STACKING",
+                    "整托上方不能叠放整托（请开启该整托的“可叠”选项）",
+                    support.id,
+                )
+            if pallet_above:
+                # 整托叠放层数受 max_layers 约束；散箱层数由散箱自身校验（不在此限制）
+                pallet_levels = 1 + len({other.z_mm for other in pallet_above})
+                if pallet_levels > item.max_layers:
+                    add("MAX_LAYERS_EXCEEDED", "整托叠放层数超过限制", support.id)
         else:
             if not item.stackable:
                 add("NON_STACKABLE", "不可叠放货物上方存在其他货物", support.id)

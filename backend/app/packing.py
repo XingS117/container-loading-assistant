@@ -53,7 +53,7 @@ LAYOUT_ADVICE: dict[str, str] = {
     "PAYLOAD_EXCEEDED": "装载总重量超过柜体最大载重，请减少货物数量或更换更大柜型",
     "MUST_LOAD_MISSING": "必装货物未能全部装入，请减少其他货物数量或更换更大柜型",
     "UNSUPPORTED": "高层货物底面未得到完整支撑，请调整货物尺寸/数量或摆放方式",
-    "PALLET_STACKING": "整托不可叠放，请取消整托的“可叠”选项，或减少整托数量",
+    "PALLET_STACKING": "整托上方不能叠放整托，如需叠放请开启该整托的“可叠”选项并设置层数/顶部承重",
     "NON_STACKABLE": "不可叠放货物的上方不应有其他货物，请取消该货物的“可叠”选项",
     "FRAGILE_STACKING": "易碎货物上方不能叠放其他货物，请移除其上方的货物或关闭“可叠”",
     "MAX_LAYERS_EXCEEDED": "货物堆叠层数超过限制，请调大“最大层数”或减少数量",
@@ -178,10 +178,6 @@ def _stack_capacity(
     _, _, item_height = cargo.dimensions_for(orientation)
     # Horizontal clearance must not create a vertical air gap between stacked items.
     by_height = available_height // item_height
-    if cargo.kind == "pallet":
-        # 整托作为整体，不垂直叠放：即使输入将其配置为可叠（stackable=True/
-        # max_layers>1），也强制单层，避免产生"整托叠整托"（PALLET_STACKING）。
-        return min(1, by_height)
     if not cargo.stackable or cargo.fragile:
         return min(1, by_height)
     by_load = cargo.max_top_load_g // cargo.weight_g + 1
