@@ -879,7 +879,8 @@ def _mixed_balance_layout(
     columns = usable_width // (across_width + gap)
     rows = (len(pallets) + columns - 1) // columns
     total_length = rows * along_length + (rows - 1) * gap
-    x0 = c + (usable_length - total_length) // 2
+    # 先铺满底面：托盘带从柜头开始，不居中留空两端；重托盘由 row_order 中心向外配平
+    x0 = c
 
     pallets.sort(key=lambda unit: (-unit.total_weight_g, unit.id))
     row_order = sorted(

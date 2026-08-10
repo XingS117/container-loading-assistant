@@ -226,12 +226,9 @@ def test_mixed_balance_layout_centers_pallets():
     assert layout is not None
     pallet_stacks = [s for s in layout if s.unit.cargo.kind == "pallet"]
     assert len(pallet_stacks) == 2
-    total = sum(s.unit.total_weight_g for s in pallet_stacks)
-    cg_x = (
-        sum((s.x_mm + s.length_mm / 2) * s.unit.total_weight_g for s in pallet_stacks)
-        / total
-    )
-    assert mixed_container().inner_length_mm / 3 <= cg_x <= mixed_container().inner_length_mm * 2 / 3
+    # 先铺满底面：托盘带从柜头开始，不居中留空两端
+    min_x = min(s.x_mm for s in pallet_stacks)
+    assert min_x == 0, "托盘带应从柜头开始铺满底面（不居中留空）"
 
 
 def test_mixed_balance_layout_passes_validator():
@@ -305,9 +302,9 @@ def test_stable_keeps_high_fill_piece_count_and_centers_pallets():
     stable = response.solutions[1]
     assert stable.metrics.loaded_pieces == high_fill.metrics.loaded_pieces
     pallet_p = [p for p in stable.placements if p.cargo_id == "pallet"]
-    total = sum(p.weight_g for p in pallet_p)
-    cg_x = sum((p.x_mm + p.length_mm / 2) * p.weight_g for p in pallet_p) / total
-    assert container.inner_length_mm / 3 <= cg_x <= container.inner_length_mm * 2 / 3
+    assert pallet_p, "stable 方案应装入整托"
+    min_x = min(p.x_mm for p in pallet_p)
+    assert min_x == 0, "stable 整托带应从柜头开始铺满底面（不居中留空）"
 
 
 def test_mixed_order_partial_pallet_top_loading():
@@ -448,7 +445,7 @@ def test_end_zone_rotated_carton_with_gap_valid():
     request = PackRequest(
         container=container,
         cargo_items=[
-            pallet_box(quantity=4, max_top_load_g=0),
+            pallet_box(quantity=8, max_top_load_g=0),
             carton_box(
                 quantity=2,
                 length_mm=1800,
@@ -463,7 +460,7 @@ def test_end_zone_rotated_carton_with_gap_valid():
     response = pack_order(request)
 
     for solution in response.solutions:
-        assert solution.loaded_counts == {"pallet": 4, "carton": 2}
+        assert solution.loaded_counts == {"pallet": 8, "carton": 2}
         result = validate_solution(
             container, request.cargo_items, solution.placements, request.item_gap_mm
         )
