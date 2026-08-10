@@ -681,3 +681,27 @@ def test_rotatable_pallets_mixed_order_no_layout_failure():
             container, items, solution.placements, request.item_gap_mm
         )
         assert result.valid, [error.code for error in result.errors]
+
+
+def test_rotatable_pallet_overflow_does_not_crash():
+    """CompositeUnit 溢出到中间带/端带时不得触发 replace 旋转崩溃
+    （生产 500 复现：TypeError: CompositeUnit.__init__() got unexpected keyword 'length_mm'）。"""
+    container = ContainerSpec(id="40hq", name="40HQ", inner_length_mm=12032,
+        inner_width_mm=2352, inner_height_mm=2698, door_width_mm=2340,
+        door_height_mm=2585, max_payload_g=28600000, clearance_mm=0)
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(allowed_orientations=["LWH", "WLH"], quantity=24),
+            carton_box(quantity=200),
+        ],
+    )
+
+    response = pack_order(request)
+
+    assert len(response.solutions) == 3
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]

@@ -324,6 +324,9 @@ def _try_add_to_pallet_top(
     rect = packer.add_rect(carton.length_mm + gap, carton.width_mm + gap, rid=carton.id)
     if rect is not None:
         return rect, carton
+    if isinstance(carton, CompositeUnit):
+        # CompositeUnit（托盘+上叠散箱）不允许旋转：on_top 偏移基于未旋转托盘顶面
+        return None, None
     swapped_orientation = SWAP_ORIENTATIONS.get(carton.orientation)
     if (
         swapped_orientation in carton.cargo.allowed_orientations
