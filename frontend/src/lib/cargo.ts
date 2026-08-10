@@ -20,6 +20,7 @@ export function createCargo(sku?: string): CargoInput {
     max_top_load_kg: 90,
     fragile: false,
     must_load: false,
+    unload_order: 0,
   };
 }
 

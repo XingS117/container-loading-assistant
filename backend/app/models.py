@@ -53,6 +53,9 @@ class CargoSpec(BaseModel):
     max_top_load_g: int = Field(default=0, ge=0)
     fragile: bool = False
     must_load: bool = False
+    # 卸货顺序：0 = 不指定；>0 时数字小者先卸。布局按"后卸先装"排布
+    # （卸货顺序大的货物先装进柜头，先卸的靠柜门）。
+    unload_order: int = Field(default=0, ge=0)
 
     def dimensions_for(self, orientation: Orientation | str) -> tuple[int, int, int]:
         values = {

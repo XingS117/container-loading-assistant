@@ -34,6 +34,7 @@ const cargoItems: CargoInput[] = [
     max_top_load_kg: 10,
     fragile: false,
     must_load: false,
+    unload_order: 0,
   },
 ];
 

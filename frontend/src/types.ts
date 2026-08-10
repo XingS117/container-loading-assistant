@@ -31,6 +31,7 @@ export interface CargoInput {
   max_top_load_kg: number;
   fragile: boolean;
   must_load: boolean;
+  unload_order: number;
 }
 
 export interface Placement {

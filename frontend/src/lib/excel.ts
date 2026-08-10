@@ -81,6 +81,7 @@ export function cargoRowsFromMatrix(matrix: unknown[][]): CargoInput[] {
       max_top_load_kg: stackable ? numberValue(value("顶部承重(kg)"), "顶部承重(kg)") : 0,
       fragile: booleanValue(value("易碎"), "易碎"),
       must_load: booleanValue(value("本柜必装"), "本柜必装"),
+      unload_order: 0,
     };
   });
 }

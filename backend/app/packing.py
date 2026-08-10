@@ -865,7 +865,8 @@ def _layer_layout(
     placed: list[PackedStack] = []
 
     # 1) 单层托盘（含 CompositeUnit）→ 第 1 层（贴壁，从柜头铺）
-    single_pallets.sort(key=lambda unit: (-unit.total_weight_g, unit.id))
+    #    先卸后装：卸货顺序大的（后卸）先铺柜头
+    single_pallets.sort(key=lambda unit: (-unit.cargo.unload_order, -unit.total_weight_g, unit.id))
     for unit in single_pallets:
         rect, placed_unit = _try_add_to_pallet_top(packer, unit, request)
         if rect is None:
@@ -881,8 +882,9 @@ def _layer_layout(
             )
         )
 
-    # 2) 可叠单位单件铺第 1 层：逐个尝试，放不下的归入“柱高”；必装优先铺底
-    stackables.sort(key=lambda unit: (-unit.required, -unit.volume_mm3, unit.id))
+    # 2) 可叠单位单件铺第 1 层：逐个尝试，放不下的归入“柱高”；必装优先铺底，
+    #    先卸后装（卸货顺序大的后卸 → 先铺柜头）
+    stackables.sort(key=lambda unit: (-unit.required, -unit.cargo.unload_order, -unit.volume_mm3, unit.id))
     slot_units: dict[str, list[StackUnit]] = {}  # cargo_id -> 第 1 层已放单件（旋转后）
     slot_rects: dict[str, list[tuple[int, int]]] = {}
     for stackable in stackables:

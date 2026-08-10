@@ -18,7 +18,8 @@ type NumericKey =
   | "weight_kg"
   | "quantity"
   | "max_layers"
-  | "max_top_load_kg";
+  | "max_top_load_kg"
+  | "unload_order";
 
 export function CargoTable({ rows, onChange, onImportFile, onDownloadTemplate }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -101,6 +102,7 @@ export function CargoTable({ rows, onChange, onImportFile, onDownloadTemplate }:
               {(row.stackable || row.kind === "pallet") && <label className="mini-input top-load-input">承重<input type="number" min="0" step="0.1" aria-label={`顶部承重 ${row.sku}`} value={numericValue(row, "max_top_load_kg")} onChange={(event) => updateNumber(index, "max_top_load_kg", event.target.value)} onBlur={() => clearNumericDraft(row.id, "max_top_load_kg")} /><span>kg</span></label>}
             </div>
             <div className="constraint-flags cargo-field" data-label="约束">
+              <label className="mini-input">卸货顺序<input type="number" min="0" aria-label={`卸货顺序 ${row.sku}`} value={numericValue(row, "unload_order")} onChange={(event) => updateNumber(index, "unload_order", event.target.value)} onBlur={() => clearNumericDraft(row.id, "unload_order")} title="数字小者先卸，后卸的货物先装进柜头（0=不指定）" /></label>
               <label><input type="checkbox" checked={row.fragile} onChange={(event) => update(index, "fragile", event.target.checked)} />易碎</label>
               <label><input type="checkbox" checked={row.must_load} onChange={(event) => update(index, "must_load", event.target.checked)} />必装</label>
             </div>

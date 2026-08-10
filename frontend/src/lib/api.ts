@@ -37,6 +37,7 @@ export async function packOrder(
             : 0,
         fragile: item.fragile,
         must_load: item.must_load,
+        unload_order: item.unload_order ?? 0,
       })),
     }),
   });

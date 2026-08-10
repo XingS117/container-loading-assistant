@@ -702,3 +702,32 @@ def test_rotatable_pallet_overflow_does_not_crash():
             container, request.cargo_items, solution.placements, request.item_gap_mm
         )
         assert result.valid, [error.code for error in result.errors]
+
+
+def test_unload_order_later_unloaded_goes_to_container_head():
+    """先卸后装：卸货顺序大的（后卸）货物先装进柜头（x 小），
+    卸货顺序小的（先卸）货物靠柜门（x 大）。"""
+    container = ContainerSpec(id="40hq", name="40HQ", inner_length_mm=12032,
+        inner_width_mm=2352, inner_height_mm=2698, door_width_mm=2340,
+        door_height_mm=2585, max_payload_g=28600000, clearance_mm=0)
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            carton_box(id="later", sku="LATER", quantity=60,
+                       length_mm=500, width_mm=400, height_mm=400,
+                       unload_order=2),
+            carton_box(id="first", sku="FIRST", quantity=60,
+                       length_mm=500, width_mm=400, height_mm=400,
+                       unload_order=1),
+        ],
+    )
+
+    response = pack_order(request)
+
+    for solution in response.solutions:
+        later = [p for p in solution.placements if p.cargo_id == "later"]
+        first = [p for p in solution.placements if p.cargo_id == "first"]
+        assert later and first, "两类货物都应装入"
+        later_max_x = max(p.x_mm for p in later)
+        first_min_x = min(p.x_mm for p in first)
+        assert later_max_x <= first_min_x, "后卸（order=2）应装进柜头，先卸（order=1）靠柜门"
