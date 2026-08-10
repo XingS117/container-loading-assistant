@@ -554,12 +554,14 @@ def test_zones_include_pallet_top_cartons():
 def test_stackable_pallet_can_stack_when_height_and_load_allow():
     """整托配置为可叠放（stackable=True）时允许垂直叠放：
     按高度（柜内剩余空间）与顶部承重（max_top_load）自动判定层数。"""
-    container = mixed_container()
+    container = ContainerSpec(id="40hq", name="40HQ", inner_length_mm=12032,
+        inner_width_mm=2352, inner_height_mm=2698, door_width_mm=2340,
+        door_height_mm=2585, max_payload_g=28600000, clearance_mm=0)
     request = PackRequest(
         container=container,
         cargo_items=[
-            pallet_box(stackable=True, max_layers=3, quantity=2, must_load=True),
-            carton_box(quantity=4),
+            pallet_box(stackable=True, max_layers=3, quantity=30,
+                       allowed_orientations=["LWH"], must_load=True),
         ],
     )
 
@@ -571,8 +573,8 @@ def test_stackable_pallet_can_stack_when_height_and_load_allow():
         )
         assert result.valid, [error.code for error in result.errors]
         pallets = [p for p in solution.placements if p.cargo_id == "pallet"]
-        assert len(pallets) == 2, "2 个整托都应装入"
-        assert any(p.z_mm > 0 for p in pallets), "可叠整托应能垂直叠放（z>0）"
+        assert len(pallets) == 30, "30 个整托都应装入（第 1 层铺满 + 叠高）"
+        assert any(p.z_mm > 0 for p in pallets), "可叠整托超出底面后应叠高（z>0）"
 
 
 def test_non_stackable_pallet_rejects_pallet_above():

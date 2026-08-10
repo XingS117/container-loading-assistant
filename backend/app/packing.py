@@ -848,15 +848,25 @@ def _layer_layout(
     usable_width = request.container.inner_width_mm - 2 * c
     pallets = [unit for unit in units if unit.cargo.kind == "pallet"]
     cartons = [unit for unit in units if unit.cargo.kind == "carton"]
-    if not cartons:
-        return None  # 纯整托走 _pallet_grid_layout
+    # 可叠单位（散箱栈 + 多层托盘栈 count>1）→ 拆单件铺底 + 柱高叠高；
+    # 单层托盘（含 CompositeUnit）→ 直接铺第 1 层
+    single_pallets = [
+        unit for unit in pallets
+        if isinstance(unit, CompositeUnit) or unit.count == 1
+    ]
+    stackables = list(cartons) + [
+        unit for unit in pallets
+        if not isinstance(unit, CompositeUnit) and unit.count > 1
+    ]
+    if not single_pallets and not stackables:
+        return None
 
     packer = MaxRectsBssf(usable_length, usable_width, rot=False)
     placed: list[PackedStack] = []
 
-    # 1) 托盘（含 CompositeUnit）→ 第 1 层（贴壁，从柜头铺）
-    pallets.sort(key=lambda unit: (-unit.total_weight_g, unit.id))
-    for unit in pallets:
+    # 1) 单层托盘（含 CompositeUnit）→ 第 1 层（贴壁，从柜头铺）
+    single_pallets.sort(key=lambda unit: (-unit.total_weight_g, unit.id))
+    for unit in single_pallets:
         rect, placed_unit = _try_add_to_pallet_top(packer, unit, request)
         if rect is None:
             if not allow_partial or unit.required:
@@ -871,18 +881,18 @@ def _layer_layout(
             )
         )
 
-    # 2) 散箱单件铺第 1 层：逐个尝试，放不下的归入“待叠”；必装优先铺底
-    cartons.sort(key=lambda unit: (-unit.required, -unit.volume_mm3, unit.id))
+    # 2) 可叠单位单件铺第 1 层：逐个尝试，放不下的归入“柱高”；必装优先铺底
+    stackables.sort(key=lambda unit: (-unit.required, -unit.volume_mm3, unit.id))
     slot_units: dict[str, list[StackUnit]] = {}  # cargo_id -> 第 1 层已放单件（旋转后）
     slot_rects: dict[str, list[tuple[int, int]]] = {}
-    for carton in cartons:
-        sku_id = carton.cargo.id
-        for _ in range(carton.count):
+    for stackable in stackables:
+        sku_id = stackable.cargo.id
+        for _ in range(stackable.count):
             single = replace(
-                carton,
+                stackable,
                 count=1,
-                stack_height_mm=carton.item_height_mm,
-                total_weight_g=carton.cargo.weight_g,
+                stack_height_mm=stackable.item_height_mm,
+                total_weight_g=stackable.cargo.weight_g,
             )
             rect, placed_unit = _try_add_to_pallet_top(packer, single, request)
             if rect is None:
@@ -894,20 +904,20 @@ def _layer_layout(
     #    同 footprint 垂直叠（100% 完整支撑）。按 cargo_id 聚合处理，
     #    避免同 SKU 多个栈共享 slot 导致重复放置。
     by_sku: dict[str, list[StackUnit]] = {}
-    for carton in cartons:
-        by_sku.setdefault(carton.cargo.id, []).append(carton)
-    for sku_id, sku_cartons in by_sku.items():
+    for stackable in stackables:
+        by_sku.setdefault(stackable.cargo.id, []).append(stackable)
+    for sku_id, sku_stackables in by_sku.items():
         units_k = slot_units.get(sku_id, [])
         if not units_k:
             continue  # 该 SKU 无第 1 层位置（底面放不下）→ 无法叠（无支撑）→ 不装
-        total = sum(carton.count for carton in sku_cartons)
-        capacity = max(carton.count for carton in sku_cartons)
+        total = sum(stackable.count for stackable in sku_stackables)
+        capacity = max(stackable.count for stackable in sku_stackables)
         k = len(units_k)
         base = min(total // k, capacity)
         rem = total % k
         # 每位置最多 capacity 件；base+1 超 capacity 时截断（少装超出的件）
         heights = [min(capacity, base + (1 if i < rem else 0)) for i in range(k)]
-        first = min(carton.first_instance_index for carton in sku_cartons)
+        first = min(stackable.first_instance_index for stackable in sku_stackables)
         for unit, (rx, ry), height in zip(units_k, slot_rects[sku_id], heights):
             placed_unit = replace(
                 unit,
