@@ -527,11 +527,15 @@ def _high_fill_candidate(request: PackRequest, units: list[StackUnit]) -> list[P
                 packed = _pack_units(request, merged, algo, order)
                 if _required_satisfied(request, packed):
                     candidates.append(packed)
-    mixed_pool = _select_payload_units(request, units, "volume")
-    mixed = _layer_layout(request, mixed_pool)
-    if mixed is not None and _required_satisfied(request, mixed):
-        # 分层铺满优先：混装订单以“底层铺满 + 逐层叠高”为基准布局
-        return mixed
+    # 分层铺满优先：多策略载重池尝试分层布局，取评分最高者
+    layer_candidates: list[list[PackedStack]] = []
+    for strategy in ("volume", "footprint", "pieces", "lightweight"):
+        pool = _select_payload_units(request, units, strategy)
+        mixed = _layer_layout(request, pool)
+        if mixed is not None and _required_satisfied(request, mixed):
+            layer_candidates.append(mixed)
+    if layer_candidates:
+        return max(layer_candidates, key=_candidate_score)
     if not candidates:
         missing_required = [unit for unit in units if unit.required]
         cargo_names = "、".join(sorted({unit.cargo.sku for unit in missing_required}))
@@ -844,8 +848,6 @@ def _layer_layout(
     usable_width = request.container.inner_width_mm - 2 * c
     pallets = [unit for unit in units if unit.cargo.kind == "pallet"]
     cartons = [unit for unit in units if unit.cargo.kind == "carton"]
-    if not pallets:
-        return None  # 纯散箱走 rectpack（_pack_units）
     if not cartons:
         return None  # 纯整托走 _pallet_grid_layout
 
@@ -869,8 +871,8 @@ def _layer_layout(
             )
         )
 
-    # 2) 散箱单件铺第 1 层：逐个尝试，放不下的归入“待叠”
-    cartons.sort(key=lambda unit: (-unit.volume_mm3, unit.id))
+    # 2) 散箱单件铺第 1 层：逐个尝试，放不下的归入“待叠”；必装优先铺底
+    cartons.sort(key=lambda unit: (-unit.required, -unit.volume_mm3, unit.id))
     slot_units: dict[str, list[StackUnit]] = {}  # cargo_id -> 第 1 层已放单件（旋转后）
     slot_rects: dict[str, list[tuple[int, int]]] = {}
     for carton in cartons:
@@ -901,12 +903,10 @@ def _layer_layout(
         total = sum(carton.count for carton in sku_cartons)
         capacity = max(carton.count for carton in sku_cartons)
         k = len(units_k)
-        base = total // k
+        base = min(total // k, capacity)
         rem = total % k
-        if base > capacity:
-            heights = [capacity] * k  # 每位置最多 capacity 件，其余少装
-        else:
-            heights = [base + (1 if i < rem else 0) for i in range(k)]
+        # 每位置最多 capacity 件；base+1 超 capacity 时截断（少装超出的件）
+        heights = [min(capacity, base + (1 if i < rem else 0)) for i in range(k)]
         first = min(carton.first_instance_index for carton in sku_cartons)
         for unit, (rx, ry), height in zip(units_k, slot_rects[sku_id], heights):
             placed_unit = replace(
@@ -1291,10 +1291,9 @@ def _easy_region_layout(
         return None
     if all(unit.count == 1 and unit.cargo.kind == "pallet" for unit in units):
         return _pallet_grid_layout(request, units)
-    if any(unit.cargo.kind == "pallet" for unit in units):
-        mixed = _layer_layout(request, units, allow_partial=True)
-        if mixed is not None:
-            return mixed
+    mixed = _layer_layout(request, units, allow_partial=True)
+    if mixed is not None:
+        return mixed
     full = _try_region_layouts(request, units)
     if full is not None:
         return full
