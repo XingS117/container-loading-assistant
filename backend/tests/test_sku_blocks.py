@@ -1,5 +1,10 @@
 from app.models import CargoSpec, ContainerSpec, PackRequest
-from app.packing import _sku_block_layout, _build_sku_blocks, _build_stack_units
+from app.packing import (
+    _sku_block_layout,
+    _build_sku_blocks,
+    _build_stack_units,
+    pack_order,
+)
 
 
 def _req(items):
@@ -71,3 +76,27 @@ def test_place_blocks_balance_heavy_center():
     lc = sum(s.x_mm + s.length_mm / 2 for s in light) / len(light)
     center = 12032 / 2
     assert abs(hc - center) < abs(lc - center), "重块应比轻块更居中"
+
+
+def test_pack_order_three_solutions_use_sku_blocks():
+    req = _req([
+        _pallet("p1", "A", 650, 650, 1000, 174, 30),
+        _pallet("p2", "B", 890, 750, 1100, 303, 30),
+        _pallet("p3", "C", 1080, 800, 1200, 427, 3),
+        _pallet("p4", "D", 1220, 920, 1150, 532, 3),
+        _pallet("p5", "E", 1050, 1050, 1100, 500, 3),
+    ])
+    resp = pack_order(req)
+    assert len(resp.solutions) == 3
+    for s in resp.solutions:
+        # 全装 69 托
+        assert s.metrics.loaded_pieces == 69
+        # 门端缓冲生效：最远件 x + len <= 12032 - 300
+        max_x = max(p.x_mm + p.length_mm for p in s.placements)
+        assert max_x <= 12032 - 300
+    # 三方案布局互不相同
+    a = resp.solutions[0].placements
+    b = resp.solutions[1].placements
+    c = resp.solutions[2].placements
+    sig = lambda ps: tuple((p.cargo_id, p.x_mm, p.y_mm) for p in ps)
+    assert len({sig(a), sig(b), sig(c)}) == 3, "三方案布局应互不相同"

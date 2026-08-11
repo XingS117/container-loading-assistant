@@ -383,12 +383,14 @@ def _sku_block_layout(
     block_x: dict[str, int] = {}
     if strategy == "balance":
         slots = len(ordered)
+        # 物理槽从左到右 = 离中心越近越靠中间：最重块居中，次重向两侧
+        order_idx = sorted(range(slots), key=lambda i: (abs(i - (slots - 1) / 2), i))
+        slot_to_weight = [order_idx.index(slot) for slot in range(slots)]
         slot_x: list[int] = []
         cursor = (usable_length - door_buffer - total_len) // 2
-        for b in ordered:
+        for slot in range(slots):
             slot_x.append(cursor)
-            cursor += b.block_length_mm + gap
-        order_idx = sorted(range(slots), key=lambda i: (abs(i - (slots - 1) / 2), i))
+            cursor += ordered[slot_to_weight[slot]].block_length_mm + gap
         for weight_pos, slot in enumerate(order_idx):
             block_x[ordered[weight_pos].sku_id] = slot_x[slot]
     else:
@@ -1877,32 +1879,45 @@ def _layout_signature(solution: PackingSolution) -> tuple:
 
 def pack_order(request: PackRequest) -> PackResponse:
     units = _build_stack_units(request)
-    high_stacks = _high_fill_candidate(request, units)
+    # 三方案统一优先尝试 SKU 块布局（装得多/更稳妥/易操作），失败走原回退链
+    high_blocks = _sku_block_layout(request, units, "fill")
+    if high_blocks is not None:
+        high_stacks = high_blocks
+    else:
+        high_stacks = _high_fill_candidate(request, units)
     high_placements = _expand_stacks(request, high_stacks, "high_fill")
     selected_counts = Counter(item.cargo_id for item in high_placements)
     stable_units = _build_stack_units(request, dict(selected_counts), "stable")
     merged_stable = _merge_pallet_cartons(request, stable_units)
-    pallet_grid = _pallet_grid_layout(request, stable_units)
-    if pallet_grid is not None:
-        stable_stacks = pallet_grid
+    stable_blocks = _sku_block_layout(request, stable_units, "balance")
+    if stable_blocks is not None:
+        stable_stacks = _swap_balance(request, stable_blocks)
     else:
-        # 混合尺寸纯整托：SKU 块配平布局（重块居中）→ 与"装得多"布局区分
-        balanced = _stable_balance_layout(request, stable_units)
-        if balanced is not None:
-            stable_stacks = balanced
+        pallet_grid = _pallet_grid_layout(request, stable_units)
+        if pallet_grid is not None:
+            stable_stacks = pallet_grid
         else:
-            mixed = _layer_layout(request, merged_stable)
-            if mixed is not None:
-                stable_stacks = mixed
+            # 混合尺寸纯整托：SKU 块配平布局（重块居中）→ 与"装得多"布局区分
+            balanced = _stable_balance_layout(request, stable_units)
+            if balanced is not None:
+                stable_stacks = balanced
             else:
-                stable_stacks = _repack_same_units(
-                    request, merged_stable, "stable"
-                ) or _center_stacks(request, high_stacks)
-            stable_stacks = _swap_balance(request, stable_stacks)
-    easy_region = _easy_region_layout(request, merged_stable)
-    easy_stacks = easy_region if easy_region is not None else (
-        _repack_same_units(request, merged_stable, "easy") or high_stacks
-    )
+                mixed = _layer_layout(request, merged_stable)
+                if mixed is not None:
+                    stable_stacks = mixed
+                else:
+                    stable_stacks = _repack_same_units(
+                        request, merged_stable, "stable"
+                    ) or _center_stacks(request, high_stacks)
+                stable_stacks = _swap_balance(request, stable_stacks)
+    easy_blocks = _sku_block_layout(request, stable_units, "easy")
+    if easy_blocks is not None:
+        easy_stacks = easy_blocks
+    else:
+        easy_region = _easy_region_layout(request, merged_stable)
+        easy_stacks = easy_region if easy_region is not None else (
+            _repack_same_units(request, merged_stable, "easy") or high_stacks
+        )
 
     solutions = [
         _build_solution(request, high_stacks, "high_fill"),
