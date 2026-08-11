@@ -350,10 +350,13 @@ def _build_sku_blocks(
 
 def _sku_block_layout(
     request: PackRequest,
-    units: list[StackUnit | CompositeUnit],
+    units: list[StackUnit],
     strategy: str,
 ) -> list[PackedStack] | None:
-    """SKU 块布局主入口：构建块 → 策略排序 → 逐块网格放置。"""
+    """SKU 块布局主入口：构建块 → 策略排序 → 逐块网格放置。
+
+    仅接收 StackUnit（竖直栈），CompositeUnit 由 Task 5 的未合并 units 保证不传入。
+    """
     if not units:
         return None
     c = request.container.clearance_mm
@@ -364,7 +367,7 @@ def _sku_block_layout(
     blocks = _build_sku_blocks(request, units, strategy)
     if not blocks:
         return None
-    by_sku: dict[str, list[StackUnit | CompositeUnit]] = {}
+    by_sku: dict[str, list[StackUnit]] = {}
     for unit in units:
         by_sku.setdefault(unit.cargo.id, []).append(unit)
     if strategy == "fill":
@@ -418,12 +421,19 @@ def _sku_block_layout(
                 piece_idx += take
                 # 该底位叠 take 件（同 SKU 连续 instance）
                 first = instance_pool[piece_idx - take]
-                base_stack = group[0]
+                base = group[0]
+                if (base.length_mm, base.width_mm) != (b.length_mm, b.width_mm):
+                    base = replace(
+                        base,
+                        length_mm=b.length_mm,
+                        width_mm=b.width_mm,
+                        orientation=SWAP_ORIENTATIONS.get(base.orientation, base.orientation),
+                    )
                 unit = replace(
-                    base_stack,
+                    base,
                     count=take,
                     stack_height_mm=take * b.height_mm,
-                    total_weight_g=take * base_stack.cargo.weight_g,
+                    total_weight_g=take * base.cargo.weight_g,
                     first_instance_index=first,
                 )
                 placed.append(PackedStack(unit=unit, x_mm=x_cursor, y_mm=y_cursor, step=step))
@@ -431,20 +441,6 @@ def _sku_block_layout(
             x_cursor += b.length_mm + gap
         step += 1
     return placed
-
-
-def _place_blocks(
-    request: PackRequest,
-    blocks: list[Block],
-    strategy: str,
-) -> list[PackedStack] | None:
-    """按策略沿柜长放置块（薄封装，保留 blocks 参数以兼容测试接口）。
-
-    实际布局交给 `_sku_block_layout`：units 由请求重建，在相同请求下
-    `_build_sku_blocks` 确定性保证重建的块与传入 blocks 一致。
-    """
-    units = _build_stack_units(request)
-    return _sku_block_layout(request, units, strategy)
 
 
 def _select_payload_units(

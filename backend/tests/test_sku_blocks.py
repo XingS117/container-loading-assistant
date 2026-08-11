@@ -1,5 +1,5 @@
 from app.models import CargoSpec, ContainerSpec, PackRequest
-from app.packing import _place_blocks, _build_sku_blocks, _build_stack_units
+from app.packing import _sku_block_layout, _build_sku_blocks, _build_stack_units
 
 
 def _req(items):
@@ -46,8 +46,7 @@ def test_place_blocks_fill_order_and_door_buffer():
         _pallet("p1", "A", 650, 650, 1000, 174, 30),
     ])
     units = _build_stack_units(req)
-    blocks = _build_sku_blocks(req, units, "fill")
-    stacks = _place_blocks(req, blocks, "fill")
+    stacks = _sku_block_layout(req, units, "fill")
     assert stacks is not None
     # 体积降序：p2 (890×750) 在 p1 (650×650) 前面（靠柜头 x 小）
     p2 = [s for s in stacks if s.unit.cargo.id == "p2"]
@@ -64,8 +63,7 @@ def test_place_blocks_balance_heavy_center():
         _pallet("light", "L", 650, 650, 1000, 174, 30),
     ])
     units = _build_stack_units(req)
-    blocks = _build_sku_blocks(req, units, "balance")
-    stacks = _place_blocks(req, blocks, "balance")
+    stacks = _sku_block_layout(req, units, "balance")
     assert stacks is not None
     heavy = [s for s in stacks if s.unit.cargo.id == "heavy"]
     light = [s for s in stacks if s.unit.cargo.id == "light"]
