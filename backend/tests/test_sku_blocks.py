@@ -100,3 +100,28 @@ def test_pack_order_three_solutions_use_sku_blocks():
     c = resp.solutions[2].placements
     sig = lambda ps: tuple((p.cargo_id, p.x_mm, p.y_mm) for p in ps)
     assert len({sig(a), sig(b), sig(c)}) == 3, "三方案布局应互不相同"
+
+
+def _carton(id, sku, l, w, h, kg, qty, layers=8):
+    return CargoSpec(id=id, sku=sku, name=sku, kind="carton", length_mm=l, width_mm=w,
+        height_mm=h, weight_g=kg * 1000, quantity=qty, allowed_orientations=["LWH", "WLH"],
+        stackable=True, max_layers=layers, max_top_load_g=kg * 10000, fragile=False, must_load=False)
+
+
+def test_pure_carton_fill_falls_back_to_layer_layout():
+    # 706 件单 SKU 散箱：fill 的 SKU 块超长 → 回退分层铺满（装载率最优）
+    req = _req([_carton("ca", "CA", 500, 400, 400, 10, 706)])
+    units = _build_stack_units(req)
+    layout = _sku_block_layout(req, units, "fill")
+    assert layout is None, "706 件单块超长应返回 None 由调用方回退"
+    resp = pack_order(req)
+    assert resp.solutions[0].metrics.loaded_pieces == 706
+
+
+def test_mixed_pallet_carton_blocks():
+    req = _req([
+        _pallet("p1", "A", 1200, 800, 1100, 175, 4),
+        _carton("ca", "CA", 500, 400, 400, 10, 40),
+    ])
+    resp = pack_order(req)
+    assert resp.solutions[0].metrics.loaded_pieces == 44

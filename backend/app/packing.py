@@ -329,10 +329,13 @@ def _build_sku_blocks(
         ):
             # 旋转后更窄（原长变宽）：取占宽最小朝向
             length_mm, width_mm = unit.width_mm, unit.length_mm
-        # 叠高层数：可叠 + 高度 + 承重（简化按 max_layers 与柜高）
+        # 叠高层数：可叠 + 高度 + 承重（按 max_layers、柜高与 max_top_load 取最小）
         if cargo.stackable and not cargo.fragile:
             max_by_height = available_height // unit.item_height_mm
-            layers = max(1, min(cargo.max_layers, max_by_height))
+            max_by_load = (
+                cargo.max_top_load_g // cargo.weight_g if cargo.max_top_load_g > 0 else 1
+            )
+            layers = max(1, min(cargo.max_layers, max_by_height, max_by_load))
         else:
             layers = 1
         columns = max(1, usable_width // (width_mm + gap))
@@ -370,6 +373,11 @@ def _sku_block_layout(
     by_sku: dict[str, list[StackUnit]] = {}
     for unit in units:
         by_sku.setdefault(unit.cargo.id, []).append(unit)
+    # fill 策略：若单 SKU 块超长（如 630 件散箱），返回 None 由调用方回退分层铺满
+    if strategy == "fill":
+        for b in blocks:
+            if b.block_length_mm > usable_length - door_buffer:
+                return None
     if strategy == "fill":
         ordered = sorted(blocks, key=lambda b: (-b.block_length_mm * b.block_width_mm, b.sku_id))
     elif strategy == "easy":
