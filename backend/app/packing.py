@@ -421,10 +421,14 @@ def _sku_block_layout(
         order_idx = sorted(range(slots), key=lambda i: (abs(i - (slots - 1) / 2), i))
         slot_to_weight = [order_idx.index(slot) for slot in range(slots)]
         slot_x: list[int] = []
-        cursor = (usable_length - door_buffer - total_len) // 2
+        # 中心槽起点除 ≥0 外还须 ≥clearance（否则最左块 x<clearance → OUT_OF_BOUNDS，Critical-2）
+        cursor = max(c, (usable_length - door_buffer - total_len) // 2)
         for slot in range(slots):
             slot_x.append(cursor)
             cursor += ordered[slot_to_weight[slot]].block_length_mm + gap
+        # 起点被 clearance 下界抬升后最右可能越界 → 返回 None 交由回退链
+        if slot_x[-1] + ordered[slot_to_weight[-1]].block_length_mm > usable_length - door_buffer:
+            return None
         for weight_pos, slot in enumerate(order_idx):
             block_x[ordered[weight_pos].sku_id] = slot_x[slot]
     else:
@@ -481,9 +485,19 @@ def _sku_block_layout(
                 # 该底位叠 take 件（同 SKU 连续 instance）
                 first = instance_pool[piece_idx - take]
                 if isinstance(base, CompositeUnit):
-                    # 用 pallet 做 replace（count/take 语义），重建 CompositeUnit 保留 on_top
+                    # 用 pallet 做 replace（count/take 语义），重建 CompositeUnit 保留 on_top。
+                    # 块 footprint 已按占宽最小朝向 swap 时 pallet 须同步长宽/朝向，
+                    # 否则块按 swap 尺寸排位而件按原尺寸展开 → OVERLAP（Critical-1）
+                    pallet = base.pallet
+                    if (pallet.length_mm, pallet.width_mm) != (b.length_mm, b.width_mm):
+                        pallet = replace(
+                            pallet,
+                            length_mm=b.length_mm,
+                            width_mm=b.width_mm,
+                            orientation=SWAP_ORIENTATIONS.get(pallet.orientation, pallet.orientation),
+                        )
                     replaced_pallet = replace(
-                        base.pallet,
+                        pallet,
                         count=take,
                         stack_height_mm=take * b.height_mm,
                         total_weight_g=take * base.cargo.weight_g,
@@ -1891,6 +1905,8 @@ def _build_solution(
     zones = _compute_zones(request, placements)
     names = {"high_fill": "装得多", "stable": "更稳妥", "easy": "易操作"}
     warnings = []
+    if request.door_buffer_mm > 0:
+        warnings.append(f"柜门预留操作空间 {request.door_buffer_mm}mm")
     if sum(unloaded_counts.values()):
         warnings.append(f"仍有 {sum(unloaded_counts.values())} 件货物未装入本柜")
     if profile == "high_fill":

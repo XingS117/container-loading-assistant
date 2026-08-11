@@ -5,6 +5,7 @@ from app.packing import (
     _build_stack_units,
     pack_order,
 )
+from app.validator import validate_solution
 
 
 def _req(items):
@@ -125,3 +126,71 @@ def test_mixed_pallet_carton_blocks():
     ])
     resp = pack_order(req)
     assert resp.solutions[0].metrics.loaded_pieces == 44
+
+
+def test_composite_rotated_pallet_footprint_synced():
+    # Critical-1：可旋转托盘（LWH↔WLH，原朝向 750×900 即 length<width）+ 散箱混装。
+    # _build_sku_blocks 对占宽更小的朝向 swap 了块 footprint，但 CompositeUnit 放置
+    # 分支曾不同步 pallet 长宽/朝向 → 块按 swap 尺寸排位而件按原尺寸展开 → OVERLAP
+    # → 三方案 PackingFailure。修复后 footprint 同步，布局校验通过。
+    req = _req([
+        CargoSpec(id="p1", sku="P", name="P", kind="pallet", length_mm=750,
+            width_mm=900, height_mm=1100, weight_g=175000, quantity=4,
+            allowed_orientations=["LWH", "WLH"], stackable=False,
+            max_top_load_g=350000, fragile=False, must_load=False),
+        CargoSpec(id="ca", sku="CA", name="CA", kind="carton", length_mm=700,
+            width_mm=600, height_mm=300, weight_g=10000, quantity=24,
+            allowed_orientations=["LWH", "WLH"], stackable=True, max_layers=3,
+            max_top_load_g=50000000, fragile=False, must_load=False),
+    ])
+    resp = pack_order(req)
+    assert len(resp.solutions) == 3
+    for s in resp.solutions:
+        assert s.metrics.loaded_pieces == 28, f"{s.profile} 未全装 28 件"
+        v = validate_solution(
+            req.container, req.cargo_items, s.placements,
+            item_gap_mm=req.item_gap_mm,
+        )
+        assert v.valid, f"{s.profile} 布局校验失败: {[e.code for e in v.errors]}"
+
+
+def test_balance_center_slot_respects_clearance():
+    # Critical-2：balance 中心槽起点只保证 ≥0 不保证 ≥clearance。单块总长
+    # 11000 落在 (inner_length-4c-door_buffer, inner_length-2c-door_buffer] 区间时，
+    # (usable_length-door_buffer-total_len)//2=166 < clearance=200 → 最左块越界
+    # → OUT_OF_BOUNDS。修复后 cursor=max(c, …) 且最右越界时回退。
+    req = _req([
+        CargoSpec(id="w1", sku="W", name="W", kind="pallet", length_mm=1000,
+            width_mm=1940, height_mm=1100, weight_g=100000, quantity=11,
+            allowed_orientations=["LWH"], stackable=False, max_top_load_g=0,
+            fragile=False, must_load=False),
+    ])
+    req.container.clearance_mm = 200
+    units = _build_stack_units(req)
+    blocks = _build_sku_blocks(req, units, "balance")
+    assert blocks is not None and len(blocks) == 1
+    assert blocks[0].block_length_mm == 11000
+    stacks = _sku_block_layout(req, units, "balance")
+    assert stacks is not None, "总长 11000 ≤ usable_length-door_buffer，应可用中心槽布局"
+    assert min(s.x_mm for s in stacks) >= req.container.clearance_mm
+    assert max(s.x_mm + s.length_mm for s in stacks) <= (
+        req.container.inner_length_mm - 2 * req.container.clearance_mm - req.door_buffer_mm
+    )
+    resp = pack_order(req)
+    assert len(resp.solutions) == 3
+    for s in resp.solutions:
+        assert s.metrics.loaded_pieces == 11
+
+
+def test_door_buffer_disclosed_in_warnings():
+    # Important-3：规格 §3.2 要求柜门预留操作空间进 warnings/cons 披露
+    req = _req([_carton("ca", "CA", 500, 400, 400, 10, 40)])
+    resp = pack_order(req)
+    assert len(resp.solutions) == 3
+    for s in resp.solutions:
+        assert any("柜门预留操作空间" in w and "300" in w for w in s.warnings), s.warnings
+    # door_buffer=0（关闭）时不披露
+    req.door_buffer_mm = 0
+    resp0 = pack_order(req)
+    for s in resp0.solutions:
+        assert not any("柜门预留操作空间" in w for w in s.warnings), s.warnings
