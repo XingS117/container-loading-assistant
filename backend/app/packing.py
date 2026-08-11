@@ -156,6 +156,23 @@ class PackedStack:
         return SWAP_ORIENTATIONS[self.unit.orientation]
 
 
+@dataclass
+class Block:
+    """一个 SKU 的集中装载块：块内网格 columns×rows，每底位叠 layers 件。"""
+    sku_id: str
+    cargo: CargoSpec
+    length_mm: int
+    width_mm: int
+    height_mm: int
+    layers: int
+    columns: int
+    rows: int
+    block_length_mm: int
+    block_width_mm: int
+    pieces: int
+    total_weight_g: int
+
+
 SWAP_ORIENTATIONS = {
     Orientation.LWH: Orientation.WLH,
     Orientation.WLH: Orientation.LWH,
@@ -274,6 +291,58 @@ def _build_stack_units(
             instance_index += count
             stack_index += 1
     return units
+
+
+def _build_sku_blocks(
+    request: PackRequest,
+    units: list[StackUnit | CompositeUnit],
+    strategy: str,
+) -> list[Block] | None:
+    """按 SKU 分组构建 Block。同 SKU 件数合并；layers 由高度/承重/可叠决定。"""
+    if not units:
+        return None
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    usable_width = request.container.inner_width_mm - 2 * c
+    available_height = request.container.inner_height_mm - 2 * c
+    by_sku: dict[str, list[StackUnit | CompositeUnit]] = {}
+    for unit in units:
+        by_sku.setdefault(unit.cargo.id, []).append(unit)
+    blocks: list[Block] = []
+    for sku_id, group in by_sku.items():
+        cargo = group[0].cargo
+        total = sum(u.count for u in group)
+        unit = group[0]
+        if isinstance(unit, CompositeUnit):
+            unit = unit.pallet  # CompositeUnit 取托盘栈计算高度/footprint
+        # footprint：占宽最小的朝向（受门宽约束，简化取 LWH 或旋转后更窄者）
+        length_mm = unit.length_mm
+        width_mm = unit.width_mm
+        swapped = SWAP_ORIENTATIONS.get(unit.orientation)
+        if (
+            swapped in cargo.allowed_orientations
+            and unit.length_mm <= request.container.door_width_mm - 2 * c
+            and unit.length_mm < unit.width_mm
+        ):
+            # 旋转后更窄（原长变宽）：取占宽最小朝向
+            length_mm, width_mm = unit.width_mm, unit.length_mm
+        # 叠高层数：可叠 + 高度 + 承重（简化按 max_layers 与柜高）
+        if cargo.stackable and not cargo.fragile:
+            max_by_height = available_height // unit.item_height_mm
+            layers = max(1, min(cargo.max_layers, max_by_height))
+        else:
+            layers = 1
+        columns = max(1, usable_width // (width_mm + gap))
+        rows = (total + columns * layers - 1) // (columns * layers)
+        block_length = rows * length_mm + max(0, rows - 1) * gap
+        block_width = columns * width_mm + max(0, columns - 1) * gap
+        blocks.append(Block(
+            sku_id=sku_id, cargo=cargo, length_mm=length_mm, width_mm=width_mm,
+            height_mm=unit.item_height_mm, layers=layers, columns=columns,
+            rows=rows, block_length_mm=block_length, block_width_mm=block_width,
+            pieces=total, total_weight_g=sum(u.total_weight_g for u in group),
+        ))
+    return blocks
 
 
 def _select_payload_units(
