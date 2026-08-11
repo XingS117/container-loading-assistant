@@ -1,5 +1,5 @@
 from app.models import CargoSpec, ContainerSpec, PackRequest
-from app.packing import _build_sku_blocks, _build_stack_units
+from app.packing import _place_blocks, _build_sku_blocks, _build_stack_units
 
 
 def _req(items):
@@ -38,3 +38,38 @@ def test_block_length_uses_door_buffer():
     blocks = _build_sku_blocks(req, units, "fill")
     # door_buffer 不影响单块参数，但可用柜长截断在 Task 3 放置时生效
     assert blocks[0].block_length_mm == 5 * 650
+
+
+def test_place_blocks_fill_order_and_door_buffer():
+    req = _req([
+        _pallet("p2", "B", 890, 750, 1100, 303, 30),
+        _pallet("p1", "A", 650, 650, 1000, 174, 30),
+    ])
+    units = _build_stack_units(req)
+    blocks = _build_sku_blocks(req, units, "fill")
+    stacks = _place_blocks(req, blocks, "fill")
+    assert stacks is not None
+    # 体积降序：p2 (890×750) 在 p1 (650×650) 前面（靠柜头 x 小）
+    p2 = [s for s in stacks if s.unit.cargo.id == "p2"]
+    p1 = [s for s in stacks if s.unit.cargo.id == "p1"]
+    assert max(s.x_mm for s in p2) < min(s.x_mm for s in p1)
+    # 门端缓冲：最远件 x + length <= 柜长 - door_buffer
+    max_x = max(s.x_mm + s.length_mm for s in stacks)
+    assert max_x <= 12032 - req.door_buffer_mm
+
+
+def test_place_blocks_balance_heavy_center():
+    req = _req([
+        _pallet("heavy", "H", 890, 750, 1100, 303, 30),
+        _pallet("light", "L", 650, 650, 1000, 174, 30),
+    ])
+    units = _build_stack_units(req)
+    blocks = _build_sku_blocks(req, units, "balance")
+    stacks = _place_blocks(req, blocks, "balance")
+    assert stacks is not None
+    heavy = [s for s in stacks if s.unit.cargo.id == "heavy"]
+    light = [s for s in stacks if s.unit.cargo.id == "light"]
+    hc = sum(s.x_mm + s.length_mm / 2 for s in heavy) / len(heavy)
+    lc = sum(s.x_mm + s.length_mm / 2 for s in light) / len(light)
+    center = 12032 / 2
+    assert abs(hc - center) < abs(lc - center), "重块应比轻块更居中"

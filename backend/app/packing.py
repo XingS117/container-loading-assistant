@@ -348,6 +348,105 @@ def _build_sku_blocks(
     return blocks
 
 
+def _sku_block_layout(
+    request: PackRequest,
+    units: list[StackUnit | CompositeUnit],
+    strategy: str,
+) -> list[PackedStack] | None:
+    """SKU 块布局主入口：构建块 → 策略排序 → 逐块网格放置。"""
+    if not units:
+        return None
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    usable_length = request.container.inner_length_mm - 2 * c
+    door_buffer = request.door_buffer_mm
+    usable_width = request.container.inner_width_mm - 2 * c
+    blocks = _build_sku_blocks(request, units, strategy)
+    if not blocks:
+        return None
+    by_sku: dict[str, list[StackUnit | CompositeUnit]] = {}
+    for unit in units:
+        by_sku.setdefault(unit.cargo.id, []).append(unit)
+    if strategy == "fill":
+        ordered = sorted(blocks, key=lambda b: (-b.block_length_mm * b.block_width_mm, b.sku_id))
+    elif strategy == "easy":
+        order_map = {item.id: i for i, item in enumerate(request.cargo_items)}
+        ordered = sorted(blocks, key=lambda b: (order_map.get(b.sku_id, 10**9), b.sku_id))
+    else:  # balance
+        ordered = sorted(blocks, key=lambda b: (-b.total_weight_g, b.sku_id))
+    total_len = sum(b.block_length_mm + gap for b in ordered) - gap
+    if total_len > usable_length - door_buffer:
+        return None
+    block_x: dict[str, int] = {}
+    if strategy == "balance":
+        slots = len(ordered)
+        slot_x: list[int] = []
+        cursor = (usable_length - door_buffer - total_len) // 2
+        for b in ordered:
+            slot_x.append(cursor)
+            cursor += b.block_length_mm + gap
+        order_idx = sorted(range(slots), key=lambda i: (abs(i - (slots - 1) / 2), i))
+        for weight_pos, slot in enumerate(order_idx):
+            block_x[ordered[weight_pos].sku_id] = slot_x[slot]
+    else:
+        cursor = c
+        for b in ordered:
+            block_x[b.sku_id] = cursor
+            cursor += b.block_length_mm + gap
+    placed: list[PackedStack] = []
+    step = 1
+    for b in ordered:
+        group = by_sku[b.sku_id]
+        # 每底位叠 layers 件：把同 SKU 栈的件按列×行铺开
+        column_count = 0
+        row_count = 0
+        y_cursor = c
+        x_cursor = block_x[b.sku_id]
+        instance_pool = []
+        for stack in group:
+            for i in range(stack.count):
+                instance_pool.append(stack.first_instance_index + i)
+        piece_idx = 0
+        # 块内网格：先按行（x 向推进），行内按列（y 向）
+        for r in range(b.rows):
+            y_cursor = c
+            for col in range(b.columns):
+                remaining = b.pieces - piece_idx
+                if remaining <= 0:
+                    break
+                take = min(b.layers, remaining)
+                piece_idx += take
+                # 该底位叠 take 件（同 SKU 连续 instance）
+                first = instance_pool[piece_idx - take]
+                base_stack = group[0]
+                unit = replace(
+                    base_stack,
+                    count=take,
+                    stack_height_mm=take * b.height_mm,
+                    total_weight_g=take * base_stack.cargo.weight_g,
+                    first_instance_index=first,
+                )
+                placed.append(PackedStack(unit=unit, x_mm=x_cursor, y_mm=y_cursor, step=step))
+                y_cursor += b.width_mm + gap
+            x_cursor += b.length_mm + gap
+        step += 1
+    return placed
+
+
+def _place_blocks(
+    request: PackRequest,
+    blocks: list[Block],
+    strategy: str,
+) -> list[PackedStack] | None:
+    """按策略沿柜长放置块（薄封装，保留 blocks 参数以兼容测试接口）。
+
+    实际布局交给 `_sku_block_layout`：units 由请求重建，在相同请求下
+    `_build_sku_blocks` 确定性保证重建的块与传入 blocks 一致。
+    """
+    units = _build_stack_units(request)
+    return _sku_block_layout(request, units, strategy)
+
+
 def _select_payload_units(
     request: PackRequest,
     units: list[StackUnit],
