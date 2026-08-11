@@ -97,6 +97,8 @@ class PackRequest(BaseModel):
     container: ContainerSpec
     cargo_items: list[CargoSpec] = Field(min_length=1, max_length=30)
     item_gap_mm: int = Field(default=0, ge=0, le=1000)
+    # 门端操作空间：可用柜长 = 柜长 - door_buffer_mm（默认 300，0=关闭）
+    door_buffer_mm: int = Field(default=300, ge=0)
 
     @model_validator(mode="after")
     def validate_total_quantity(self) -> "PackRequest":
