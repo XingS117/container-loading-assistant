@@ -731,3 +731,42 @@ def test_unload_order_later_unloaded_goes_to_container_head():
         later_max_x = max(p.x_mm for p in later)
         first_min_x = min(p.x_mm for p in first)
         assert later_max_x <= first_min_x, "后卸（order=2）应装进柜头，先卸（order=1）靠柜门"
+
+
+def test_upper_layer_stacks_toward_container_center():
+    """分层铺满：第 1 层铺满柜底，叠高层（顶层）集中在柜长中间（两头低中间高）。"""
+    container = ContainerSpec(id="40hq", name="40HQ", inner_length_mm=12032,
+        inner_width_mm=2352, inner_height_mm=2698, door_width_mm=2340,
+        door_height_mm=2585, max_payload_g=28600000, clearance_mm=0)
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            pallet_box(quantity=30, length_mm=1050, width_mm=1050, height_mm=1000,
+                       stackable=True, max_layers=3, max_top_load_kg=1000,
+                       allowed_orientations=["LWH"]),
+        ],
+    )
+
+    response = pack_order(request)
+    center = 12032 / 2
+
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        by_z: dict[int, list] = {}
+        for p in solution.placements:
+            by_z.setdefault(p.z_mm, []).append(p)
+        z_max = max(by_z)
+        floor = by_z[0]
+        top = by_z[z_max]
+        # 第 1 层铺满柜长（从柜头到柜门）
+        floor_x_min = min(p.x_mm for p in floor)
+        floor_x_max = max(p.x_mm + p.length_mm for p in floor)
+        assert floor_x_max - floor_x_min > 11000, "第 1 层应铺满柜长"
+        # 顶层集中在柜长中段（约 1/3~2/3 区间内），不散到两端
+        assert len(top) < len(floor), "顶层件数应少于第 1 层（部分叠高）"
+        for p in top:
+            x_center = p.x_mm + p.length_mm / 2
+            assert abs(x_center - center) <= 12032 / 3, "顶层件应集中在柜长中间"

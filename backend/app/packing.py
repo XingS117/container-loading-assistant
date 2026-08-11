@@ -917,8 +917,21 @@ def _layer_layout(
         k = len(units_k)
         base = min(total // k, capacity)
         rem = total % k
-        # 每位置最多 capacity 件；base+1 超 capacity 时截断（少装超出的件）
-        heights = [min(capacity, base + (1 if i < rem else 0)) for i in range(k)]
+        # 顶层集中中间：多余件优先加在距柜长中心近的位置（rem 个 +1），
+        # 使最顶层只出现在中间柱子（两头低中间高，重心居中）；
+        # 每位置最多 capacity 件，超 capacity 的部分截断（少装并披露）。
+        slot_rects_sku = slot_rects[sku_id]
+        center = usable_length / 2
+        order = sorted(
+            range(k),
+            key=lambda i: abs(
+                (c + slot_rects_sku[i][0] + units_k[i].length_mm / 2) - center
+            ),
+        )
+        heights = [min(capacity, base) for _ in range(k)]
+        for i in order[:rem]:
+            if heights[i] < capacity:
+                heights[i] += 1
         first = min(stackable.first_instance_index for stackable in sku_stackables)
         for unit, (rx, ry), height in zip(units_k, slot_rects[sku_id], heights):
             placed_unit = replace(
