@@ -320,7 +320,10 @@ def _build_sku_blocks(
         width_mm = unit.width_mm
         swapped = SWAP_ORIENTATIONS.get(unit.orientation)
         if (
-            swapped in cargo.allowed_orientations
+            # 仅 L/W 交换（LWH↔WLH，高度轴不变）：保证旋转后 item_height 与块高一致，
+            # 避免 LHW/WHL 这类换高轴旋转造成 layers 仍按未旋转高度计算而超柜高
+            unit.orientation in (Orientation.LWH, Orientation.WLH)
+            and swapped in cargo.allowed_orientations
             and unit.length_mm <= request.container.door_width_mm - 2 * c
             and unit.length_mm < unit.width_mm
         ):
