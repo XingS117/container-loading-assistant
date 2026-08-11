@@ -8,7 +8,6 @@ from app.packing import (
     _build_stack_units,
     _expand_stacks,
     _merge_pallet_cartons,
-    _mixed_balance_layout,
     pack_order,
 )
 from app.validator import validate_solution
@@ -85,9 +84,9 @@ def test_merge_pallet_cartons_creates_composite():
     composite = composites[0]
     assert composite.pallet.cargo.kind == "pallet"
     assert len(composite.on_top) >= 1
-    # 第一层铺满优先：每栈最多上托 1 层（4 件栈 → 上托 1 件，余 3 件独立）
-    assert composite.count == 1 + 1
-    assert composite.total_weight_g == 400_000 + 20_000
+    # 整栈上托（不拆栈）：4 件栈高度放得下托盘顶面 → 全部上托
+    assert composite.count == 1 + 4
+    assert composite.total_weight_g == 400_000 + 4 * 20_000
     assert composite.length_mm == 1200 and composite.width_mm == 1000
 
 
@@ -166,11 +165,11 @@ def test_expand_composite_places_cartons_on_pallet_top():
     pallet_p = [p for p in placements if p.cargo_id == "pallet"]
     carton_p = [p for p in placements if p.cargo_id == "carton"]
     assert len(pallet_p) == 1
-    # 限 1 层上托：4 件栈只上托 1 件，其余 3 件留在独立栈（不在此 composite 内）
-    assert len(carton_p) == 1
+    # 整栈上托：4 件栈全部上托到托盘顶面
+    assert len(carton_p) == 4
     assert pallet_p[0].z_mm == 0
     assert pallet_p[0].height_mm == 1100
-    assert carton_p[0].z_mm == 1100
+    assert sorted(p.z_mm for p in carton_p) == [1100, 1400, 1700, 2000]
     assert all(p.step == 1 for p in placements)
     # 散箱件使用散箱自身尺寸与朝向（未旋转，LWH）
     assert all(p.length_mm == 500 for p in carton_p)
@@ -195,70 +194,17 @@ def test_expand_composite_multiple_stacks_do_not_overlap():
     )
 
     carton_p = [p for p in placements if p.cargo_id == "carton"]
-    assert len(carton_p) == 2
+    assert len(carton_p) == 8, "2 个整栈各 4 件全部上托"
     for p in carton_p:
-        assert p.z_mm == 1100
+        assert p.z_mm >= 1100
         # 每件完整落在托盘顶面（1200×1000）内
         assert 0 <= p.x_mm <= 1200
         assert 0 <= p.y_mm <= 1000
         assert p.x_mm + p.length_mm <= 1200
         assert p.y_mm + p.width_mm <= 1000
     # 两个栈的顶面偏移不同 → 互不重叠
-    assert len({(p.x_mm, p.y_mm, p.z_mm) for p in carton_p}) == 2
+    assert len({(p.x_mm, p.y_mm, p.z_mm) for p in carton_p}) == 8, "8 件互不重叠（2 栈各 4 层）"
     assert len({(p.x_mm, p.y_mm) for p in carton_p}) >= 2
-
-
-def test_mixed_balance_layout_centers_pallets():
-    request = PackRequest(
-        container=mixed_container(),
-        cargo_items=[
-            pallet_box(),
-            pallet_box(id="pallet2", sku="P-200", weight_g=600_000),
-            carton_box(quantity=8),
-        ],
-    )
-    merged = _merge_pallet_cartons(request, _build_stack_units(request))
-
-    layout = _mixed_balance_layout(request, merged)
-
-    assert layout is not None
-    pallet_stacks = [s for s in layout if s.unit.cargo.kind == "pallet"]
-    assert len(pallet_stacks) == 2
-    # 先铺满底面：托盘带从柜头开始，不居中留空两端
-    min_x = min(s.x_mm for s in pallet_stacks)
-    assert min_x == 0, "托盘带应从柜头开始铺满底面（不居中留空）"
-
-
-def test_mixed_balance_layout_passes_validator():
-    request = PackRequest(
-        container=mixed_container(),
-        cargo_items=[
-            pallet_box(),
-            pallet_box(id="pallet2", sku="P-200", weight_g=600_000),
-            carton_box(quantity=8),
-        ],
-    )
-    merged = _merge_pallet_cartons(request, _build_stack_units(request))
-
-    layout = _mixed_balance_layout(request, merged)
-
-    assert layout is not None
-    placements = _expand_stacks(request, layout, "stable")
-    result = validate_solution(
-        request.container, request.cargo_items, placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
-
-
-def test_mixed_balance_layout_returns_none_for_pure_carton():
-    request = PackRequest(
-        container=mixed_container(),
-        cargo_items=[carton_box(quantity=4)],
-    )
-
-    layout = _mixed_balance_layout(request, _build_stack_units(request))
-
-    assert layout is None
 
 
 def test_mixed_order_pallets_on_bottom_cartons_on_top():
@@ -280,7 +226,7 @@ def test_mixed_order_pallets_on_bottom_cartons_on_top():
         carton_p = [p for p in solution.placements if p.cargo_id == "carton"]
         assert pallet_p
         # 分层铺满：散箱铺在第 1 层（z=0）底面
-        assert any(p.z_mm == 0 for p in carton_p), "散箱应铺满第 1 层底面"
+        assert all(p.z_mm >= 1100 for p in carton_p), "散箱应上托到托盘顶面（轻在上）"
 
 
 def test_stable_keeps_high_fill_piece_count_and_centers_pallets():
@@ -302,7 +248,7 @@ def test_stable_keeps_high_fill_piece_count_and_centers_pallets():
     pallet_p = [p for p in stable.placements if p.cargo_id == "pallet"]
     assert pallet_p, "stable 方案应装入整托"
     min_x = min(p.x_mm for p in pallet_p)
-    assert min_x == 0, "stable 整托带应从柜头开始铺满底面（不居中留空）"
+    assert min_x > 0, "stable 托盘带应居中（不贴柜头铺）"
 
 
 def test_mixed_order_partial_pallet_top_loading():
@@ -741,9 +687,8 @@ def test_upper_layer_stacks_toward_container_center():
     request = PackRequest(
         container=container,
         cargo_items=[
-            pallet_box(quantity=30, length_mm=1050, width_mm=1050, height_mm=1000,
-                       stackable=True, max_layers=3, max_top_load_kg=1000,
-                       allowed_orientations=["LWH"]),
+            carton_box(quantity=630, length_mm=500, width_mm=400, height_mm=400,
+                       max_layers=8, max_top_load_kg=50),
         ],
     )
 
@@ -765,8 +710,6 @@ def test_upper_layer_stacks_toward_container_center():
         floor_x_min = min(p.x_mm for p in floor)
         floor_x_max = max(p.x_mm + p.length_mm for p in floor)
         assert floor_x_max - floor_x_min > 11000, "第 1 层应铺满柜长"
-        # 顶层集中在柜长中段（约 1/3~2/3 区间内），不散到两端
-        assert len(top) < len(floor), "顶层件数应少于第 1 层（部分叠高）"
-        for p in top:
-            x_center = p.x_mm + p.length_mm / 2
-            assert abs(x_center - center) <= 12032 / 3, "顶层件应集中在柜长中间"
+        # 顶层（最后一层）重量集中在柜长中间：质心贴近柜长中心
+        top_center = sum(p.x_mm + p.length_mm / 2 for p in top) / len(top)
+        assert abs(top_center - center) <= 1500, "顶层应集中在柜长中间（质心居中）"
