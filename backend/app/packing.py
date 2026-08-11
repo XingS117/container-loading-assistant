@@ -535,7 +535,7 @@ def _high_fill_candidate(request: PackRequest, units: list[StackUnit]) -> list[P
     for strategy in ("volume", "footprint", "pieces", "lightweight"):
         pool = _select_payload_units(request, units, strategy)
         merged = _merge_pallet_cartons(request, pool)
-        mixed = _layer_layout(request, merged)
+        mixed = _layer_layout(request, merged, band_grid=False)
         if mixed is not None and _required_satisfied(request, mixed):
             layer_candidates.append(mixed)
     if layer_candidates:
@@ -736,6 +736,73 @@ def _refine_grid_length_balance(
     return current
 
 
+def _stable_balance_layout(
+    request: PackRequest,
+    units: list[StackUnit],
+) -> list[PackedStack] | None:
+    """混合尺寸整托的配平布局：按 SKU 分块，重 SKU 块居中、轻 SKU 块两端
+    （按 SKU 总重量从中心向外排），块内网格排布。用于"更稳妥"方案，
+    使方案与"装得多"（混合铺满）布局明显不同。"""
+    if not units or any(unit.count != 1 or unit.cargo.kind != "pallet" for unit in units):
+        return None
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    usable_length = request.container.inner_length_mm - 2 * c
+    usable_width = request.container.inner_width_mm - 2 * c
+    by_sku: dict[str, list[StackUnit]] = {}
+    for unit in units:
+        by_sku.setdefault(unit.cargo.id, []).append(unit)
+    sku_order = sorted(
+        by_sku,
+        key=lambda sid: (-sum(u.total_weight_g for u in by_sku[sid]), sid),
+    )
+    blocks: list[tuple[str, list[StackUnit], int, int]] = []  # (sku, group, cols, block_len)
+    for sid in sku_order:
+        group = by_sku[sid]
+        cols = max(1, usable_width // group[0].width_mm)
+        rows = (len(group) + cols - 1) // cols
+        block_len = rows * group[0].length_mm + max(0, rows - 1) * gap
+        blocks.append((sid, group, cols, block_len))
+    total_len = sum(b[3] for b in blocks)
+    if total_len > usable_length:
+        return None
+    # 槽位分配：最重块放中间槽，其余左右交替向外
+    n = len(blocks)
+    slot_order = sorted(
+        range(n), key=lambda i: (abs(i - (n - 1) / 2), i)
+    )
+    block_x: dict[int, int] = {}
+    shift = (usable_length - total_len) // 2
+    cursor = shift
+    for slot in range(n):
+        block_x[slot] = cursor
+        cursor += blocks[slot][3] + gap
+    placed: list[PackedStack] = []
+    for slot in range(n):
+        sid, group, cols, _ = blocks[slot]
+        x0 = block_x[slot]
+        rows = (len(group) + cols - 1) // cols
+        row_order = sorted(range(rows), key=lambda r: (abs(r - (rows - 1) / 2), r))
+        # 行内按重量降序 + 奇偶反向（y 向配平）
+        row_units: dict[int, list[StackUnit]] = {}
+        idx = 0
+        for r in row_order:
+            row_units[r] = group[idx:idx + cols]
+            idx += cols
+        for r in range(rows):
+            units_in_row = sorted(row_units[r], key=lambda u: -u.total_weight_g)
+            if r % 2 == 1:
+                units_in_row.reverse()
+            y_cursor = 0
+            for unit in units_in_row:
+                placed.append(
+                    PackedStack(unit=unit, x_mm=c + x0, y_mm=c + y_cursor, step=1)
+                )
+                y_cursor += unit.width_mm + gap
+            x0 += group[0].length_mm + gap
+    return placed
+
+
 def _pallet_grid_layout(
     request: PackRequest,
     units: list[StackUnit],
@@ -833,6 +900,7 @@ def _layer_layout(
     request: PackRequest,
     units: list[CompositeUnit | StackUnit],
     allow_partial: bool = False,
+    band_grid: bool = True,
 ) -> list[PackedStack] | None:
     """分层铺满（floor-layer-first）。
 
@@ -886,7 +954,18 @@ def _layer_layout(
     # 网格放不下（托盘多/需旋转才能装入）时回退 rectpack（允许旋转，装得多）。
     tray_units.sort(key=lambda unit: (-unit.total_weight_g, unit.id))
     pallet_slots: list[tuple[int, int, StackUnit | CompositeUnit]] = []  # (x, y, unit)
-    if tray_units:
+    if tray_units and not band_grid:
+        # 装得多：托盘带用 rectpack 从柜头铺（体积优先、位置自然），
+        # 与"更稳妥"的居中网格配平布局区分
+        packer = MaxRectsBssf(usable_length, usable_width, rot=False)
+        for unit in tray_units:
+            rect, placed_unit = _try_add_to_pallet_top(packer, unit, request)
+            if rect is None:
+                if not allow_partial or unit.required:
+                    return None
+                continue  # allow_partial：托盘丢弃（披露）
+            pallet_slots.append((int(rect.x), int(rect.y), placed_unit))
+    elif tray_units:
         min_width = min(unit.width_mm for unit in tray_units)
         min_cols = max(1, usable_width // min_width)
         n_trays = len(tray_units)
@@ -1640,14 +1719,19 @@ def pack_order(request: PackRequest) -> PackResponse:
     if pallet_grid is not None:
         stable_stacks = pallet_grid
     else:
-        mixed = _layer_layout(request, merged_stable)
-        if mixed is not None:
-            stable_stacks = mixed
+        # 混合尺寸纯整托：SKU 块配平布局（重块居中）→ 与"装得多"布局区分
+        balanced = _stable_balance_layout(request, stable_units)
+        if balanced is not None:
+            stable_stacks = balanced
         else:
-            stable_stacks = _repack_same_units(
-                request, merged_stable, "stable"
-            ) or _center_stacks(request, high_stacks)
-        stable_stacks = _swap_balance(request, stable_stacks)
+            mixed = _layer_layout(request, merged_stable)
+            if mixed is not None:
+                stable_stacks = mixed
+            else:
+                stable_stacks = _repack_same_units(
+                    request, merged_stable, "stable"
+                ) or _center_stacks(request, high_stacks)
+            stable_stacks = _swap_balance(request, stable_stacks)
     easy_region = _easy_region_layout(request, merged_stable)
     easy_stacks = easy_region if easy_region is not None else (
         _repack_same_units(request, merged_stable, "easy") or high_stacks
