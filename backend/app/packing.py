@@ -331,6 +331,12 @@ def _build_sku_blocks(
             and swapped in cargo.allowed_orientations
             and unit.length_mm <= request.container.door_width_mm - 2 * c
             and unit.length_mm < unit.width_mm
+            # 含 CompositeUnit（托盘+上托散箱）的 SKU 组禁止 footprint swap：
+            # CompositeUnit 不旋转，on_top 偏移基于未旋转托盘顶面（与 _layer_layout
+            # 约束一致）；swap 后托盘顶面变小而散箱偏移未随旋转同步 → 散箱超出托盘
+            # 顶面 → validator UNSUPPORTED（公网实测 LAYOUT_NOT_FEASIBLE，
+            # hint=高层货物底面未得到完整支撑）。保持原 footprint 即可消除。
+            and not has_composite
         ):
             # 旋转后更窄（原长变宽）：取占宽最小朝向
             length_mm, width_mm = unit.width_mm, unit.length_mm
