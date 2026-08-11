@@ -311,7 +311,12 @@ def _build_sku_blocks(
     blocks: list[Block] = []
     for sku_id, group in by_sku.items():
         cargo = group[0].cargo
-        total = sum(u.count for u in group)
+        has_composite = any(isinstance(u, CompositeUnit) for u in group)
+        # 底面件数：CompositeUnit 只算托盘件（count=pallet.count=1），
+        # 上托散箱不占底面位置（随托盘展开，轻在上）
+        total = sum(
+            (u.pallet.count if isinstance(u, CompositeUnit) else u.count) for u in group
+        )
         unit = group[0]
         if isinstance(unit, CompositeUnit):
             unit = unit.pallet  # CompositeUnit 取托盘栈计算高度/footprint
@@ -338,6 +343,9 @@ def _build_sku_blocks(
             layers = max(1, min(cargo.max_layers, max_by_height, max_by_load))
         else:
             layers = 1
+        if has_composite:
+            # CompositeUnit 已带上托散箱（占满托盘上方空间），块内每底位整托放置不可叠
+            layers = 1
         columns = max(1, usable_width // (width_mm + gap))
         rows = (total + columns * layers - 1) // (columns * layers)
         block_length = rows * length_mm + max(0, rows - 1) * gap
@@ -353,12 +361,14 @@ def _build_sku_blocks(
 
 def _sku_block_layout(
     request: PackRequest,
-    units: list[StackUnit],
+    units: list[StackUnit | CompositeUnit],
     strategy: str,
 ) -> list[PackedStack] | None:
     """SKU 块布局主入口：构建块 → 策略排序 → 逐块网格放置。
 
-    仅接收 StackUnit（竖直栈），CompositeUnit 由 Task 5 的未合并 units 保证不传入。
+    接受 StackUnit 与 CompositeUnit（托盘+上托散箱）：CompositeUnit 块内整托
+    放置（每底位 1 个托盘件），上托散箱不占底面位置，由 _expand_stacks 展开。
+    块排序遵循 cargo.unload_order（后卸先进柜头）。
     """
     if not units:
         return None
@@ -370,7 +380,7 @@ def _sku_block_layout(
     blocks = _build_sku_blocks(request, units, strategy)
     if not blocks:
         return None
-    by_sku: dict[str, list[StackUnit]] = {}
+    by_sku: dict[str, list[StackUnit | CompositeUnit]] = {}
     for unit in units:
         by_sku.setdefault(unit.cargo.id, []).append(unit)
     # fill 策略：若单 SKU 块超长（如 630 件散箱），返回 None 由调用方回退分层铺满
@@ -379,17 +389,33 @@ def _sku_block_layout(
             if b.block_length_mm > usable_length - door_buffer:
                 return None
     if strategy == "fill":
-        ordered = sorted(blocks, key=lambda b: (-b.block_length_mm * b.block_width_mm, b.sku_id))
+        ordered = sorted(
+            blocks,
+            key=lambda b: (-b.cargo.unload_order, -b.block_length_mm * b.block_width_mm, b.sku_id),
+        )
     elif strategy == "easy":
         order_map = {item.id: i for i, item in enumerate(request.cargo_items)}
-        ordered = sorted(blocks, key=lambda b: (order_map.get(b.sku_id, 10**9), b.sku_id))
+        ordered = sorted(
+            blocks,
+            key=lambda b: (-b.cargo.unload_order, order_map.get(b.sku_id, 10**9), b.sku_id),
+        )
     else:  # balance
-        ordered = sorted(blocks, key=lambda b: (-b.total_weight_g, b.sku_id))
+        if any(b.cargo.unload_order for b in blocks):
+            # 先卸后装硬约束优先：unload_order 降序从柜头铺（不做中心槽配平）
+            ordered = sorted(
+                blocks,
+                key=lambda b: (-b.cargo.unload_order, -b.total_weight_g, b.sku_id),
+            )
+            center_slots = False
+        else:
+            # 无先卸后装约束：保持重块从柜长中心向外（中心槽配平）
+            ordered = sorted(blocks, key=lambda b: (-b.total_weight_g, b.sku_id))
+            center_slots = True
     total_len = sum(b.block_length_mm + gap for b in ordered) - gap
     if total_len > usable_length - door_buffer:
         return None
     block_x: dict[str, int] = {}
-    if strategy == "balance":
+    if strategy == "balance" and center_slots:
         slots = len(ordered)
         # 物理槽从左到右 = 离中心越近越靠中间：最重块居中，次重向两侧
         order_idx = sorted(range(slots), key=lambda i: (abs(i - (slots - 1) / 2), i))
@@ -415,11 +441,23 @@ def _sku_block_layout(
         row_count = 0
         y_cursor = c
         x_cursor = block_x[b.sku_id]
-        instance_pool = []
+        instance_pool: list[int] = []
         for stack in group:
-            for i in range(stack.count):
-                instance_pool.append(stack.first_instance_index + i)
+            if isinstance(stack, CompositeUnit):
+                # CompositeUnit 只取托盘件占底面（count=pallet.count=1），
+                # 上托散箱随托盘展开，不占底面位置
+                pallet_stack = stack.pallet
+                for i in range(pallet_stack.count):
+                    instance_pool.append(pallet_stack.first_instance_index + i)
+            else:
+                for i in range(stack.count):
+                    instance_pool.append(stack.first_instance_index + i)
         piece_idx = 0
+        # 单位指针：每个底位按顺序取 group 中对应单位（CompositeUnit 或 StackUnit），
+        # 而不是全部用 group[0]。CompositeUnit 一单位一底位（整托+上托散箱整体放置），
+        # StackUnit 单位全部件放入当前底位（不跨底位拆分）；单位用完则不再取，
+        # 底位数 > 单位数时多余底位空置（同 SKU 单位件数已确定）。
+        group_idx = 0
         # 块内网格：先按行（x 向推进），行内按列（y 向）
         for r in range(b.rows):
             y_cursor = c
@@ -427,27 +465,49 @@ def _sku_block_layout(
                 remaining = b.pieces - piece_idx
                 if remaining <= 0:
                     break
-                take = min(b.layers, remaining)
+                if group_idx >= len(group):
+                    # 单位已用完：多余底位不再放件
+                    break
+                base = group[group_idx]
+                if isinstance(base, CompositeUnit):
+                    # 托盘块整托放置：CompositeUnit 整体（pallet + on_top）占一个底位，
+                    # take=托盘件数（count=pallet.count），上托散箱不占底面位置，
+                    # 由 _expand_stacks 的 CompositeUnit 分支展开托盘+上托散箱一次
+                    take = min(base.pallet.count, remaining)
+                else:
+                    # 可叠 StackUnit：单位全部件放入当前底位，保证每件货物只放置一次
+                    take = min(base.count, remaining)
                 piece_idx += take
                 # 该底位叠 take 件（同 SKU 连续 instance）
                 first = instance_pool[piece_idx - take]
-                base = group[0]
-                if (base.length_mm, base.width_mm) != (b.length_mm, b.width_mm):
-                    base = replace(
-                        base,
-                        length_mm=b.length_mm,
-                        width_mm=b.width_mm,
-                        orientation=SWAP_ORIENTATIONS.get(base.orientation, base.orientation),
+                if isinstance(base, CompositeUnit):
+                    # 用 pallet 做 replace（count/take 语义），重建 CompositeUnit 保留 on_top
+                    replaced_pallet = replace(
+                        base.pallet,
+                        count=take,
+                        stack_height_mm=take * b.height_mm,
+                        total_weight_g=take * base.cargo.weight_g,
+                        first_instance_index=first,
                     )
-                unit = replace(
-                    base,
-                    count=take,
-                    stack_height_mm=take * b.height_mm,
-                    total_weight_g=take * base.cargo.weight_g,
-                    first_instance_index=first,
-                )
+                    unit = replace(base, pallet=replaced_pallet)
+                else:
+                    if (base.length_mm, base.width_mm) != (b.length_mm, b.width_mm):
+                        base = replace(
+                            base,
+                            length_mm=b.length_mm,
+                            width_mm=b.width_mm,
+                            orientation=SWAP_ORIENTATIONS.get(base.orientation, base.orientation),
+                        )
+                    unit = replace(
+                        base,
+                        count=take,
+                        stack_height_mm=take * b.height_mm,
+                        total_weight_g=take * base.cargo.weight_g,
+                        first_instance_index=first,
+                    )
                 placed.append(PackedStack(unit=unit, x_mm=x_cursor, y_mm=y_cursor, step=step))
                 y_cursor += b.width_mm + gap
+                group_idx += 1
             x_cursor += b.length_mm + gap
         step += 1
     return placed
@@ -1888,7 +1948,9 @@ def _layout_signature(solution: PackingSolution) -> tuple:
 def pack_order(request: PackRequest) -> PackResponse:
     units = _build_stack_units(request)
     # 三方案统一优先尝试 SKU 块布局（装得多/更稳妥/易操作），失败走原回退链
-    high_blocks = _sku_block_layout(request, units, "fill")
+    # 缺陷 B 修复：SKU 块布局改传 merged（散箱上托托盘顶面，轻在上）
+    high_merged = _merge_pallet_cartons(request, units)
+    high_blocks = _sku_block_layout(request, high_merged, "fill")
     if high_blocks is not None:
         high_stacks = high_blocks
     else:
@@ -1897,7 +1959,7 @@ def pack_order(request: PackRequest) -> PackResponse:
     selected_counts = Counter(item.cargo_id for item in high_placements)
     stable_units = _build_stack_units(request, dict(selected_counts), "stable")
     merged_stable = _merge_pallet_cartons(request, stable_units)
-    stable_blocks = _sku_block_layout(request, stable_units, "balance")
+    stable_blocks = _sku_block_layout(request, merged_stable, "balance")
     if stable_blocks is not None:
         stable_stacks = _swap_balance(request, stable_blocks)
     else:
@@ -1918,7 +1980,7 @@ def pack_order(request: PackRequest) -> PackResponse:
                         request, merged_stable, "stable"
                     ) or _center_stacks(request, high_stacks)
                 stable_stacks = _swap_balance(request, stable_stacks)
-    easy_blocks = _sku_block_layout(request, stable_units, "easy")
+    easy_blocks = _sku_block_layout(request, merged_stable, "easy")
     if easy_blocks is not None:
         easy_stacks = easy_blocks
     else:

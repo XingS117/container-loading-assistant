@@ -403,7 +403,7 @@ def test_stable_uses_balancing_grid_for_pallet_only_order():
     stable = response.solutions[1]
 
     assert stable.metrics.length_imbalance_pct <= 5
-    assert stable.metrics.loading_steps == 4
+    assert stable.metrics.loading_steps == 2  # SKU 块布局：每 SKU 一块一步
     assert validate_solution(
         request.container,
         request.cargo_items,
