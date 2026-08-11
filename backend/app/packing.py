@@ -918,8 +918,13 @@ def _layer_layout(
             band_len = cursor_x - gap
             shift = max(0, (usable_length - band_len) // 2)
             for r in range(rows):
+                # 行内按重量降序排列 + 奇偶行反向（蛇形）：重托盘在左右交替分布，
+                # 使柜宽方向（y 向）重量均衡（二维配平，对齐成熟软件做法）
+                row_units = sorted(per_row[r], key=lambda u: -u.total_weight_g)
+                if r % 2 == 1:
+                    row_units.reverse()
                 y_cursor = 0
-                for unit in per_row[r]:
+                for unit in row_units:
                     pallet_slots.append((shift + row_x[r], y_cursor, unit))
                     y_cursor += unit.width_mm + gap
         else:
