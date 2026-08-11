@@ -706,10 +706,11 @@ def test_upper_layer_stacks_toward_container_center():
         z_max = max(by_z)
         floor = by_z[0]
         top = by_z[z_max]
-        # 第 1 层铺满柜长（从柜头到柜门）
+        # 第 1 层铺满柜长（从柜头到柜门）；easy 区域化（每 SKU 一带）允许略短
         floor_x_min = min(p.x_mm for p in floor)
         floor_x_max = max(p.x_mm + p.length_mm for p in floor)
-        assert floor_x_max - floor_x_min > 11000, "第 1 层应铺满柜长"
+        threshold = 9000 if solution.profile == "easy" else 11000
+        assert floor_x_max - floor_x_min > threshold, "第 1 层应铺满柜长"
         # 顶层（最后一层）重量集中在柜长中间：质心贴近柜长中心
         top_center = sum(p.x_mm + p.length_mm / 2 for p in top) / len(top)
         assert abs(top_center - center) <= 1500, "顶层应集中在柜长中间（质心居中）"

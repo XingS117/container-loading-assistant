@@ -1211,7 +1211,8 @@ def _band_layout(
         base_width = group[0].width_mm
         variants: list[tuple[int, int, bool]] = [(base_length, base_width, False)]
         swapped_orientation = SWAP_ORIENTATIONS.get(group[0].orientation)
-        if swapped_orientation in group[0].cargo.allowed_orientations:
+        # CompositeUnit（托盘+上托散箱）不旋转：on_top 偏移基于未旋转托盘顶面
+        if not isinstance(group[0], CompositeUnit) and swapped_orientation in group[0].cargo.allowed_orientations:
             swapped = (base_width, base_length)
             if swapped[1] <= door_usable_width:
                 variants.append((swapped[0], swapped[1], True))
@@ -1326,12 +1327,14 @@ def _easy_region_layout(
         return None
     if all(unit.count == 1 and unit.cargo.kind == "pallet" for unit in units):
         return _pallet_grid_layout(request, units)
-    mixed = _layer_layout(request, units, allow_partial=True)
-    if mixed is not None:
-        return mixed
+    # 易操作：优先区域化（每 SKU 集中成带/排、分步装载），与"装得多/更稳妥"
+    # 的混合铺满布局区分开；区域化放不下时再回退分层铺满
     full = _try_region_layouts(request, units)
     if full is not None:
         return full
+    mixed = _layer_layout(request, units, allow_partial=True)
+    if mixed is not None:
+        return mixed
     required = [unit for unit in units if unit.required]
     optional_by_sku: dict[str, list[StackUnit]] = defaultdict(list)
     for unit in units:
