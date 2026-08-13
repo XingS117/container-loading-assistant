@@ -29,10 +29,13 @@ def test_block_columns_rows_layers():
     blocks = _build_sku_blocks(req, units, "fill")
     assert blocks is not None and len(blocks) == 1
     b = blocks[0]
-    # 柜宽 2352 / (650+gap0) = 3 列；30 托 2 层 → rows = ceil(30/(3*2))=5
+    # 柜宽 2352 / (650+gap0) = 3 列；30 托可叠 2 层
+    # rows = min_rows（全部件叠满 2 层所需行数）= ceil(30/(3*2))=5；
+    # flat_rows = 全部件平铺第 1 层所需行数 = ceil(30/3)=10（底层铺满）
     assert b.columns == 3
     assert b.layers == 2
     assert b.rows == 5
+    assert b.flat_rows == 10
     assert b.block_length_mm == 5 * 650
     assert b.pieces == 30
 
@@ -77,6 +80,35 @@ def test_place_blocks_balance_heavy_center():
     lc = sum(s.x_mm + s.length_mm / 2 for s in light) / len(light)
     center = 12032 / 2
     assert abs(hc - center) < abs(lc - center), "重块应比轻块更居中"
+
+
+def test_floor_layer_first_fills_bottom_before_stacking():
+    """规则回归：无论纯整托/纯散箱/混装，都是先把底层铺满，
+    剩余件数才叠到第 2 层集中在中间（不能在底层未铺满时叠高）。"""
+    req = _req([
+        _pallet("p1", "A", 650, 650, 1200, 174, 30),
+        _pallet("p2", "B", 890, 750, 1120, 303, 30),
+        _pallet("p3", "C", 1080, 800, 1250, 427, 3),
+    ])
+    resp = pack_order(req)
+    for sol in resp.solutions:
+        assert sol.metrics.loaded_pieces == 63, f"{sol.profile} 应全装 63 件"
+        # 底层（z=0）件数 = 底位数：底层应尽量铺满（远多于"每底位直接叠满"的 32）
+        bottom = [p for p in sol.placements if p.z_mm == 0]
+        assert len(bottom) > 40, (
+            f"{sol.profile} 底层仅 {len(bottom)} 底位，未遵循先铺满底层"
+        )
+        upper = [p for p in sol.placements if p.z_mm > 0]
+        # 剩余件数不超底层：底层铺满后才叠上层
+        assert len(upper) < len(bottom), (
+            f"{sol.profile} 上层 {len(upper)} 件过多（底层 {len(bottom)}），未先铺满底层"
+        )
+        # 上层件在各自 SKU 块内集中于中间（两头低中间高）
+        center = 12032 / 2
+        upper_cx = sum(p.x_mm + p.length_mm / 2 for p in upper) / len(upper)
+        assert abs(upper_cx - center) <= 12032 * 0.35, (
+            f"{sol.profile} 上层过于偏置（上层中心 {upper_cx:.0f}）"
+        )
 
 
 def test_pack_order_three_solutions_use_sku_blocks():

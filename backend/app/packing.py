@@ -158,7 +158,11 @@ class PackedStack:
 
 @dataclass
 class Block:
-    """一个 SKU 的集中装载块：块内网格 columns×rows，每底位叠 layers 件。"""
+    """一个 SKU 的集中装载块：块内网格 columns×rows，每底位叠 layers 件。
+
+    rows = 当前行数（底层底位数 = columns×rows）；flat_rows = 全平铺行数
+    （全部件放第 1 层所需行数）。布局时先平铺底层、剩余件叠上层集中在中间。
+    """
     sku_id: str
     cargo: CargoSpec
     length_mm: int
@@ -167,6 +171,7 @@ class Block:
     layers: int
     columns: int
     rows: int
+    flat_rows: int
     block_length_mm: int
     block_width_mm: int
     pieces: int
@@ -353,16 +358,56 @@ def _build_sku_blocks(
             # CompositeUnit 已带上托散箱（占满托盘上方空间），块内每底位整托放置不可叠
             layers = 1
         columns = max(1, usable_width // (width_mm + gap))
-        rows = (total + columns * layers - 1) // (columns * layers)
+        # 行数：min_rows = 全部件叠满 layers 层所需行数（块长下限）；
+        # flat_rows = 全部件平铺第 1 层所需行数（块长上限，底层铺满）。
+        # 布局时在柜长预算内尽量多铺底层（rows 趋向 flat_rows），
+        # 剩余件数叠到第 2 层集中在中间 —— 遵循"先铺满底层"规则。
+        min_rows = max(1, (total + columns * layers - 1) // (columns * layers))
+        flat_rows = max(min_rows, (total + columns - 1) // columns)
+        rows = min_rows
         block_length = rows * length_mm + max(0, rows - 1) * gap
         block_width = columns * width_mm + max(0, columns - 1) * gap
         blocks.append(Block(
             sku_id=sku_id, cargo=cargo, length_mm=length_mm, width_mm=width_mm,
             height_mm=unit.item_height_mm, layers=layers, columns=columns,
-            rows=rows, block_length_mm=block_length, block_width_mm=block_width,
+            rows=rows, flat_rows=flat_rows, block_length_mm=block_length,
+            block_width_mm=block_width,
             pieces=total, total_weight_g=sum(u.total_weight_g for u in group),
         ))
     return blocks
+
+
+def _grow_block_rows(
+    blocks: list[Block],
+    budget: int,
+    gap: int,
+    weight_first: bool = False,
+) -> None:
+    """在柜长预算内尽量给每块加行（铺满底层）。
+
+    每块当前 rows = min_rows（全部件叠满 layers 层）。预算有余时按优先级给块
+    加行：默认按"每毫米柜长可增加的底位数"（columns/length）降序（装得多）；
+    weight_first=True（更稳妥）时按块总重降序（重块先铺底层 → 重块居中配平
+    能力不被小 footprint 块拉偏）。加 1 行 → 底层多 columns 个底位、块长增加
+    length+gap。剩余预算用完即停，尽量把底层铺满、剩余件数叠到第 2 层集中
+    在中间。
+    """
+    total_len = sum(b.block_length_mm + gap for b in blocks) - gap
+    if weight_first:
+        order = sorted(blocks, key=lambda b: (-b.total_weight_g, b.sku_id))
+    else:
+        order = sorted(
+            blocks,
+            key=lambda b: (-(b.columns / b.length_mm), b.sku_id),
+        )
+    for b in order:
+        while b.rows < b.flat_rows:
+            added = b.length_mm + gap
+            if total_len + added > budget:
+                break
+            b.rows += 1
+            b.block_length_mm += added
+            total_len += added
 
 
 def _sku_block_layout(
@@ -370,11 +415,15 @@ def _sku_block_layout(
     units: list[StackUnit | CompositeUnit],
     strategy: str,
 ) -> list[PackedStack] | None:
-    """SKU 块布局主入口：构建块 → 策略排序 → 逐块网格放置。
+    """SKU 块布局主入口：构建块 → 铺满底层行数优化 → 策略排序 → 逐块放置。
 
     接受 StackUnit 与 CompositeUnit（托盘+上托散箱）：CompositeUnit 块内整托
     放置（每底位 1 个托盘件），上托散箱不占底面位置，由 _expand_stacks 展开。
     块排序遵循 cargo.unload_order（后卸先进柜头）。
+
+    布局遵循"先铺满底层"规则：在柜长预算内每块尽量平铺（rows 趋向
+    flat_rows），底层铺满后再把剩余件数叠到第 2 层，集中在距柜长中心
+    近的底位（两头低中间高，重心居中）。
     """
     if not units:
         return None
@@ -389,7 +438,8 @@ def _sku_block_layout(
     by_sku: dict[str, list[StackUnit | CompositeUnit]] = {}
     for unit in units:
         by_sku.setdefault(unit.cargo.id, []).append(unit)
-    # fill 策略：若单 SKU 块超长（如 630 件散箱），返回 None 由调用方回退分层铺满
+    # fill 策略：若单 SKU 块叠满 layers 层仍超长（如 706 件散箱），返回 None
+    # 由调用方回退分层铺满
     if strategy == "fill":
         for b in blocks:
             if b.block_length_mm > usable_length - door_buffer:
@@ -417,6 +467,16 @@ def _sku_block_layout(
             # 无先卸后装约束：保持重块从柜长中心向外（中心槽配平）
             ordered = sorted(blocks, key=lambda b: (-b.total_weight_g, b.sku_id))
             center_slots = True
+    # 铺满底层：柜长预算内尽量给每块加行（行数从 min_rows 趋向 flat_rows）。
+    # 排序基于 grow 前的块长（策略语义稳定：fill 体积降序、easy 输入顺序、
+    # balance 重块居中）；grow 只改变块内行数与块长，不改变块间顺序。
+    # balance（更稳妥）重块优先铺底层，避免小 footprint 块拉偏重心。
+    _grow_block_rows(
+        blocks,
+        usable_length - door_buffer,
+        gap,
+        weight_first=(strategy == "balance" and center_slots),
+    )
     total_len = sum(b.block_length_mm + gap for b in ordered) - gap
     if total_len > usable_length - door_buffer:
         return None
@@ -446,88 +506,128 @@ def _sku_block_layout(
     step = 1
     for b in ordered:
         group = by_sku[b.sku_id]
-        # 每底位叠 layers 件：把同 SKU 栈的件按列×行铺开
-        column_count = 0
-        row_count = 0
-        y_cursor = c
-        x_cursor = block_x[b.sku_id]
+        has_composite = any(isinstance(s, CompositeUnit) for s in group)
         instance_pool: list[int] = []
         for stack in group:
             if isinstance(stack, CompositeUnit):
-                # CompositeUnit 只取托盘件占底面（count=pallet.count=1），
-                # 上托散箱随托盘展开，不占底面位置
                 pallet_stack = stack.pallet
                 for i in range(pallet_stack.count):
                     instance_pool.append(pallet_stack.first_instance_index + i)
             else:
                 for i in range(stack.count):
                     instance_pool.append(stack.first_instance_index + i)
+        if has_composite:
+            # 托盘块整托放置：每底位一个 CompositeUnit（pallet + on_top），
+            # 上托散箱不占底面位置，由 _expand_stacks 展开；块内不可叠。
+            # group 可能混合 CompositeUnit 与未上托的 StackUnit，按类型分别取件。
+            group_idx = 0
+            piece_idx = 0
+            x_cursor = block_x[b.sku_id]
+            for r in range(b.rows):
+                y_cursor = c
+                for col in range(b.columns):
+                    remaining = b.pieces - piece_idx
+                    if remaining <= 0 or group_idx >= len(group):
+                        break
+                    base = group[group_idx]
+                    take = min(
+                        base.pallet.count if isinstance(base, CompositeUnit) else base.count,
+                        remaining,
+                    )
+                    piece_idx += take
+                    first = instance_pool[piece_idx - take]
+                    if isinstance(base, CompositeUnit):
+                        pallet = base.pallet
+                        if (pallet.length_mm, pallet.width_mm) != (b.length_mm, b.width_mm):
+                            pallet = replace(
+                                pallet,
+                                length_mm=b.length_mm,
+                                width_mm=b.width_mm,
+                                orientation=SWAP_ORIENTATIONS.get(pallet.orientation, pallet.orientation),
+                            )
+                        replaced_pallet = replace(
+                            pallet,
+                            count=take,
+                            stack_height_mm=take * b.height_mm,
+                            total_weight_g=take * base.cargo.weight_g,
+                            first_instance_index=first,
+                        )
+                        unit = replace(base, pallet=replaced_pallet)
+                    else:
+                        if (base.length_mm, base.width_mm) != (b.length_mm, b.width_mm):
+                            base = replace(
+                                base,
+                                length_mm=b.length_mm,
+                                width_mm=b.width_mm,
+                                orientation=SWAP_ORIENTATIONS.get(base.orientation, base.orientation),
+                            )
+                        unit = replace(
+                            base,
+                            count=take,
+                            stack_height_mm=take * b.height_mm,
+                            total_weight_g=take * base.cargo.weight_g,
+                            first_instance_index=first,
+                        )
+                    placed.append(PackedStack(unit=unit, x_mm=x_cursor, y_mm=y_cursor, step=step))
+                    y_cursor += b.width_mm + gap
+                    group_idx += 1
+                x_cursor += b.length_mm + gap
+            step += 1
+            continue
+        # 可叠 StackUnit 块：先铺满底层，剩余件数叠到第 2 层集中在中间。
+        # 底层底位数 = columns×rows（行数已按柜长预算尽量平铺）；每底位
+        # base 件（= pieces//bottom，受 layers 上限约束），剩余 rem 件
+        # 分散 +1 到距柜长中心近的底位 —— 中间高、两头低，重心居中。
+        bottom = min(b.columns * b.rows, b.pieces)
+        base = min(b.layers, b.pieces // bottom) if bottom else 0
+        rem = b.pieces - base * bottom
+        counts = [base] * bottom
+        if rem > 0:
+            center = request.container.inner_length_mm / 2
+            slot_order = sorted(
+                range(bottom),
+                key=lambda i: abs(
+                    block_x[b.sku_id]
+                    + (i // b.columns) * (b.length_mm + gap)
+                    + b.length_mm / 2
+                    - center
+                ),
+            )
+            for i in slot_order:
+                if rem <= 0:
+                    break
+                counts[i] += 1
+                rem -= 1
         piece_idx = 0
-        # 单位指针：每个底位按顺序取 group 中对应单位（CompositeUnit 或 StackUnit），
-        # 而不是全部用 group[0]。CompositeUnit 一单位一底位（整托+上托散箱整体放置），
-        # StackUnit 单位全部件放入当前底位（不跨底位拆分）；单位用完则不再取，
-        # 底位数 > 单位数时多余底位空置（同 SKU 单位件数已确定）。
-        group_idx = 0
-        # 块内网格：先按行（x 向推进），行内按列（y 向）
+        x_cursor = block_x[b.sku_id]
         for r in range(b.rows):
             y_cursor = c
             for col in range(b.columns):
-                remaining = b.pieces - piece_idx
-                if remaining <= 0:
+                slot = r * b.columns + col
+                if slot >= bottom:
                     break
-                if group_idx >= len(group):
-                    # 单位已用完：多余底位不再放件
+                count = counts[slot]
+                if count <= 0:
                     break
-                base = group[group_idx]
-                if isinstance(base, CompositeUnit):
-                    # 托盘块整托放置：CompositeUnit 整体（pallet + on_top）占一个底位，
-                    # take=托盘件数（count=pallet.count），上托散箱不占底面位置，
-                    # 由 _expand_stacks 的 CompositeUnit 分支展开托盘+上托散箱一次
-                    take = min(base.pallet.count, remaining)
-                else:
-                    # 可叠 StackUnit：单位全部件放入当前底位，保证每件货物只放置一次
-                    take = min(base.count, remaining)
-                piece_idx += take
-                # 该底位叠 take 件（同 SKU 连续 instance）
-                first = instance_pool[piece_idx - take]
-                if isinstance(base, CompositeUnit):
-                    # 用 pallet 做 replace（count/take 语义），重建 CompositeUnit 保留 on_top。
-                    # 块 footprint 已按占宽最小朝向 swap 时 pallet 须同步长宽/朝向，
-                    # 否则块按 swap 尺寸排位而件按原尺寸展开 → OVERLAP（Critical-1）
-                    pallet = base.pallet
-                    if (pallet.length_mm, pallet.width_mm) != (b.length_mm, b.width_mm):
-                        pallet = replace(
-                            pallet,
-                            length_mm=b.length_mm,
-                            width_mm=b.width_mm,
-                            orientation=SWAP_ORIENTATIONS.get(pallet.orientation, pallet.orientation),
-                        )
-                    replaced_pallet = replace(
-                        pallet,
-                        count=take,
-                        stack_height_mm=take * b.height_mm,
-                        total_weight_g=take * base.cargo.weight_g,
-                        first_instance_index=first,
-                    )
-                    unit = replace(base, pallet=replaced_pallet)
-                else:
-                    if (base.length_mm, base.width_mm) != (b.length_mm, b.width_mm):
-                        base = replace(
-                            base,
-                            length_mm=b.length_mm,
-                            width_mm=b.width_mm,
-                            orientation=SWAP_ORIENTATIONS.get(base.orientation, base.orientation),
-                        )
-                    unit = replace(
+                first = instance_pool[piece_idx]
+                piece_idx += count
+                base = group[0]
+                if (base.length_mm, base.width_mm) != (b.length_mm, b.width_mm):
+                    base = replace(
                         base,
-                        count=take,
-                        stack_height_mm=take * b.height_mm,
-                        total_weight_g=take * base.cargo.weight_g,
-                        first_instance_index=first,
+                        length_mm=b.length_mm,
+                        width_mm=b.width_mm,
+                        orientation=SWAP_ORIENTATIONS.get(base.orientation, base.orientation),
                     )
+                unit = replace(
+                    base,
+                    count=count,
+                    stack_height_mm=count * b.height_mm,
+                    total_weight_g=count * base.cargo.weight_g,
+                    first_instance_index=first,
+                )
                 placed.append(PackedStack(unit=unit, x_mm=x_cursor, y_mm=y_cursor, step=step))
                 y_cursor += b.width_mm + gap
-                group_idx += 1
             x_cursor += b.length_mm + gap
         step += 1
     return placed
@@ -890,6 +990,9 @@ def _swap_balance(
     target_x = request.container.inner_length_mm / 2
     target_y = request.container.inner_width_mm / 2
     current = list(stacks)
+    # 存在先卸后装（unload_order）约束时禁止跨 SKU 交换，保护分区；
+    # 无约束时允许同 footprint 跨 SKU 交换（重块/轻块互换居中配平）。
+    has_unload_order = any(item.unload_order for item in request.cargo_items)
 
     def deviations(candidate: list[PackedStack]) -> tuple[float, float]:
         total_weight = sum(stack.unit.total_weight_g for stack in candidate) or 1
@@ -907,9 +1010,16 @@ def _swap_balance(
         current_x, current_y = deviations(current)
         best_swap: tuple[int, int] | None = None
         best_dev: tuple[float, float] | None = None
-        groups: dict[tuple[int, int], list[int]] = defaultdict(list)
+        groups: dict[tuple[int, int, str], list[int]] = defaultdict(list)
         for index, stack in enumerate(current):
-            groups[(stack.length_mm, stack.width_mm)].append(index)
+            # 有先卸后装约束时同 footprint 且同 SKU 才可交换（保护分区）；
+            # 无约束时允许同 footprint 跨 SKU 交换（配平）。
+            group_key = (
+                stack.length_mm,
+                stack.width_mm,
+                stack.unit.cargo.id if has_unload_order else "",
+            )
+            groups[group_key].append(index)
         total_weight = sum(stack.unit.total_weight_g for stack in current) or 1
         cg_x = sum(
             (stack.x_mm + stack.length_mm / 2) * stack.unit.total_weight_g
@@ -1196,19 +1306,26 @@ def _layer_layout(
     slot_units: dict[str, list[StackUnit]] = {}  # cargo_id -> 第 1 层已放单件（旋转后）
     slot_rects: dict[str, list[tuple[int, int]]] = {}  # cargo_id -> 全局坐标（含 clearance）
 
-    # 1) 托盘带：所有托盘（单层 + 可叠托盘底层件）用 rectpack 排满后整体居中
-    #    （重货集中中间）。先卸后装：卸货顺序大的（后卸）先铺。
-    tray_units: list[StackUnit | CompositeUnit] = list(single_pallets) + [
-        replace(
-            unit,
-            count=1,
-            stack_height_mm=unit.item_height_mm,
-            total_weight_g=unit.cargo.weight_g,
-        )
-        for unit in stackable_pallets
-    ]
+    # 1) 托盘带：所有托盘单件（单层 + 可叠托盘全部单件）用 rectpack 排满后
+    #    整体居中（重货集中中间）。可叠托盘拆全部单件尝试铺第 1 层
+    #    （先铺满底层），放不下的单件归入柱高分配（同 SKU 底位正上方叠高）。
+    #    先卸后装：卸货顺序大的（后卸）先铺。
+    tray_units: list[StackUnit | CompositeUnit] = list(single_pallets)
+    for unit in stackable_pallets:
+        for i in range(unit.count):
+            tray_units.append(
+                replace(
+                    unit,
+                    count=1,
+                    stack_height_mm=unit.item_height_mm,
+                    total_weight_g=unit.cargo.weight_g,
+                    first_instance_index=unit.first_instance_index + i,
+                )
+            )
+    # 放不下的可叠托盘单件 → 归入柱高分配（与散箱"放不下随后叠高"一致）。
+    # 柱高分配按 SKU 总件数 total 分到 k 个第 1 层底位，放不下的件自动叠高。
+    stackable_pallet_ids = {u.id for u in stackable_pallets}
     # 托盘带：优先用网格（重托盘放中间行 → 重量集中中间、两头别偏重），
-    # 网格放不下（托盘多/需旋转才能装入）时回退 rectpack（允许旋转，装得多）。
     tray_units.sort(key=lambda unit: (-unit.total_weight_g, unit.id))
     pallet_slots: list[tuple[int, int, StackUnit | CompositeUnit]] = []  # (x, y, unit)
     if tray_units and not band_grid:
@@ -1218,9 +1335,12 @@ def _layer_layout(
         for unit in tray_units:
             rect, placed_unit = _try_add_to_pallet_top(packer, unit, request)
             if rect is None:
+                if unit.id in stackable_pallet_ids:
+                    # 可叠托盘单件放不下 → 跳过，由柱高分配叠到同 SKU 底位上方
+                    continue
                 if not allow_partial or unit.required:
                     return None
-                continue  # allow_partial：托盘丢弃（披露）
+                continue  # allow_partial：单层托盘丢弃（披露）
             pallet_slots.append((int(rect.x), int(rect.y), placed_unit))
     elif tray_units:
         min_width = min(unit.width_mm for unit in tray_units)
@@ -1270,9 +1390,11 @@ def _layer_layout(
             for unit in tray_units:
                 rect, placed_unit = _try_add_to_pallet_top(packer, unit, request)
                 if rect is None:
+                    if unit.id in stackable_pallet_ids:
+                        continue  # 可叠托盘单件放不下 → 柱高分配叠高
                     if not allow_partial or unit.required:
                         return None
-                    continue  # allow_partial：托盘丢弃（披露）
+                    continue  # allow_partial：单层托盘丢弃（披露）
                 tmp_rects.append(
                     (int(rect.x), int(rect.y), int(rect.width), int(rect.height), placed_unit)
                 )
@@ -1282,7 +1404,8 @@ def _layer_layout(
                 shift = max(0, (usable_length - (rx_max - rx_min)) // 2 - rx_min)
                 for rx, ry, _, _, unit in tmp_rects:
                     pallet_slots.append((rx + shift, ry, unit))
-    stackable_pallet_ids = {u.id for u in stackable_pallets}
+    # 注意：网格分支（band_grid=True）整带排布，可叠托盘全部单件可能超长，
+    # 此时 grid_ok=False → rectpack 分支处理（放不下的归柱高）。
     for x, y, unit in pallet_slots:
         # 可叠托盘栈的底层件只登记进柱高分配（剩余件叠高），最终 PackedStack
         # 由柱高分配统一生成（count=height），避免同一托盘件被放置两次；
