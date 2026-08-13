@@ -37,7 +37,7 @@ def test_30_sku_order_finishes_within_service_budget():
     elapsed = perf_counter() - started
 
     assert elapsed < 15
-    assert len(response.solutions) == 3
+    assert len(response.solutions) == 5
     assert response.solutions[1].metrics.weight_imbalance_pct <= response.solutions[0].metrics.weight_imbalance_pct
     assert response.solutions[2].metrics.loading_steps <= response.solutions[0].metrics.loading_steps
     assert all(

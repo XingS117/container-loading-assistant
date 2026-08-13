@@ -30,9 +30,9 @@ const secondPreset = {
 
 const response = {
   request_id: "abc123",
-  solutions: ["high_fill", "stable", "easy"].map((profile, index) => ({
+  solutions: ["high_fill", "stable", "easy", "strict_support", "interstack"].map((profile, index) => ({
     profile,
-    name: ["装得多", "更稳妥", "易操作"][index],
+    name: ["装得多", "更稳妥", "易操作", "严格完整支撑", "互叠高装载"][index],
     placements: [],
     loaded_counts: { cargo_1: 0 },
     unloaded_counts: { cargo_1: 10 },
@@ -70,7 +70,7 @@ test("loads presets and switches from input to comparable solutions", async () =
   expect(screen.getByAltText("一帆风顺，满载启航海运横幅")).toBeInTheDocument();
   await screen.findByRole("button", { name: /20GP/ });
 
-  await userEvent.click(screen.getByRole("button", { name: "生成 3 个方案" }));
+  await userEvent.click(screen.getByRole("button", { name: "生成装柜方案" }));
 
   await waitFor(() => expect(screen.getByText("方案比较")).toBeInTheDocument());
   expect(screen.getByRole("button", { name: /装得多/ })).toBeInTheDocument();

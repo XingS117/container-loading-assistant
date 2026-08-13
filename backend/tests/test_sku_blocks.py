@@ -120,7 +120,7 @@ def test_pack_order_three_solutions_use_sku_blocks():
         _pallet("p5", "E", 1050, 1050, 1100, 500, 3),
     ])
     resp = pack_order(req)
-    assert len(resp.solutions) == 3
+    assert len(resp.solutions) == 5
     for s in resp.solutions:
         # 全装 69 托
         assert s.metrics.loaded_pieces == 69
@@ -176,7 +176,7 @@ def test_composite_rotated_pallet_footprint_synced():
             max_top_load_g=50000000, fragile=False, must_load=False),
     ])
     resp = pack_order(req)
-    assert len(resp.solutions) == 3
+    assert len(resp.solutions) == 5
     for s in resp.solutions:
         assert s.metrics.loaded_pieces == 28, f"{s.profile} 未全装 28 件"
         v = validate_solution(
@@ -209,7 +209,7 @@ def test_balance_center_slot_respects_clearance():
         req.container.inner_length_mm - 2 * req.container.clearance_mm - req.door_buffer_mm
     )
     resp = pack_order(req)
-    assert len(resp.solutions) == 3
+    assert len(resp.solutions) == 5
     for s in resp.solutions:
         assert s.metrics.loaded_pieces == 11
 
@@ -218,7 +218,7 @@ def test_door_buffer_disclosed_in_warnings():
     # Important-3：规格 §3.2 要求柜门预留操作空间进 warnings/cons 披露
     req = _req([_carton("ca", "CA", 500, 400, 400, 10, 40)])
     resp = pack_order(req)
-    assert len(resp.solutions) == 3
+    assert len(resp.solutions) == 5
     for s in resp.solutions:
         assert any("柜门预留操作空间" in w and "300" in w for w in s.warnings), s.warnings
     # door_buffer=0（关闭）时不披露
@@ -257,3 +257,47 @@ def test_stackable_pallet_layers_honor_top_load_plus_one():
         assert s.metrics.loaded_pieces == 63, (
             f"{s.profile} 应全装 63 件，实际 {s.metrics.loaded_pieces}"
         )
+
+
+def test_interstack_fills_more_than_strict_on_combined_support():
+    """互叠高装载方案：允许小件叠放到大件组合支撑平面上，装载率应不低于严格方案。
+
+    回归：大托盘 20 件铺底层 + 小托盘 200 件。严格方案（完整支撑）只装大托；
+    互叠方案把小托叠到大托组合平面上，装得更多。
+    """
+    req = _req([
+        CargoSpec(id="big", sku="BIG", name="大托", kind="pallet", length_mm=1200,
+            width_mm=1000, height_mm=1100, weight_g=400000, quantity=20,
+            allowed_orientations=["LWH"], stackable=True, max_layers=2,
+            max_top_load_g=5000000, fragile=False, must_load=False),
+        CargoSpec(id="small", sku="SMALL", name="小托", kind="pallet", length_mm=500,
+            width_mm=400, height_mm=600, weight_g=100000, quantity=200,
+            allowed_orientations=["LWH"], stackable=True, max_layers=3,
+            max_top_load_g=1000000, fragile=False, must_load=False),
+    ])
+    resp = pack_order(req)
+    by_profile = {s.profile: s for s in resp.solutions}
+    assert "interstack" in by_profile, "应包含互叠方案"
+    strict_loaded = by_profile["high_fill"].metrics.loaded_pieces
+    inter_loaded = by_profile["interstack"].metrics.loaded_pieces
+    assert inter_loaded >= strict_loaded, (
+        f"互叠装载 {inter_loaded} 应不低于严格 {strict_loaded}"
+    )
+    # 互叠布局必须通过宽松校验（覆盖率 0.7 / 悬挑 0.2）
+    for s in resp.solutions:
+        v = validate_solution(
+            req.container, req.cargo_items, s.placements,
+            item_gap_mm=req.item_gap_mm,
+            support_coverage_min=0.7 if s.profile == "interstack" else 1.0,
+            overhang_ratio_max=0.2 if s.profile == "interstack" else 0.0,
+        )
+        assert v.valid, f"{s.profile} 布局校验失败: {[e.code for e in v.errors]}"
+
+
+def test_disable_interstack_returns_four_solutions():
+    """关闭互叠开关后只输出 4 个方案（不含 interstack）。"""
+    req = _req([_pallet("p1", "A", 650, 650, 1000, 174, 30)])
+    req.enable_interstack = False
+    resp = pack_order(req)
+    profiles = [s.profile for s in resp.solutions]
+    assert profiles == ["high_fill", "stable", "easy", "strict_support"], profiles

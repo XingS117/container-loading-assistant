@@ -99,6 +99,14 @@ class PackRequest(BaseModel):
     item_gap_mm: int = Field(default=0, ge=0, le=1000)
     # 门端操作空间：可用柜长 = 柜长 - door_buffer_mm（默认 300，0=关闭）
     door_buffer_mm: int = Field(default=300, ge=0)
+    # 互叠开关：允许生成"覆盖率阈值 + 悬挑上限"的互叠高装载方案（默认开启）。
+    # 互叠方案降低完整支撑要求（例如支持小件叠放在多个大件拼成的组合平面上），
+    # 参考成熟装柜软件"互叠开关"做法；非互叠方案仍保持 100% 完整支撑。
+    enable_interstack: bool = Field(default=True)
+    # 互叠方案的支撑覆盖率下限（0~1，默认 0.7：上层底面至少 70% 被下层支撑）
+    support_coverage_min: float = Field(default=0.7, ge=0.0, le=1.0)
+    # 互叠方案的悬挑比例上限（0~0.5，默认 0.2：上层任一边悬挑不超过其自身短边 20%）
+    overhang_ratio_max: float = Field(default=0.2, ge=0.0, le=0.5)
 
     @model_validator(mode="after")
     def validate_total_quantity(self) -> "PackRequest":
@@ -139,7 +147,7 @@ class Zone(BaseModel):
 
 
 class PackingSolution(BaseModel):
-    profile: Literal["high_fill", "stable", "easy"]
+    profile: Literal["high_fill", "stable", "easy", "interstack", "strict_support"]
     name: str
     placements: list[Placement]
     loaded_counts: dict[str, int]

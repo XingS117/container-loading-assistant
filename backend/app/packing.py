@@ -140,6 +140,9 @@ class PackedStack:
     y_mm: int
     rotated: bool = False
     step: int | None = None
+    # 列起点 z 偏移（相对 clearance，互叠布局用）：默认 0 = 从柜底起，
+    # 互叠时上层件叠在其它 SKU 件顶面（z_mm = 下方支撑件顶面高度）
+    z_mm: int = 0
 
     @property
     def length_mm(self) -> int:
@@ -1553,6 +1556,267 @@ def _layer_layout(
     return placed
 
 
+def _interstack_layout(
+    request: PackRequest,
+    units: list[StackUnit | CompositeUnit],
+    base_stacks: list[PackedStack],
+    coverage_min: float = 0.7,
+    overhang_ratio_max: float = 0.2,
+) -> list[PackedStack] | None:
+    """互叠高装载布局：在基础布局之上，把未装入的件叠放到组合支撑平面上。
+
+    第 1 阶段：复用 ``base_stacks``（通常是"装得多"的完整支撑布局，装载率高）。
+    第 2 阶段：units 中未被基础布局覆盖的件，贪心叠放到任意已有件顶面
+    （支撑覆盖率 ≥ ``coverage_min``、每边悬挑 ≤ ``overhang_ratio_max × 短边``），
+    允许跨 SKU 落在组合平面上。只叠在单层底层件顶面（最多两层，不超
+    max_layers/柜高）；放不下的保持未装（少装披露）。
+
+    与严格布局的区别：不要求"同 SKU 同 footprint 正上方"，允许跨 SKU
+    落在组合平面上 —— 校验器以宽松的覆盖率阈值放行。装载率 ≥ 基础布局。
+    """
+    if not units or not base_stacks:
+        return None
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    usable_length = request.container.inner_length_mm - 2 * c
+    usable_width = request.container.inner_width_mm - 2 * c
+    available_height = request.container.inner_height_mm - 2 * c
+
+    # 第 1 阶段：基础布局
+    placed = list(base_stacks)
+
+    # 未装件：units 中未被 base_stacks 覆盖的（按 instance 判定）
+    placed_instances: set[tuple[str, int]] = set()
+    for stack in base_stacks:
+        unit = stack.unit
+        if isinstance(unit, CompositeUnit):
+            for i in range(unit.pallet.count):
+                placed_instances.add((unit.pallet.cargo.id, unit.pallet.first_instance_index + i))
+            for on_top, _, _ in unit.on_top:
+                for i in range(on_top.count):
+                    placed_instances.add((on_top.cargo.id, on_top.first_instance_index + i))
+            continue
+        for i in range(unit.count):
+            placed_instances.add((unit.cargo.id, unit.first_instance_index + i))
+    remaining: list[StackUnit | CompositeUnit] = []
+    for unit in units:
+        if isinstance(unit, CompositeUnit):
+            count = unit.pallet.count
+            base_id = unit.pallet.first_instance_index
+        else:
+            count = unit.count
+            base_id = unit.first_instance_index
+        missing = [
+            base_id + i for i in range(count)
+            if (unit.cargo.id, base_id + i) not in placed_instances
+        ]
+        if not missing:
+            continue
+        if isinstance(unit, CompositeUnit):
+            # CompositeUnit 整体已判定，缺失则不处理（少装披露）
+            continue
+        # 互叠阶段拆成 count=1 单件：每个缺失件单独叠放到组合平面上，
+        # 不能把多件合成一个栈（那样会叠更高、超柜高/层数限制）。
+        for instance in missing:
+            remaining.append(
+                replace(
+                    unit,
+                    count=1,
+                    stack_height_mm=unit.item_height_mm,
+                    total_weight_g=unit.cargo.weight_g,
+                    first_instance_index=instance,
+                )
+            )
+    if not remaining:
+        return placed
+
+    # 第 2 阶段：跨 SKU 互叠。
+    remaining.sort(key=lambda u: (-u.volume_mm3, -u.length_mm * u.width_mm, u.id))
+    # 性能保护：剩余栈过多（说明物理装不下，而非布局问题）时只尝试
+    # 前 N 个最大栈，避免大订单 O(n³) 超时。
+    REMAINING_CAP = 60
+    remaining = remaining[:REMAINING_CAP]
+    if max(unit.item_height_mm for unit in remaining) >= available_height:
+        return placed  # 没有可用叠放高度，直接返回第 1 阶段
+
+    # placed 按 x 排序，供支撑查询的滑动窗口剪枝
+    placed_by_x = sorted(placed, key=lambda s: s.x_mm)
+
+    def stack_top(stack: PackedStack) -> int:
+        """栈顶面绝对高度（相对 clearance 的偏移 + 栈高）。"""
+        unit = stack.unit
+        if isinstance(unit, CompositeUnit):
+            height = unit.pallet.stack_height_mm
+        else:
+            height = unit.stack_height_mm
+        return stack.z_mm + height
+
+    def supporters_under(
+        x: int, y: int, length: int, width: int,
+    ) -> tuple[int, list[PackedStack]]:
+        """返回 (放置高度 z, 支撑件列表)。
+
+        只检查底面与 (x,y,length,width) 有交集的栈（x 滑动窗口剪枝）。
+        """
+        candidates: list[PackedStack] = []
+        x_end = x + length
+        for stack in placed_by_x:
+            if stack.x_mm >= x_end:
+                break
+            if stack.x_mm + stack.length_mm <= x:
+                continue
+            if y < stack.y_mm + stack.width_mm and y + width > stack.y_mm:
+                candidates.append(stack)
+        if not candidates:
+            return 0, []
+        z = max(stack_top(stack) for stack in candidates)
+        supporters = [
+            stack for stack in candidates
+            if stack_top(stack) == z
+        ]
+        return z, supporters
+
+    def coverage_area(x: int, y: int, length: int, width: int, supporters: list[PackedStack]) -> int:
+        """该件底面被支撑栈覆盖的总面积（各支撑栈交集面积之和）。"""
+        total = 0
+        for support in supporters:
+            ox = max(
+                0,
+                min(x + length, support.x_mm + support.length_mm) - max(x, support.x_mm),
+            )
+            oy = max(
+                0,
+                min(y + width, support.y_mm + support.width_mm) - max(y, support.y_mm),
+            )
+            total += ox * oy
+        return total
+
+    def intersects(a: PackedStack, b: PackedStack) -> bool:
+        return (
+            a.x_mm < b.x_mm + b.length_mm
+            and a.x_mm + a.length_mm > b.x_mm
+            and a.y_mm < b.y_mm + b.width_mm
+            and a.y_mm + a.width_mm > b.y_mm
+            and a.z_mm < stack_top(b)
+            and stack_top(a) > b.z_mm
+        )
+
+    for unit in remaining:
+        u_length = unit.length_mm
+        u_width = unit.width_mm
+        u_height = unit.item_height_mm
+        if u_height >= available_height:
+            continue
+        best: tuple[int, int, int] | None = None  # (x, y, z)
+        best_score: tuple[float, float, int] | None = None
+        # 候选位置：每个已放置的**底层**（z_mm==0）栈顶面矩形内，与该栈对齐
+        # 的落位点（含跨栈组合平面的对齐点）。只叠在底层件顶面（最多两层），
+        # 保证不超 max_layers、不超出柜高。只取"支撑件顶面 == 放置高度"的
+        # 位置，覆盖组合平面互叠所需的所有可行边界。
+        for base in placed_by_x:
+            if base.z_mm != 0:
+                continue  # 只在底层件顶面互叠（最多两层，不超层数限制）
+            # 底层件必须是单件（展开后只占 1 层），否则其顶面已是第 2 层，
+            # 再叠会超 max_layers。CompositeUnit 若含上托散箱也不在此互叠。
+            if isinstance(base.unit, CompositeUnit):
+                continue
+            if base.unit.count != 1:
+                continue
+            # 底层件必须可叠（stackable）且不脆弱；互叠件自身也须可叠
+            if not base.unit.cargo.stackable or base.unit.cargo.fragile:
+                continue
+            if not unit.cargo.stackable or unit.cargo.fragile:
+                continue
+            # 底部承重：底层件 max_top_load_g 必须足以承受互叠件的重量
+            if base.unit.cargo.max_top_load_g < unit.total_weight_g:
+                continue
+            # 以 base 顶面为放置平面
+            base_z = stack_top(base)
+            if base_z + u_height > available_height:
+                continue
+            # 候选 (x, y)：base 矩形内与上层件对齐的角落（贴合 base 边缘）
+            for x in (base.x_mm - c, base.x_mm - c + base.length_mm - u_length):
+                if x < 0 or x + u_length > usable_length:
+                    continue
+                for y in (base.y_mm - c, base.y_mm - c + base.width_mm - u_width):
+                    if y < 0 or y + u_width > usable_width:
+                        continue
+                    z, supporters = supporters_under(x, y, u_length, u_width)
+                    if z != base_z:
+                        continue  # 必须以该 base 顶面为放置面
+                    if not supporters:
+                        continue
+                    support_area = coverage_area(x, y, u_length, u_width, supporters)
+                    coverage = support_area / (u_length * u_width)
+                    if coverage < coverage_min:
+                        continue
+                    # 悬挑：底面相对支撑件并集外接矩形
+                    support_x0 = min((s.x_mm for s in supporters), default=x)
+                    support_y0 = min((s.y_mm for s in supporters), default=y)
+                    support_x1 = max(
+                        (s.x_mm + s.length_mm for s in supporters),
+                        default=x + u_length,
+                    )
+                    support_y1 = max(
+                        (s.y_mm + s.width_mm for s in supporters),
+                        default=y + u_width,
+                    )
+                    short_side = min(u_length, u_width)
+                    overhang = max(
+                        support_x0 - x,
+                        x + u_length - support_x1,
+                        support_y0 - y,
+                        y + u_width - support_y1,
+                    )
+                    if overhang > short_side * overhang_ratio_max:
+                        continue
+                    candidate = PackedStack(
+                        unit=unit,
+                        x_mm=x,
+                        y_mm=y,
+                        z_mm=z,
+                        step=2,
+                    )
+                    if any(intersects(candidate, s) for s in placed):
+                        continue
+                    score = (coverage, -overhang, x)
+                    if best_score is None or score > best_score:
+                        best_score = score
+                        best = (x, y, z)
+        if best is None:
+            continue
+        x, y, z = best
+        placed.append(
+            PackedStack(
+                unit=unit,
+                x_mm=x,
+                y_mm=y,
+                z_mm=z,
+                step=2,
+            )
+        )
+        placed_by_x = sorted(placed, key=lambda s: s.x_mm)
+
+    placed.sort(key=lambda stack: (stack.y_mm, stack.x_mm, stack.z_mm))
+    return placed
+
+
+def _rects_overlap_x(
+    stack: PackedStack,
+    x: int,
+    length: int,
+) -> bool:
+    return x < stack.x_mm + stack.length_mm and x + length > stack.x_mm
+
+
+def _rects_overlap_y(
+    stack: PackedStack,
+    y: int,
+    width: int,
+) -> bool:
+    return y < stack.y_mm + stack.width_mm and y + width > stack.y_mm
+
+
 def _expand_stacks(
     request: PackRequest,
     stacks: list[PackedStack],
@@ -1582,7 +1846,8 @@ def _expand_stacks(
     placements: list[Placement] = []
     for stack in stacks:
         unit = stack.unit
-        base_z = request.container.clearance_mm
+        # 互叠布局：列起点 z 偏移 stack.z_mm（相对 clearance）
+        base_z = request.container.clearance_mm + stack.z_mm
         step = step_by_id[unit.id]
         if isinstance(unit, CompositeUnit):
             pallet = unit.pallet
@@ -2016,7 +2281,9 @@ def _raise_for_invalid_layout(validation: ValidationResult) -> None:
 def _build_solution(
     request: PackRequest,
     stacks: list[PackedStack],
-    profile: Literal["high_fill", "stable", "easy"],
+    profile: Literal["high_fill", "stable", "easy", "interstack", "strict_support"],
+    support_coverage_min: float = 1.0,
+    overhang_ratio_max: float = 0.0,
 ) -> PackingSolution:
     placements = _expand_stacks(request, stacks, profile)
     validation = validate_solution(
@@ -2024,6 +2291,8 @@ def _build_solution(
         request.cargo_items,
         placements,
         item_gap_mm=request.item_gap_mm,
+        support_coverage_min=support_coverage_min,
+        overhang_ratio_max=overhang_ratio_max,
     )
     if not validation.valid:
         _raise_for_invalid_layout(validation)
@@ -2034,7 +2303,13 @@ def _build_solution(
     }
     metrics = _metrics(request, placements)
     zones = _compute_zones(request, placements)
-    names = {"high_fill": "装得多", "stable": "更稳妥", "easy": "易操作"}
+    names = {
+        "high_fill": "装得多",
+        "stable": "更稳妥",
+        "easy": "易操作",
+        "interstack": "互叠高装载",
+        "strict_support": "严格完整支撑",
+    }
     warnings = []
     if request.door_buffer_mm > 0:
         warnings.append(f"柜门预留操作空间 {request.door_buffer_mm}mm")
@@ -2044,6 +2319,19 @@ def _build_solution(
         pros = [
             f"装入 {metrics.loaded_pieces} 件，体积利用率 {metrics.volume_utilization_pct}%",
             f"重量利用率 {metrics.weight_utilization_pct}%",
+        ]
+        cons = [f"重心最大偏差 {metrics.weight_imbalance_pct}%"]
+    elif profile == "interstack":
+        pros = [
+            f"装入 {metrics.loaded_pieces} 件，体积利用率 {metrics.volume_utilization_pct}%",
+            "允许小件叠放在组合支撑平面上（支撑覆盖率 ≥ 70%）",
+        ]
+        cons = [f"重心最大偏差 {metrics.weight_imbalance_pct}%"]
+        warnings.append("互叠方案：上层货物底面仅需 ≥70% 被支撑，装载稳定性低于完整支撑方案")
+    elif profile == "strict_support":
+        pros = [
+            "每个上层货物底面 100% 被下层支撑（无悬挑）",
+            f"装入 {metrics.loaded_pieces} 件，体积利用率 {metrics.volume_utilization_pct}%",
         ]
         cons = [f"重心最大偏差 {metrics.weight_imbalance_pct}%"]
     elif profile == "stable":
@@ -2094,7 +2382,7 @@ def _layout_signature(solution: PackingSolution) -> tuple:
 
 def pack_order(request: PackRequest) -> PackResponse:
     units = _build_stack_units(request)
-    # 三方案统一优先尝试 SKU 块布局（装得多/更稳妥/易操作），失败走原回退链
+    # 五方案统一优先尝试 SKU 块布局（装得多/更稳妥/易操作），失败走原回退链
     # 缺陷 B 修复：SKU 块布局改传 merged（散箱上托托盘顶面，轻在上）
     high_merged = _merge_pallet_cartons(request, units)
     high_blocks = _sku_block_layout(request, high_merged, "fill")
@@ -2136,11 +2424,37 @@ def pack_order(request: PackRequest) -> PackResponse:
             _repack_same_units(request, merged_stable, "easy") or high_stacks
         )
 
+    # 严格完整支撑方案：与"装得多"同布局（100% 完整支撑、全装），
+    # 但文案强调安全裕度（适合船公司/保险审核场景）。布局相同 → identical_to
+    # 自动标记，前端去重显示。
+    strict_stacks = high_stacks
+
     solutions = [
         _build_solution(request, high_stacks, "high_fill"),
         _build_solution(request, stable_stacks, "stable"),
         _build_solution(request, easy_stacks, "easy"),
+        _build_solution(request, strict_stacks, "strict_support"),
     ]
+    # 互叠高装载方案（默认开启）：在装得多候选基础上增强，允许小件叠放在
+    # 组合支撑平面上（覆盖率阈值 + 悬挑上限）；若请求关闭互叠则跳过该方案。
+    if request.enable_interstack:
+        interstack_stacks = _interstack_layout(
+            request,
+            high_merged,
+            high_stacks,
+            coverage_min=request.support_coverage_min,
+            overhang_ratio_max=request.overhang_ratio_max,
+        )
+        if interstack_stacks is not None:
+            solutions.append(
+                _build_solution(
+                    request,
+                    interstack_stacks,
+                    "interstack",
+                    support_coverage_min=request.support_coverage_min,
+                    overhang_ratio_max=request.overhang_ratio_max,
+                )
+            )
     for index, solution in enumerate(solutions):
         for previous in solutions[:index]:
             if _layout_signature(solution) == _layout_signature(previous):

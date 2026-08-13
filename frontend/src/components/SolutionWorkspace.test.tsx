@@ -23,7 +23,7 @@ const cargoItems: CargoInput[] = [];
 function makeSolution(profile: SolutionProfile, lengthImbalance: number): PackResponse["solutions"][number] {
   return {
     profile,
-    name: { high_fill: "装得多", stable: "更稳妥", easy: "易操作" }[profile],
+    name: ({ high_fill: "装得多", stable: "更稳妥", easy: "易操作", strict_support: "严格完整支撑", interstack: "互叠高装载" } as Record<SolutionProfile, string>)[profile],
     placements: [],
     loaded_counts: {},
     unloaded_counts: {},

@@ -141,7 +141,7 @@ export default function App() {
           <div><strong>{cargoItems.reduce((sum, item) => sum + item.quantity, 0)}</strong><span>件货物 · {container?.name ?? "读取柜型中"}</span></div>
           <button type="button" className="calculate-button" onClick={calculate} disabled={!container || loading}>
             {loading ? <LoaderCircle className="spin" size={19} /> : <Calculator size={19} />}
-            {loading ? "正在计算" : "生成 3 个方案"}
+            {loading ? "正在计算" : "生成装柜方案"}
           </button>
         </div>
       </div>

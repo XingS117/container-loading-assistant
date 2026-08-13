@@ -51,6 +51,8 @@ def test_returns_three_deterministic_valid_solutions():
         "high_fill",
         "stable",
         "easy",
+        "strict_support",
+        "interstack",
     ]
     assert first.model_dump() == second.model_dump()
     for solution in first.solutions:
@@ -468,7 +470,7 @@ def test_easy_keeps_same_pieces_when_region_layout_fits():
     )
 
     response = pack_order(request)
-    high_fill, _, easy = response.solutions
+    high_fill, _, easy = response.solutions[:3]
 
     assert easy.loaded_counts == high_fill.loaded_counts
     assert len(easy.zones) == 2
@@ -513,7 +515,7 @@ def test_easy_drops_pieces_for_dense_order_and_discloses():
     )
 
     response = pack_order(request)
-    high_fill, _, easy = response.solutions
+    high_fill, _, easy = response.solutions[:3]
 
     assert easy.metrics.loaded_pieces <= high_fill.metrics.loaded_pieces
     assert len(easy.zones) < len(high_fill.zones)
@@ -570,7 +572,7 @@ def test_easy_fallback_keeps_must_load_counts():
     )
 
     response = pack_order(request)
-    high_fill, _, easy = response.solutions
+    high_fill, _, easy = response.solutions[:3]
 
     assert easy.loaded_counts == high_fill.loaded_counts
     assert easy.loaded_counts["must"] == 48

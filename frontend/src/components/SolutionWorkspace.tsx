@@ -18,6 +18,8 @@ const profileShortName: Record<SolutionProfile, string> = {
   high_fill: "装载率",
   stable: "重心偏差",
   easy: "装载步骤",
+  strict_support: "完整支撑",
+  interstack: "互叠装载",
 };
 
 export function recommendProfile(response: PackResponse): SolutionProfile {
@@ -83,7 +85,11 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
             ? `${solution.metrics.volume_utilization_pct}%`
             : solution.profile === "stable"
               ? `${solution.metrics.weight_imbalance_pct}%`
-              : `${solution.metrics.loading_steps} 步`;
+              : solution.profile === "interstack"
+                ? `${solution.metrics.loaded_pieces} 件`
+                : solution.profile === "strict_support"
+                  ? `${solution.metrics.loaded_pieces} 件`
+                  : `${solution.metrics.loading_steps} 步`;
           return (
             <button key={solution.profile} type="button" className={`solution-tab ${selected.profile === solution.profile ? "is-active" : ""}`} onClick={() => setSelectedProfile(solution.profile)}>
               <span className="solution-tab-name">{solution.name}</span>
@@ -132,7 +138,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
       <section className="print-only print-report">
         <h1>装柜方案助手</h1>
         <p className="print-meta">{container.name} · 计算编号 {response.request_id} · {new Date().toLocaleString("zh-CN")}</p>
-        <h2>三方案比较</h2>
+        <h2>装柜方案一览</h2>
         <table className="print-table">
           <thead>
             <tr><th>方案</th><th>推荐方案</th><th>装入件数</th><th>体积利用率</th><th>重量利用率</th><th>重心偏差</th><th>装载步骤</th></tr>

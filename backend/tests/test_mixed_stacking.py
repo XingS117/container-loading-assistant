@@ -618,7 +618,7 @@ def test_rotatable_pallets_mixed_order_no_layout_failure():
 
     response = pack_order(request)
 
-    assert len(response.solutions) == 3
+    assert len(response.solutions) == 5
     for solution in response.solutions:
         result = validate_solution(
             container, items, solution.placements, request.item_gap_mm
@@ -642,7 +642,7 @@ def test_rotatable_pallet_overflow_does_not_crash():
 
     response = pack_order(request)
 
-    assert len(response.solutions) == 3
+    assert len(response.solutions) == 5
     for solution in response.solutions:
         result = validate_solution(
             container, request.cargo_items, solution.placements, request.item_gap_mm
