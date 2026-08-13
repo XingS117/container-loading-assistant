@@ -226,3 +226,34 @@ def test_door_buffer_disclosed_in_warnings():
     resp0 = pack_order(req)
     for s in resp0.solutions:
         assert not any("柜门预留操作空间" in w for w in s.warnings), s.warnings
+
+
+def test_stackable_pallet_layers_honor_top_load_plus_one():
+    """承重层数 = 能承受的上层数 + 1（底层自身）。
+
+    回归：_build_sku_blocks 曾用 max_top_load // weight（少 +1），把
+    "可叠 2 层"误判成 1 层。280kg/承重 500kg 应叠 2 层（500//280+1=2），
+    否则整托被强制平铺、占满柜长后其它 SKU 装不下（用户实测 63 托剩 14 件）。
+    """
+    def pallet(pid, sku, l, w, h, qty, kg, top_load_kg):
+        return CargoSpec(id=pid, sku=sku, name=sku, kind="pallet", length_mm=l, width_mm=w,
+            height_mm=h, weight_g=kg * 1000, quantity=qty, allowed_orientations=["LWH"],
+            stackable=True, max_layers=5, max_top_load_g=top_load_kg * 1000,
+            fragile=False, must_load=False, unload_order=0)
+
+    req = _req([
+        pallet("c1", "A", 650, 650, 1200, 30, 150, 500),
+        pallet("c2", "B", 890, 750, 1120, 30, 280, 500),
+        pallet("c3", "C", 1080, 800, 1250, 3, 400, 500),
+    ])
+    units = _build_stack_units(req)
+    blocks = _build_sku_blocks(req, units, "fill")
+    layers = {b.sku_id: b.layers for b in blocks}
+    # 500//280+1=2、500//400+1=2：三类托盘都应叠 2 层（高度也允许 2 层）
+    assert layers["c2"] == 2, f"c2 承重层数应为 2，实际 {layers['c2']}"
+    assert layers["c3"] == 2, f"c3 承重层数应为 2，实际 {layers['c3']}"
+    resp = pack_order(req)
+    for s in resp.solutions:
+        assert s.metrics.loaded_pieces == 63, (
+            f"{s.profile} 应全装 63 件，实际 {s.metrics.loaded_pieces}"
+        )

@@ -348,9 +348,11 @@ def _build_sku_blocks(
         # 叠高层数：可叠 + 高度 + 承重（按 max_layers、柜高与 max_top_load 取最小）
         if cargo.stackable and not cargo.fragile:
             max_by_height = available_height // unit.item_height_mm
-            max_by_load = (
-                cargo.max_top_load_g // cargo.weight_g if cargo.max_top_load_g > 0 else 1
-            )
+            # 承重层数 = 能承受的上层数 + 1（底层自身），与 _stack_capacity 的
+            # by_load = max_top_load_g // weight_g + 1 保持一致；缺失 +1 会把
+            # "可叠 2 层"误判成 1 层（如 280kg/承重500kg），导致整托被强制平铺、
+            # 占满柜长后其它 SKU 装不下。
+            max_by_load = cargo.max_top_load_g // cargo.weight_g + 1
             layers = max(1, min(cargo.max_layers, max_by_height, max_by_load))
         else:
             layers = 1
