@@ -7,7 +7,7 @@
 ### 当前结论
 
 - 本轮改造（单方案 + 优化目标偏好开关）已在 `main` 分支完成开发与测试，
-  **尚未部署**；线上 `https://packing.xingshuwen.com` 仍运行旧版四方案接口。
+  并于 2026-08-15 部署到 `https://packing.xingshuwen.com` 并通过线上验证。
 - 生产服务为 `packing-assistant.service`，后端监听 `127.0.0.1:8500`，Nginx 负责 HTTPS 和反向代理。
 - 线上镜像工作树为 `.worktrees/algorithm-rebuild`（不要修改）；算法工作已合并到 `main`。
 - `POST /api/v1/pack` 每次返回**单个方案**，由请求字段
@@ -38,6 +38,13 @@
 - `npm.cmd run build`：通过。
 - Python `compileall`：通过。
 - `git diff --check`：通过。
+- 线上（2026-08-15 部署后）：
+  - `/health` 与 `/api/v1/container-presets` 正常；
+  - X/Y 场景三个目标各一次真实 `POST /api/v1/pack`：均返回单个方案、
+    全装 700 件（high=2 区 2 步、stable=3 区 3 步、easy=2 区 2 步），
+    `request_id` 随目标互异；
+  - `optimization_goal: "strict_support"` 返回 422 `INVALID_REQUEST`；
+  - 首页已服务新构建（JS 含 `optimization_goal` 与三个目标按钮文案）。
 
 ### 当前工作区注意事项
 
@@ -327,6 +334,10 @@ sudo tar --overwrite --no-same-owner --no-same-permissions \
 sudo systemctl restart packing-assistant
 curl -fsS http://127.0.0.1:8500/health
 ```
+
+最近一次发布：2026-08-15（单方案 + 优化目标改造）；发布前旧代码备份在
+服务器 `/tmp/packing-backup-20260815.tar.gz`，回滚时解包回
+`/data/packing-assistant/app` 并重启服务即可。
 
 公网检查：
 
