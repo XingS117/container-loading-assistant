@@ -76,6 +76,7 @@ export function makeSolution(
     pros: [],
     cons: [],
     warnings: [],
+    layout_fingerprint: "0123456789ab",
     ...overrides,
   };
 }

@@ -85,6 +85,8 @@ export interface PackingSolution {
   pros: string[];
   cons: string[];
   warnings: string[];
+  /** 平移归一几何指纹：切换目标后与上一方案对比，相同则披露"布局几何相同" */
+  layout_fingerprint?: string;
 }
 
 export interface PackResponse {

@@ -1,5 +1,5 @@
 import { AlertTriangle, ArrowLeft, CheckCircle2, Printer, RefreshCw } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { LoadVisualizer, StaticLayout } from "./LoadVisualizer";
 import type { CargoInput, ContainerSpec, OptimizationGoal, PackResponse } from "../types";
@@ -33,10 +33,32 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, go
   const [snapshot, setSnapshot] = useState<string | null>(null);
   const [recalculateContainerId, setRecalculateContainerId] = useState(container.id);
   const [recalculateError, setRecalculateError] = useState<string | null>(null);
+  const [identicalNotice, setIdenticalNotice] = useState<string | null>(null);
+  const previousLayoutRef = useRef<{ goal: OptimizationGoal; fingerprint: string } | null>(null);
   const selected = response.solutions[0];
   const cargoById = Object.fromEntries(cargoItems.map((item) => [item.id, item]));
   useEffect(() => {
     setSnapshot(null);
+  }, [response.request_id]);
+  useEffect(() => {
+    // 切换优化目标后对比平移归一指纹：几何相同（或仅整体平移）时披露，
+    // 避免用户看到三个目标产出同一张图却没有任何说明。
+    // StrictMode 双跑幂等：第二次运行时 prev.goal === goal 走 else 分支。
+    const fingerprint = selected.layout_fingerprint ?? "";
+    const previous = previousLayoutRef.current;
+    if (
+      previous !== null
+      && previous.goal !== goal
+      && fingerprint !== ""
+      && previous.fingerprint === fingerprint
+    ) {
+      setIdenticalNotice(
+        `「${GOAL_NAME[goal]}」与「${GOAL_NAME[previous.goal]}」的装载布局几何相同（仅整体平移），当前货物组合下两种目标收敛到同一排布。`
+      );
+    } else {
+      setIdenticalNotice(null);
+    }
+    previousLayoutRef.current = { goal, fingerprint };
   }, [response.request_id]);
   const handleSnapshot = useCallback((dataUrl: string) => {
     setSnapshot(dataUrl);
@@ -100,6 +122,12 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, go
         <p className="balance-warning" role="alert">
           前后重量偏差较大（{selected.metrics.length_imbalance_pct}%），建议切换到「重心稳妥」目标
           <button type="button" className="text-button" onClick={() => handleGoalSwitch("stable")} disabled={recalculating}>立即切换</button>
+        </p>
+      )}
+
+      {identicalNotice && (
+        <p className="identical-layout-notice no-print" data-testid="identical-layout-notice">
+          {identicalNotice}
         </p>
       )}
 

@@ -14,10 +14,12 @@ function renderWorkspace(
   profile: OptimizationGoal = "high_fill",
   options: {
     lengthImbalance?: number;
+    fingerprint?: string;
     onRecalculate?: (container: ContainerSpec, goal: OptimizationGoal) => Promise<void>;
   } = {},
 ) {
   const solution = makeSolution(profile, {
+    layout_fingerprint: options.fingerprint,
     metrics: {
       ...makeSolution(profile).metrics,
       length_imbalance_pct: options.lengthImbalance ?? 0,
@@ -26,7 +28,7 @@ function renderWorkspace(
   });
   const response: PackResponse = makeResponse(profile, { solutions: [solution] });
   const onRecalculate = options.onRecalculate ?? (async () => undefined);
-  render(
+  const view = render(
     <SolutionWorkspace
       response={response}
       container={container}
@@ -38,7 +40,29 @@ function renderWorkspace(
       recalculating={false}
     />,
   );
-  return { onRecalculate, response };
+  /** 模拟父组件切换目标：换 response（新 request_id）与 goal 重新渲染 */
+  const rerenderWith = (nextProfile: OptimizationGoal, nextFingerprint: string) => {
+    const nextSolution = makeSolution(nextProfile, {
+      layout_fingerprint: nextFingerprint,
+    });
+    const nextResponse: PackResponse = makeResponse(nextProfile, {
+      solutions: [nextSolution],
+      request_id: `test-${nextProfile}`,
+    });
+    view.rerender(
+      <SolutionWorkspace
+        response={nextResponse}
+        container={container}
+        presets={presets}
+        cargoItems={cargoItems}
+        goal={nextProfile}
+        onBack={() => undefined}
+        onRecalculate={onRecalculate}
+        recalculating={false}
+      />,
+    );
+  };
+  return { onRecalculate, response, rerenderWith };
 }
 
 
@@ -102,4 +126,39 @@ test("hides balance warning when balanced", () => {
   renderWorkspace("easy", { lengthImbalance: 8 });
 
   expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+});
+
+
+test("shows identical-layout notice when switching goals yields the same fingerprint", () => {
+  const { rerenderWith } = renderWorkspace("high_fill", { fingerprint: "same-geometry" });
+
+  expect(screen.queryByTestId("identical-layout-notice")).not.toBeInTheDocument();
+
+  rerenderWith("stable", "same-geometry");
+
+  expect(screen.getByTestId("identical-layout-notice")).toHaveTextContent(
+    "「重心稳妥」与「装载率优先」的装载布局几何相同（仅整体平移）",
+  );
+});
+
+
+test("hides identical-layout notice when fingerprints differ", () => {
+  const { rerenderWith } = renderWorkspace("high_fill", { fingerprint: "geometry-a" });
+
+  rerenderWith("easy", "geometry-b");
+
+  expect(screen.queryByTestId("identical-layout-notice")).not.toBeInTheDocument();
+});
+
+
+test("hides identical-layout notice on initial render and same-goal recalculation", () => {
+  const { rerenderWith } = renderWorkspace("stable", { fingerprint: "geometry-a" });
+
+  // 初始渲染不显示
+  expect(screen.queryByTestId("identical-layout-notice")).not.toBeInTheDocument();
+
+  // 同目标重算（request_id 变化但目标不变、指纹相同）也不显示
+  rerenderWith("stable", "geometry-a");
+
+  expect(screen.queryByTestId("identical-layout-notice")).not.toBeInTheDocument();
 });

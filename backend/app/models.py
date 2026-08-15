@@ -157,6 +157,9 @@ class PackingSolution(BaseModel):
     pros: list[str]
     cons: list[str]
     warnings: list[str] = Field(default_factory=list)
+    # 平移归一几何指纹（sha256[:12]）：不含 step/坐标绝对值，整体平移或仅
+    # 步骤分组不同时指纹相同；前端跨目标切换时据此披露"布局几何相同"。
+    layout_fingerprint: str = ""
 
 
 class PackResponse(BaseModel):

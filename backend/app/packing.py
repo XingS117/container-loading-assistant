@@ -1058,9 +1058,128 @@ def _center_stacks(request: PackRequest, stacks: list[PackedStack]) -> list[Pack
     max_y = max(stack.y_mm + stack.width_mm for stack in stacks)
     dx = round(target_x - cg_x)
     dy = round(target_y - cg_y)
-    dx = max(c - min_x, min(dx, request.container.inner_length_mm - c - max_x))
+    # x 向上限留出 door_buffer（门端操作空间），与 _center_lengthwise 一致
+    door_limit = request.container.inner_length_mm - request.door_buffer_mm - c
+    dx = max(c - min_x, min(dx, door_limit - max_x))
     dy = max(c - min_y, min(dy, request.container.inner_width_mm - c - max_y))
     return [replace(stack, x_mm=stack.x_mm + dx, y_mm=stack.y_mm + dy) for stack in stacks]
+
+
+def _layout_fingerprint(placements: list[Placement]) -> str:
+    """平移归一几何指纹（sha256 前 12 位）。
+
+    坐标减去全局 min_x/min_y 后按 (cargo_id, z_mm, x_mm, y_mm) 排序序列化，
+    因此整体平移后指纹不变；不含 step，所以"仅装载步骤分组不同"的布局指纹
+    也相同。排序键与载荷都不含 instance_index——实例编号只是步骤编号工具，
+    不反映几何；实测 1 SKU 30 托的 stable 兜底平移会把 30 个实例的编号洗牌，
+    若含编号会让"同一张图"产生不同指纹，前端该披露时反而漏披露。前端跨目标
+    切换时据此披露"布局几何相同"。
+    """
+    if not placements:
+        return hashlib.sha256(b"empty").hexdigest()[:12]
+    min_x = min(p.x_mm for p in placements)
+    min_y = min(p.y_mm for p in placements)
+    payload = [
+        (
+            p.cargo_id,
+            p.rotation.value,
+            p.x_mm - min_x,
+            p.y_mm - min_y,
+            p.z_mm,
+            p.length_mm,
+            p.width_mm,
+            p.height_mm,
+        )
+        for p in sorted(
+            placements,
+            key=lambda p: (p.cargo_id, p.z_mm, p.x_mm, p.y_mm),
+        )
+    ]
+    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(data).hexdigest()[:12]
+
+
+def _center_lengthwise(
+    request: PackRequest,
+    stacks: list[PackedStack],
+) -> list[PackedStack]:
+    """把布局整体沿柜长平移到柜长中心（仅动 x，y/z/朝向/step 不动）。
+
+    受 clearance 与门端缓冲约束；总长超过可用柜长时原样返回（由调用方的
+    门端检查拒绝）。区域布局（band/shelf）从柜头铺，顶层质心天然偏柜头，
+    居中后再检查"上层集中中间"才有意义。
+    """
+    if not stacks:
+        return stacks
+    c = request.container.clearance_mm
+    door_limit = request.container.inner_length_mm - request.door_buffer_mm - c
+    min_x = min(s.x_mm for s in stacks)
+    max_x = max(s.x_mm + s.length_mm for s in stacks)
+    if max_x - min_x > door_limit - c:
+        return stacks
+    delta = round(request.container.inner_length_mm / 2 - (min_x + max_x) / 2)
+    delta = min(delta, door_limit - max_x)  # 不推过门端限制
+    delta = max(delta, c - min_x)  # 不拉过 clearance
+    return [replace(s, x_mm=s.x_mm + delta) for s in stacks]
+
+
+def _recenter_blocks(
+    request: PackRequest,
+    stacks: list[PackedStack],
+) -> list[PackedStack] | None:
+    """stable 兜底：按 cargo_id 分块、重块居中重排（仅平移 x）。
+
+    各 SKU 组内相对位置不变，y/z/朝向/step 不动——支撑关系与叠层结构
+    天然保持。组按总重量降序，从柜长中心向两侧交替放置（槽位算法与
+    _sku_block_layout 的 balance 模式一致）。
+
+    返回 None：件数 < 2、存在先卸后装约束（禁止跨 SKU 重排）、组数 < 2
+    （无差异空间）、组总长超门限可用长度、或居中起点被 clearance 抬升后
+    最右越界。
+    """
+    if len(stacks) < 2:
+        return None
+    if any(s.unit.cargo.unload_order for s in stacks):
+        return None
+    groups: dict[str, list[PackedStack]] = defaultdict(list)
+    for stack in stacks:
+        # CompositeUnit.cargo 是托盘 cargo，上托散箱随托盘整体移动
+        groups[stack.unit.cargo.id].append(stack)
+    if len(groups) < 2:
+        return None
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    usable_door = request.container.inner_length_mm - request.door_buffer_mm - 2 * c
+    order = sorted(
+        groups,
+        key=lambda gid: (-sum(s.unit.total_weight_g for s in groups[gid]), gid),
+    )
+    spans = {
+        gid: max(s.x_mm + s.length_mm for s in groups[gid]) - min(s.x_mm for s in groups[gid])
+        for gid in groups
+    }
+    total = sum(spans[gid] for gid in order) + gap * (len(order) - 1)
+    if total > usable_door:
+        return None
+    slots = len(order)
+    # 物理槽从左到右 = 离柜长中心越近越靠中间：最重组居中，次重向两侧。
+    order_idx = sorted(range(slots), key=lambda i: (abs(i - (slots - 1) / 2), i))
+    slot_to_weight = [order_idx.index(slot) for slot in range(slots)]
+    slot_x: list[int] = []
+    cursor = max(c, (usable_door - total) // 2)
+    for slot in range(slots):
+        slot_x.append(cursor)
+        cursor += spans[order[slot_to_weight[slot]]] + gap
+    # 起点被 clearance 下界抬升后最右可能越界 → 放弃
+    if slot_x[-1] + spans[order[slot_to_weight[-1]]] > usable_door:
+        return None
+    result: list[PackedStack] = []
+    for weight_rank, gid in enumerate(order):
+        group = groups[gid]
+        delta = slot_x[order_idx[weight_rank]] - min(s.x_mm for s in group)
+        for stack in group:
+            result.append(replace(stack, x_mm=stack.x_mm + delta))
+    return sorted(result, key=lambda s: (s.unit.id, s.z_mm))
 
 
 def _swap_balance(
@@ -2804,6 +2923,7 @@ def _build_solution(
         pros=pros,
         cons=cons,
         warnings=warnings,
+        layout_fingerprint=_layout_fingerprint(placements),
     )
 
 
@@ -2844,18 +2964,22 @@ def pack_order(request: PackRequest) -> PackResponse:
     elif goal == "stable":
         # 契约：保持装载率优先的装入集合（逐 SKU 件数一致），只做配平。
         # 每个候选都按展开后的件数 Counter 与基线比对，丢失货物的候选
-        # 直接淘汰；全部不合格时退回 _center_stacks(high_stacks)（件数
-        # 天然一致，作为最终防线）。
+        # 直接淘汰；与基线几何收敛（平移归一指纹相同）的候选也跳过——
+        # 否则"重心稳妥"对部分订单只输出"装载率优先"的同款布局（用户
+        # 投诉的根因之一）。全部不合格时先试分块居中重排，再退回
+        # _center_stacks(high_stacks)（件数天然一致，作为最终防线）。
         stable_units = _build_stack_units(request, dict(high_counts), "stable")
         merged_stable = _merge_pallet_cartons(request, stable_units)
         limit = request.container.inner_length_mm / 8
+        high_fingerprint = _layout_fingerprint(high_placements)
 
-        def conserves(stacks: list[PackedStack] | None) -> bool:
+        def qualifies(stacks: list[PackedStack] | None) -> bool:
             if stacks is None:
                 return False
+            placements = _expand_stacks(request, stacks, "stable")
             return (
-                Counter(p.cargo_id for p in _expand_stacks(request, stacks, "stable"))
-                == high_counts
+                Counter(p.cargo_id for p in placements) == high_counts
+                and _layout_fingerprint(placements) != high_fingerprint
             )
 
         def repacked_candidate() -> list[PackedStack] | None:
@@ -2885,10 +3009,16 @@ def pack_order(request: PackRequest) -> PackResponse:
             for placement in _expand_stacks(request, stable_blocks, "stable")
         ):
             stable_blocks = None
+        # floor-first 候选（仅当存在叠放）排第一：与基线同款时 qualifies
+        # 会拒绝，随后继续尝试后续配平候选，而不是直接掉进平移兜底。
+        # 例外：有叠放 + 有 unload_order 的订单保持原有单一候选结构——
+        # 配平候选会破坏"先卸靠门"硬分区；无叠放订单的配平链原样保留
+        # （sku_block 对 unload 有硬分区处理）。
+        has_unload = any(item.unload_order for item in request.cargo_items)
         candidate_factories = []
         if stable_blocks is not None:
             candidate_factories.append(lambda: _swap_balance(request, stable_blocks))
-        else:
+        if stable_blocks is None or not has_unload:
             candidate_factories.extend(
                 [
                     lambda: (
@@ -2906,11 +3036,21 @@ def pack_order(request: PackRequest) -> PackResponse:
         stable_stacks = None
         for factory in candidate_factories:
             candidate = factory()
-            if conserves(candidate):
+            if qualifies(candidate):
                 stable_stacks = candidate
                 break
         if stable_stacks is None:
-            stable_stacks = _center_stacks(request, high_stacks)
+            # 分块居中重排（重块居中、组内相对位置不变）：几何与基线不同、
+            # 件数天然守恒；配平不劣于整体平移时才采用，否则退回平移兜底。
+            recentered = _recenter_blocks(request, high_stacks)
+            centered = _center_stacks(request, high_stacks)
+            stable_stacks = (
+                recentered
+                if recentered is not None
+                and _stack_imbalance(request, recentered)
+                <= _stack_imbalance(request, centered)
+                else centered
+            )
         # 散件候选（repack/兜底）无显式 step，按同 SKU 连续段分组，
         # 避免装载步骤/区域碎片化（块布局等已有 step 的布局不受影响）。
         stable_stacks = _assign_sku_block_steps(stable_stacks)
@@ -2927,15 +3067,61 @@ def pack_order(request: PackRequest) -> PackResponse:
             counts = Counter(item.cargo_id for item in _expand_stacks(request, stacks, "easy"))
             return all(counts[cargo_id] >= qty for cargo_id, qty in must_load_qty.items())
 
+        # region 优先：区域布局（每 SKU 一区、分步装载）与"装得多"的混合铺满
+        # 布局几何不同，是"易操作"的核心卖点；此前 easy 块布局常与基线收敛
+        # （用户投诉的根因之一）。四重门只用于决定"是否优先采用 region"，
+        # 不用于禁止回退链采用（旧链语义原样保留）。
+        has_unload = any(item.unload_order for item in request.cargo_items)
         easy_blocks = (
             _pure_pallet_floor_first_layout(request, units, "easy")
             if pure_pallet_order
             else _sku_block_layout(request, high_merged, "easy")
         )
-        if easy_blocks is not None and keeps_must_load(easy_blocks):
+        region_candidate = (
+            None if has_unload else _easy_region_layout(request, high_merged)
+        )
+
+        def region_adoptable(candidate: list[PackedStack] | None) -> bool:
+            if candidate is None:
+                return False
+            placements = _expand_stacks(request, candidate, "easy")
+            # ① 件数守恒：装得和装载率优先基线一样多（不因"易操作"少装）
+            if Counter(p.cargo_id for p in placements) != high_counts:
+                return False
+            # ② 门端约束：region 链不守 door_buffer，此处补查
+            door_limit = (
+                request.container.inner_length_mm
+                - request.door_buffer_mm
+                - request.container.clearance_mm
+            )
+            if any(p.x_mm + p.length_mm > door_limit for p in placements):
+                return False
+            # ③ 叠放订单顶层集中中间（纯落地订单无上层，不查）
+            if any(p.z_mm > request.container.clearance_mm for p in placements):
+                limit = request.container.inner_length_mm / 8
+                if _top_layer_center_deviation(request, candidate) > limit:
+                    return False
+            # ④ 步骤与区域不过度碎片化
+            max_steps = max(4, len(request.cargo_items))
+            if len({p.step for p in placements}) > max_steps:
+                return False
+            if len(_compute_zones(request, placements)) > max_steps:
+                return False
+            return True
+
+        centered_region = (
+            _center_lengthwise(request, region_candidate)
+            if region_candidate is not None
+            else None
+        )
+        if region_adoptable(centered_region):
+            easy_stacks = centered_region
+        elif easy_blocks is not None and keeps_must_load(easy_blocks):
             easy_stacks = easy_blocks
         else:
-            easy_region = _easy_region_layout(request, high_merged)
+            # 回退链原样保留（旧链语义）：region 保必装不施加新门，
+            # 少装披露由末尾的件数对比兜底。
+            easy_region = region_candidate
             if easy_region is not None and keeps_must_load(easy_region):
                 easy_stacks = easy_region
             else:

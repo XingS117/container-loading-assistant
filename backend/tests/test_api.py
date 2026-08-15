@@ -79,6 +79,21 @@ def test_pack_endpoint_returns_requested_goal_solution():
         assert body["solutions"][0]["profile"] == goal
 
 
+def test_pack_endpoint_returns_layout_fingerprint_for_each_goal():
+    import re
+
+    pattern = re.compile(r"^[0-9a-f]{12}$")
+    for goal in ["high_fill", "stable", "easy"]:
+        response = client.post(
+            "/api/v1/pack",
+            json=_small_payload(optimization_goal=goal),
+        )
+
+        assert response.status_code == 200, response.text
+        fingerprint = response.json()["solutions"][0]["layout_fingerprint"]
+        assert pattern.match(fingerprint), f"{goal} 应返回 12 位 hex 布局指纹"
+
+
 def test_pack_endpoint_request_id_varies_with_goal():
     high = client.post("/api/v1/pack", json=_small_payload(optimization_goal="high_fill")).json()
     stable = client.post("/api/v1/pack", json=_small_payload(optimization_goal="stable")).json()
