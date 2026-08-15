@@ -18,7 +18,7 @@ def test_health_and_container_presets():
     assert [item["id"] for item in response.json()] == ["20gp", "40gp", "40hq"]
 
 
-def test_pack_endpoint_returns_four_core_solutions():
+def _small_payload(**overrides):
     payload = {
         "container": {
             "id": "small",
@@ -52,11 +52,48 @@ def test_pack_endpoint_returns_four_core_solutions():
         ],
         "item_gap_mm": 0,
     }
+    payload.update(overrides)
+    return payload
 
-    response = client.post("/api/v1/pack", json=payload)
+
+def test_pack_endpoint_returns_single_high_fill_solution_by_default():
+    response = client.post("/api/v1/pack", json=_small_payload())
 
     assert response.status_code == 200
-    assert len(response.json()["solutions"]) == 4
+    body = response.json()
+    assert len(body["solutions"]) == 1
+    assert body["solutions"][0]["profile"] == "high_fill"
+    assert "identical_to" not in body["solutions"][0]
+
+
+def test_pack_endpoint_returns_requested_goal_solution():
+    for goal in ["high_fill", "stable", "easy"]:
+        response = client.post(
+            "/api/v1/pack",
+            json=_small_payload(optimization_goal=goal),
+        )
+
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert len(body["solutions"]) == 1
+        assert body["solutions"][0]["profile"] == goal
+
+
+def test_pack_endpoint_request_id_varies_with_goal():
+    high = client.post("/api/v1/pack", json=_small_payload(optimization_goal="high_fill")).json()
+    stable = client.post("/api/v1/pack", json=_small_payload(optimization_goal="stable")).json()
+
+    assert high["request_id"] != stable["request_id"]
+
+
+def test_pack_endpoint_rejects_invalid_optimization_goal():
+    response = client.post(
+        "/api/v1/pack",
+        json=_small_payload(optimization_goal="strict_support"),
+    )
+
+    assert response.status_code == 422
+    assert response.json()["error"]["code"] == "INVALID_REQUEST"
 
 
 def test_pack_endpoint_returns_structured_must_load_error():

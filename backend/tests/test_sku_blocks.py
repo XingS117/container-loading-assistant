@@ -1,3 +1,5 @@
+import pytest
+
 from app.models import CargoSpec, ContainerSpec, PackRequest
 from app.packing import (
     _sku_block_layout,
@@ -82,7 +84,8 @@ def test_place_blocks_balance_heavy_center():
     assert abs(hc - center) < abs(lc - center), "重块应比轻块更居中"
 
 
-def test_floor_layer_first_fills_bottom_before_stacking():
+@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
+def test_floor_layer_first_fills_bottom_before_stacking(pack_by_goal, goal):
     """规则回归：无论纯整托/纯散箱/混装，都是先把底层铺满，
     剩余件数才叠到第 2 层集中在中间（不能在底层未铺满时叠高）。"""
     req = _req([
@@ -90,28 +93,27 @@ def test_floor_layer_first_fills_bottom_before_stacking():
         _pallet("p2", "B", 890, 750, 1120, 303, 30),
         _pallet("p3", "C", 1080, 800, 1250, 427, 3),
     ])
-    resp = pack_order(req)
-    for sol in resp.solutions:
-        assert sol.metrics.loaded_pieces == 63, f"{sol.profile} 应全装 63 件"
-        # 底层（z=0）件数 = 底位数：底层应优先铺满，并多于上层件数
-        bottom = [p for p in sol.placements if p.z_mm == 0]
-        upper = [p for p in sol.placements if p.z_mm > 0]
-        assert len(bottom) > len(upper), (
-            f"{sol.profile} 底层仅 {len(bottom)} 底位，未遵循先铺满底层"
-        )
-        # 剩余件数不超底层：底层铺满后才叠上层
-        assert len(upper) < len(bottom), (
-            f"{sol.profile} 上层 {len(upper)} 件过多（底层 {len(bottom)}），未先铺满底层"
-        )
-        # 上层件在各自 SKU 块内集中于中间（两头低中间高）
-        center = 12032 / 2
-        upper_cx = sum(p.x_mm + p.length_mm / 2 for p in upper) / len(upper)
-        assert abs(upper_cx - center) <= 12032 * 0.35, (
-            f"{sol.profile} 上层过于偏置（上层中心 {upper_cx:.0f}）"
-        )
+    sol = pack_by_goal(req, goal)
+    assert sol.metrics.loaded_pieces == 63, f"{sol.profile} 应全装 63 件"
+    # 底层（z=0）件数 = 底位数：底层应优先铺满，并多于上层件数
+    bottom = [p for p in sol.placements if p.z_mm == 0]
+    upper = [p for p in sol.placements if p.z_mm > 0]
+    assert len(bottom) > len(upper), (
+        f"{sol.profile} 底层仅 {len(bottom)} 底位，未遵循先铺满底层"
+    )
+    # 剩余件数不超底层：底层铺满后才叠上层
+    assert len(upper) < len(bottom), (
+        f"{sol.profile} 上层 {len(upper)} 件过多（底层 {len(bottom)}），未先铺满底层"
+    )
+    # 上层件在各自 SKU 块内集中于中间（两头低中间高）
+    center = 12032 / 2
+    upper_cx = sum(p.x_mm + p.length_mm / 2 for p in upper) / len(upper)
+    assert abs(upper_cx - center) <= 12032 * 0.35, (
+        f"{sol.profile} 上层过于偏置（上层中心 {upper_cx:.0f}）"
+    )
 
 
-def test_pack_order_three_solutions_use_sku_blocks():
+def test_three_goals_use_sku_blocks(pack_by_goal):
     req = _req([
         _pallet("p1", "A", 650, 650, 1000, 174, 30),
         _pallet("p2", "B", 890, 750, 1100, 303, 30),
@@ -119,20 +121,17 @@ def test_pack_order_three_solutions_use_sku_blocks():
         _pallet("p4", "D", 1220, 920, 1150, 532, 3),
         _pallet("p5", "E", 1050, 1050, 1100, 500, 3),
     ])
-    resp = pack_order(req)
-    assert len(resp.solutions) == 4
-    for s in resp.solutions:
+    solutions = {goal: pack_by_goal(req, goal) for goal in ["high_fill", "stable", "easy"]}
+    for goal, s in solutions.items():
         # 全装 69 托
-        assert s.metrics.loaded_pieces == 69
+        assert s.metrics.loaded_pieces == 69, f"{goal} 应全装 69 托"
         # 门端缓冲生效：最远件 x + len <= 12032 - 300
         max_x = max(p.x_mm + p.length_mm for p in s.placements)
         assert max_x <= 12032 - 300
-    # 三方案布局互不相同
-    a = resp.solutions[0].placements
-    b = resp.solutions[1].placements
-    c = resp.solutions[2].placements
-    sig = lambda ps: tuple((p.cargo_id, p.x_mm, p.y_mm) for p in ps)
-    assert len({sig(a), sig(b), sig(c)}) == 3, "三方案布局应互不相同"
+    # 三目标布局互不相同
+    def sig(ps):
+        return tuple((p.cargo_id, p.x_mm, p.y_mm) for p in ps)
+    assert len({sig(s.placements) for s in solutions.values()}) == 3, "三目标布局应互不相同"
 
 
 def _carton(id, sku, l, w, h, kg, qty, layers=8):
@@ -160,11 +159,12 @@ def test_mixed_pallet_carton_blocks():
     assert resp.solutions[0].metrics.loaded_pieces == 44
 
 
-def test_composite_rotated_pallet_footprint_synced():
+@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
+def test_composite_rotated_pallet_footprint_synced(pack_by_goal, goal):
     # Critical-1：可旋转托盘（LWH↔WLH，原朝向 750×900 即 length<width）+ 散箱混装。
     # _build_sku_blocks 对占宽更小的朝向 swap 了块 footprint，但 CompositeUnit 放置
     # 分支曾不同步 pallet 长宽/朝向 → 块按 swap 尺寸排位而件按原尺寸展开 → OVERLAP
-    # → 三方案 PackingFailure。修复后 footprint 同步，布局校验通过。
+    # → PackingFailure。修复后 footprint 同步，布局校验通过。
     req = _req([
         CargoSpec(id="p1", sku="P", name="P", kind="pallet", length_mm=750,
             width_mm=900, height_mm=1100, weight_g=175000, quantity=4,
@@ -175,18 +175,17 @@ def test_composite_rotated_pallet_footprint_synced():
             allowed_orientations=["LWH", "WLH"], stackable=True, max_layers=3,
             max_top_load_g=50000000, fragile=False, must_load=False),
     ])
-    resp = pack_order(req)
-    assert len(resp.solutions) == 4
-    for s in resp.solutions:
-        assert s.metrics.loaded_pieces == 28, f"{s.profile} 未全装 28 件"
-        v = validate_solution(
-            req.container, req.cargo_items, s.placements,
-            item_gap_mm=req.item_gap_mm,
-        )
-        assert v.valid, f"{s.profile} 布局校验失败: {[e.code for e in v.errors]}"
+    s = pack_by_goal(req, goal)
+    assert s.metrics.loaded_pieces == 28, f"{s.profile} 未全装 28 件"
+    v = validate_solution(
+        req.container, req.cargo_items, s.placements,
+        item_gap_mm=req.item_gap_mm,
+    )
+    assert v.valid, f"{s.profile} 布局校验失败: {[e.code for e in v.errors]}"
 
 
-def test_balance_center_slot_respects_clearance():
+@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
+def test_balance_center_slot_respects_clearance(pack_by_goal, goal):
     # Critical-2：balance 中心槽起点只保证 ≥0 不保证 ≥clearance。单块总长
     # 11000 落在 (inner_length-4c-door_buffer, inner_length-2c-door_buffer] 区间时，
     # (usable_length-door_buffer-total_len)//2=166 < clearance=200 → 最左块越界
@@ -208,27 +207,24 @@ def test_balance_center_slot_respects_clearance():
     assert max(s.x_mm + s.length_mm for s in stacks) <= (
         req.container.inner_length_mm - 2 * req.container.clearance_mm - req.door_buffer_mm
     )
-    resp = pack_order(req)
-    assert len(resp.solutions) == 4
-    for s in resp.solutions:
-        assert s.metrics.loaded_pieces == 11
+    s = pack_by_goal(req, goal)
+    assert s.metrics.loaded_pieces == 11
 
 
-def test_door_buffer_disclosed_in_warnings():
+@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
+def test_door_buffer_disclosed_in_warnings(pack_by_goal, goal):
     # Important-3：规格 §3.2 要求柜门预留操作空间进 warnings/cons 披露
     req = _req([_carton("ca", "CA", 500, 400, 400, 10, 40)])
-    resp = pack_order(req)
-    assert len(resp.solutions) == 4
-    for s in resp.solutions:
-        assert any("柜门预留操作空间" in w and "300" in w for w in s.warnings), s.warnings
+    s = pack_by_goal(req, goal)
+    assert any("柜门预留操作空间" in w and "300" in w for w in s.warnings), s.warnings
     # door_buffer=0（关闭）时不披露
     req.door_buffer_mm = 0
-    resp0 = pack_order(req)
-    for s in resp0.solutions:
-        assert not any("柜门预留操作空间" in w for w in s.warnings), s.warnings
+    s0 = pack_by_goal(req, goal)
+    assert not any("柜门预留操作空间" in w for w in s0.warnings), s0.warnings
 
 
-def test_stackable_pallet_layers_honor_top_load_plus_one():
+@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
+def test_stackable_pallet_layers_honor_top_load_plus_one(pack_by_goal, goal):
     """承重层数 = 能承受的上层数 + 1（底层自身）。
 
     回归：_build_sku_blocks 曾用 max_top_load // weight（少 +1），把
@@ -252,11 +248,10 @@ def test_stackable_pallet_layers_honor_top_load_plus_one():
     # 500//280+1=2、500//400+1=2：三类托盘都应叠 2 层（高度也允许 2 层）
     assert layers["c2"] == 2, f"c2 承重层数应为 2，实际 {layers['c2']}"
     assert layers["c3"] == 2, f"c3 承重层数应为 2，实际 {layers['c3']}"
-    resp = pack_order(req)
-    for s in resp.solutions:
-        assert s.metrics.loaded_pieces == 63, (
-            f"{s.profile} 应全装 63 件，实际 {s.metrics.loaded_pieces}"
-        )
+    s = pack_by_goal(req, goal)
+    assert s.metrics.loaded_pieces == 63, (
+        f"{s.profile} 应全装 63 件，实际 {s.metrics.loaded_pieces}"
+    )
 
 
 def test_legacy_interstack_fields_do_not_create_formal_interstack_solution():
@@ -274,21 +269,20 @@ def test_legacy_interstack_fields_do_not_create_formal_interstack_solution():
     req.support_coverage_min = 0.7
     req.overhang_ratio_max = 0.2
     resp = pack_order(req)
-    by_profile = {s.profile: s for s in resp.solutions}
-    assert list(by_profile) == ["high_fill", "stable", "easy", "strict_support"]
-    assert len(resp.solutions) == 4
-    for s in resp.solutions:
-        v = validate_solution(
-            req.container, req.cargo_items, s.placements,
-            item_gap_mm=req.item_gap_mm,
-        )
-        assert v.valid, f"{s.profile} 布局校验失败: {[e.code for e in v.errors]}"
+    assert len(resp.solutions) == 1
+    s = resp.solutions[0]
+    assert s.profile == "high_fill"
+    v = validate_solution(
+        req.container, req.cargo_items, s.placements,
+        item_gap_mm=req.item_gap_mm,
+    )
+    assert v.valid, f"{s.profile} 布局校验失败: {[e.code for e in v.errors]}"
 
 
-def test_disable_interstack_returns_four_solutions():
-    """关闭互叠开关后只输出 4 个方案（不含 interstack）。"""
+def test_disable_interstack_returns_single_solution():
+    """关闭互叠开关后只返回默认目标的单个方案。"""
     req = _req([_pallet("p1", "A", 650, 650, 1000, 174, 30)])
     req.enable_interstack = False
     resp = pack_order(req)
     profiles = [s.profile for s in resp.solutions]
-    assert profiles == ["high_fill", "stable", "easy", "strict_support"], profiles
+    assert profiles == ["high_fill"], profiles

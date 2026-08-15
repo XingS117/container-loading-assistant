@@ -41,28 +41,39 @@ def boxes(quantity: int = 2, **overrides) -> CargoSpec:
     return CargoSpec(**values)
 
 
-def test_returns_four_deterministic_valid_solutions():
+def test_returns_single_deterministic_valid_solution_by_default():
     request = PackRequest(container=small_container(), cargo_items=[boxes()])
 
     first = pack_order(request)
     second = pack_order(request)
 
-    assert [solution.profile for solution in first.solutions] == [
-        "high_fill",
-        "stable",
-        "easy",
-        "strict_support",
-    ]
+    assert len(first.solutions) == 1
+    assert first.solutions[0].profile == "high_fill"
     assert first.model_dump() == second.model_dump()
-    for solution in first.solutions:
-        assert solution.loaded_counts == {"box-a": 2}
-        assert solution.unloaded_counts == {"box-a": 0}
-        assert solution.metrics.loaded_pieces == 2
-        assert validate_solution(
-            request.container,
-            request.cargo_items,
-            solution.placements,
-        ).valid
+    solution = first.solutions[0]
+    assert solution.loaded_counts == {"box-a": 2}
+    assert solution.unloaded_counts == {"box-a": 0}
+    assert solution.metrics.loaded_pieces == 2
+    assert validate_solution(
+        request.container,
+        request.cargo_items,
+        solution.placements,
+    ).valid
+
+
+@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
+def test_every_goal_returns_one_valid_solution(pack_by_goal, goal):
+    request = PackRequest(container=small_container(), cargo_items=[boxes()])
+
+    solution = pack_by_goal(request, goal)
+
+    assert solution.profile == goal
+    assert solution.loaded_counts == {"box-a": 2}
+    assert validate_solution(
+        request.container,
+        request.cargo_items,
+        solution.placements,
+    ).valid
 
 
 def test_reports_unloaded_quantity_when_order_exceeds_container():
@@ -70,9 +81,10 @@ def test_reports_unloaded_quantity_when_order_exceeds_container():
 
     response = pack_order(request)
 
-    for solution in response.solutions:
-        assert solution.loaded_counts == {"box-a": 2}
-        assert solution.unloaded_counts == {"box-a": 1}
+    assert len(response.solutions) == 1
+    solution = response.solutions[0]
+    assert solution.loaded_counts == {"box-a": 2}
+    assert solution.unloaded_counts == {"box-a": 1}
 
 
 def test_rejects_order_when_must_load_cargo_cannot_fit():
@@ -123,11 +135,9 @@ def test_packs_cartons_and_whole_pallets_together():
 
     response = pack_order(request)
 
-    assert response.solutions[0].loaded_counts == {"box-a": 4, "pallet-b": 1}
-    assert all(
-        validate_solution(container, request.cargo_items, solution.placements).valid
-        for solution in response.solutions
-    )
+    solution = response.solutions[0]
+    assert solution.loaded_counts == {"box-a": 4, "pallet-b": 1}
+    assert validate_solution(container, request.cargo_items, solution.placements).valid
 
 
 def test_uses_mixed_horizontal_orientations_for_the_same_sku():
@@ -151,8 +161,9 @@ def test_uses_mixed_horizontal_orientations_for_the_same_sku():
 
     response = pack_order(PackRequest(container=container, cargo_items=[item]))
 
-    assert response.solutions[0].loaded_counts["box-a"] == 3
-    assert {placement.rotation.value for placement in response.solutions[0].placements} == {"LWH", "WLH"}
+    solution = response.solutions[0]
+    assert solution.loaded_counts["box-a"] == 3
+    assert {placement.rotation.value for placement in solution.placements} == {"LWH", "WLH"}
 
 
 def test_rotatable_cargo_still_rotates_when_another_sku_has_fixed_orientation():
@@ -188,8 +199,9 @@ def test_rotatable_cargo_still_rotates_when_another_sku_has_fixed_orientation():
     response = pack_order(PackRequest(container=container, cargo_items=[fixed, rotatable]))
 
     # 分层铺满贪心：固定朝向货物占满柜宽后，可旋转货物在该小柜最多平铺 2 件
-    assert response.solutions[0].loaded_counts == {"fixed": 1, "rotatable": 2}
-    assert response.solutions[0].metrics.loaded_pieces == 3
+    solution = response.solutions[0]
+    assert solution.loaded_counts == {"fixed": 1, "rotatable": 2}
+    assert solution.metrics.loaded_pieces == 3
 
 
 def test_considers_lighter_combination_instead_of_pretrimming_by_volume():
@@ -227,7 +239,7 @@ def test_considers_lighter_combination_instead_of_pretrimming_by_volume():
     assert response.solutions[0].loaded_counts == {"heavy": 0, "light": 2}
 
 
-def test_stable_solution_can_lower_vertical_center_of_gravity():
+def test_stable_solution_can_lower_vertical_center_of_gravity(pack_by_goal):
     container = ContainerSpec(
         id="vertical-balance",
         name="垂直重心测试柜",
@@ -248,12 +260,13 @@ def test_stable_solution_can_lower_vertical_center_of_gravity():
         max_layers=5,
         max_top_load_g=500_000,
     )
+    request = PackRequest(container=container, cargo_items=[item])
 
-    response = pack_order(PackRequest(container=container, cargo_items=[item]))
+    high_fill = pack_by_goal(request, "high_fill")
+    stable = pack_by_goal(request, "stable")
 
-    high_fill, stable = response.solutions[:2]
     assert stable.loaded_counts == high_fill.loaded_counts
-    # 分层铺满（floor-layer-first）下货物浅铺：三方案垂直重心差异小
+    # 分层铺满（floor-layer-first）下货物浅铺：两目标垂直重心差异小
     assert abs(
         stable.metrics.center_of_gravity.z_mm - high_fill.metrics.center_of_gravity.z_mm
     ) <= 100
@@ -310,7 +323,8 @@ def test_metrics_include_length_and_width_imbalance():
     )
 
 
-def test_solution_zones_account_for_every_loaded_piece():
+@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
+def test_solution_zones_account_for_every_loaded_piece(pack_by_goal, goal):
     container = ContainerSpec(
         id="zones",
         name="区域测试柜",
@@ -333,17 +347,16 @@ def test_solution_zones_account_for_every_loaded_piece():
     )
     request = PackRequest(container=container, cargo_items=[carton])
 
-    response = pack_order(request)
+    solution = pack_by_goal(request, goal)
 
-    for solution in response.solutions:
-        assert solution.zones
-        assert sum(zone.piece_count for zone in solution.zones) == len(
-            solution.placements
-        )
-        assert all(zone.step >= 1 for zone in solution.zones)
+    assert solution.zones
+    assert sum(zone.piece_count for zone in solution.zones) == len(
+        solution.placements
+    )
+    assert all(zone.step >= 1 for zone in solution.zones)
 
 
-def test_stable_balances_pallet_weights_along_length():
+def test_stable_balances_pallet_weights_along_length(pack_by_goal):
     request = PackRequest(
         container=forty_gp(),
         cargo_items=[
@@ -352,12 +365,11 @@ def test_stable_balances_pallet_weights_along_length():
         ],
     )
 
-    response = pack_order(request)
-    high_fill, stable = response.solutions[:2]
+    high_fill = pack_by_goal(request, "high_fill")
+    stable = pack_by_goal(request, "stable")
 
     assert stable.loaded_counts == high_fill.loaded_counts
     assert stable.metrics.length_imbalance_pct <= 5
-    assert stable.identical_to != "high_fill"
     assert validate_solution(
         request.container,
         request.cargo_items,
@@ -365,7 +377,7 @@ def test_stable_balances_pallet_weights_along_length():
     ).valid
 
 
-def test_stable_improves_on_asymmetric_pallet_weights():
+def test_stable_improves_on_asymmetric_pallet_weights(pack_by_goal):
     request = PackRequest(
         container=forty_gp(),
         cargo_items=[
@@ -374,14 +386,14 @@ def test_stable_improves_on_asymmetric_pallet_weights():
         ],
     )
 
-    response = pack_order(request)
-    high_fill, stable = response.solutions[:2]
+    high_fill = pack_by_goal(request, "high_fill")
+    stable = pack_by_goal(request, "stable")
 
     assert stable.loaded_counts == high_fill.loaded_counts
     assert stable.metrics.length_imbalance_pct <= 5
 
 
-def test_stable_uses_balancing_grid_for_pallet_only_order():
+def test_stable_uses_balancing_grid_for_pallet_only_order(pack_by_goal):
     container = ContainerSpec(
         id="20gp",
         name="20GP",
@@ -400,8 +412,7 @@ def test_stable_uses_balancing_grid_for_pallet_only_order():
         ],
     )
 
-    response = pack_order(request)
-    stable = response.solutions[1]
+    stable = pack_by_goal(request, "stable")
 
     assert stable.metrics.length_imbalance_pct <= 5
     assert stable.metrics.loading_steps == 2  # SKU 块布局：每 SKU 一块一步
@@ -412,7 +423,7 @@ def test_stable_uses_balancing_grid_for_pallet_only_order():
     ).valid
 
 
-def test_easy_keeps_all_pallet_pieces():
+def test_easy_keeps_all_pallet_pieces(pack_by_goal):
     request = PackRequest(
         container=forty_gp(),
         cargo_items=[
@@ -421,13 +432,12 @@ def test_easy_keeps_all_pallet_pieces():
         ],
     )
 
-    response = pack_order(request)
-    easy = response.solutions[2]
+    easy = pack_by_goal(request, "easy")
 
     assert easy.loaded_counts == {"heavy": 11, "light": 11}
 
 
-def test_easy_keeps_same_pieces_when_region_layout_fits():
+def test_easy_keeps_same_pieces_when_region_layout_fits(pack_by_goal):
     container = ContainerSpec(
         id="easy-simple",
         name="易操作简单柜",
@@ -468,14 +478,14 @@ def test_easy_keeps_same_pieces_when_region_layout_fits():
         ],
     )
 
-    response = pack_order(request)
-    high_fill, _, easy = response.solutions[:3]
+    high_fill = pack_by_goal(request, "high_fill")
+    easy = pack_by_goal(request, "easy")
 
     assert easy.loaded_counts == high_fill.loaded_counts
     assert len(easy.zones) == 2
 
 
-def test_easy_drops_pieces_for_dense_order_and_discloses():
+def test_easy_reduces_zones_and_steps_for_dense_order_and_discloses(pack_by_goal):
     container = ContainerSpec(
         id="20gp",
         name="20GP",
@@ -513,12 +523,14 @@ def test_easy_drops_pieces_for_dense_order_and_discloses():
         item_gap_mm=5,
     )
 
-    response = pack_order(request)
-    high_fill, _, easy = response.solutions[:3]
+    high_fill = pack_by_goal(request, "high_fill")
+    easy = pack_by_goal(request, "easy")
 
     assert easy.metrics.loaded_pieces <= high_fill.metrics.loaded_pieces
     assert len(easy.zones) < len(high_fill.zones)
     assert easy.metrics.loading_steps <= high_fill.metrics.loading_steps
+    if easy.metrics.loaded_pieces < high_fill.metrics.loaded_pieces:
+        assert any("少装" in con for con in easy.cons), easy.cons
     assert validate_solution(
         request.container,
         request.cargo_items,
@@ -526,7 +538,7 @@ def test_easy_drops_pieces_for_dense_order_and_discloses():
     ).valid
 
 
-def test_easy_fallback_keeps_must_load_counts():
+def test_easy_fallback_keeps_must_load_counts(pack_by_goal):
     container = ContainerSpec(
         id="20gp",
         name="20GP",
@@ -570,8 +582,8 @@ def test_easy_fallback_keeps_must_load_counts():
         ],
     )
 
-    response = pack_order(request)
-    high_fill, _, easy = response.solutions[:3]
+    high_fill = pack_by_goal(request, "high_fill")
+    easy = pack_by_goal(request, "easy")
 
     assert easy.loaded_counts == high_fill.loaded_counts
     assert easy.loaded_counts["must"] == 48
