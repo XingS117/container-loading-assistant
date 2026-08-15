@@ -52,7 +52,9 @@
 - 前端测试：21 项通过（含 `SolutionWorkspace` 披露提示条 3 条）。
 - `npm.cmd run build`：通过。
 - 实测三目标指纹对照（`_temp/diag_*.py`，40HQ，door_buffer=300）：
-  - X/Y 700 散箱、A/B/C 63 托、2 SKU 60 托、4/5 SKU 整托：三目标两两几何互异。
+  - A/B/C 63 托、2 SKU 60 托、4/5 SKU 整托：三目标两两几何互异。
+  - X/Y 700 散箱：stable 互异；easy 与 high 收敛 → 披露（region 布局
+    顶层集中偏差 3175 > 1504 被门③拒绝——遵守三原则优先于制造差异）。
   - 1 SKU 30 托：high 与 stable/easy 互异（stable 前后 46%→0%），
     stable 与 easy 收敛为同一居中排布 → 披露。
   - 4 SKU 20×4 装不下（26 托）：三目标几何相同 → 披露。
@@ -67,6 +69,15 @@
     `request_id` 随目标互异；
   - `optimization_goal: "strict_support"` 返回 422 `INVALID_REQUEST`；
   - 首页已服务新构建（JS 含 `optimization_goal` 与三个目标按钮文案）。
+- 线上复测（2026-08-15 第二次发布后，`_temp/deploy_verify2.py`）：
+  - 每个方案均返回 12 位 hex `layout_fingerprint`；
+  - X/Y 700：high/stable 互异，high/easy 收敛（披露）✓；
+  - 1 SKU 30 托：high 与 stable/easy 互异（stable 前后 46%→0%），
+    stable/easy 收敛（披露）✓；
+  - 2 SKU 60 托：三目标两两互异 ✓；
+  - 4 SKU 装不下、2 SKU 全不可叠：按预期收敛为披露场景 ✓；
+  - 首页新 JS 含 `layout_fingerprint`、`identical-layout-notice` 与
+    "几何相同"披露文案标记 ✓。
 
 ### 当前工作区注意事项
 
@@ -379,9 +390,10 @@ sudo systemctl restart packing-assistant
 curl -fsS http://127.0.0.1:8500/health
 ```
 
-最近一次发布：2026-08-15（单方案 + 优化目标改造）；发布前旧代码备份在
-服务器 `/tmp/packing-backup-20260815.tar.gz`，回滚时解包回
-`/data/packing-assistant/app` 并重启服务即可。
+最近一次发布：2026-08-15 第二次（三目标布局差异化 + 指纹披露）；
+发布前旧代码备份在服务器 `/tmp/packing-backup-20260815b.tar.gz`，
+回滚时解包回 `/data/packing-assistant/app` 并重启服务即可
+（上一版备份 `/tmp/packing-backup-20260815.tar.gz` 仍保留）。
 
 公网检查：
 
