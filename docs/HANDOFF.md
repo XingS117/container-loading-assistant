@@ -14,6 +14,9 @@
   `optimization_goal` 选择优化目标：`high_fill`（装载率优先）、
   `stable`（重心稳妥）、`easy`（易操作），默认 `high_fill`；
   切换目标由前端重新发起计算。
+- 每个方案返回平移归一几何指纹 `layout_fingerprint`（12 位哈希，见 §4）；
+  前端切换目标后对比指纹，几何相同（含仅整体平移/步骤编号不同）时
+  显示"布局几何相同"披露提示，而不是展示两张一样的图不作说明。
 - `strict_support` 已删除：旧请求传 `optimization_goal: "strict_support"`
   会返回 422（INVALID_REQUEST）。
 - 旧版 `enable_interstack`、`support_coverage_min`、`overhang_ratio_max`
@@ -22,6 +25,17 @@
 
 ### 最新变更
 
+- （本次，三目标布局差异化改造，见 §3.5）：修复用户实测发现的三目标
+  布局收敛缺陷。① 后端新增 `_layout_fingerprint` 平移归一几何指纹（含
+  rotation/尺寸，不含 step 与 instance_index——排序键含实例编号曾导致
+  stable 平移兜底洗牌编号后"同一张图"指纹不同而漏披露）；② stable 链
+  候选加 qualifies 门（件数守恒 + 指纹 != 基线），并追加
+  sku_block(balance)+swap / pallet_grid / stable_balance / repack /
+  layer 候选链，兜底升级为 `_recenter_blocks` 真正居中重排
+  （按 cargo_id 分组、重块居中、守 clearance 与 door_buffer）；③ easy 链
+  区域布局优先（`_easy_region_layout`），四重门（件数守恒、门端、叠放时
+  顶层集中 ≤ 柜长/8、步骤/区域数上限）只用于"优先采用"、不禁止回退；
+  ④ 前端 `SolutionWorkspace` 按 request_id 对比前后指纹并披露。
 - `7389f64`：修复两个真实 bug——stable 目标少装 118 件（`_layer_layout`
   柱高分配数学与 stable 回退链顺序）、easy 目标碎片化 37 区（错误复用
   stable 朝向货栈）；X/Y 场景三目标均全装 700 件。
@@ -33,9 +47,17 @@
 
 ### 已验证
 
-- 后端测试：167 项通过。
-- 前端测试：18 项通过。
+- 后端测试：178 项通过（含新增 `test_goal_distinctness.py` 10 条指纹与
+  目标差异回归 + `test_api.py` 指纹端点断言）。
+- 前端测试：21 项通过（含 `SolutionWorkspace` 披露提示条 3 条）。
 - `npm.cmd run build`：通过。
+- 实测三目标指纹对照（`_temp/diag_*.py`，40HQ，door_buffer=300）：
+  - X/Y 700 散箱、A/B/C 63 托、2 SKU 60 托、4/5 SKU 整托：三目标两两几何互异。
+  - 1 SKU 30 托：high 与 stable/easy 互异（stable 前后 46%→0%），
+    stable 与 easy 收敛为同一居中排布 → 披露。
+  - 4 SKU 20×4 装不下（26 托）：三目标几何相同 → 披露。
+  - 2/3 SKU 完全不可叠少量整托：easy 与 high 相同（stable 互异）→ 披露。
+  - 14 个整托形态扫描中 high vs stable 全部互异。
 - Python `compileall`：通过。
 - `git diff --check`：通过。
 - 线上（2026-08-15 部署后）：
@@ -146,12 +168,26 @@
 
 ### 3.5 目标差异
 
-- `high_fill`：按装入件数和体积利用率筛选布局。
-- `stable`：基于 `high_fill` 的装入集合重新排布（同底面互换 / 配平网格 /
-  同单位重排），逐级取第一个保持装入集合不变的候选并做配平，
-  最终防线为 `_center_stacks`（件数天然守恒）。
-- `easy`：块布局 → 区域布局（带/排）→ 重排的候选链，按 SKU 连续区域和
-  装载步骤组织布局；与装载率优先的件数差写入 `cons`「为便于装载少装 N 件」。
+- `high_fill`：按装入件数和体积利用率筛选布局，是另两个目标的基线
+  （件数契约 `high_counts`）。
+- `stable`：基于 `high_fill` 的装入集合重新排布。候选链依次尝试
+  swap(floor_first)、`_sku_block_layout`(balance)+swap、pallet_grid、
+  `_stable_balance_layout`、repack、`_layer_layout`；每个候选必须
+  qualifies（展开后逐 SKU 件数 == `high_counts` 且指纹 != 基线指纹——
+  与基线几何收敛的候选跳过）。全部失败时兜底：`_recenter_blocks`
+  （按 cargo_id 分组重块居中重排，守 clearance 与 door_buffer）与
+  `_center_stacks`（整体平移）取配平更优者。
+- `easy`：**区域布局优先**——`_easy_region_layout` 居中后过四重门
+  （①逐 SKU 件数 == `high_counts` ②最远件不越门端 ③存在叠放时顶层集中
+  偏差 ≤ 柜内长/8 ④步骤数与区域数 ≤ max(4, SKU 数)）即采用；否则回退
+  块布局（easy 策略）与旧链（region 保必装 → stable region → repack →
+  基线）。与装载率优先的件数差写入 `cons`「为便于装载少装 N 件」。
+- 无差异披露：`_layout_fingerprint` 对展开后的 placements 计算平移归一
+  几何指纹（减去 min_x/min_y，按 cargo_id/z/x/y 排序，载荷含朝向与
+  尺寸，不含 step 与 instance_index）。前端切换目标后对比前后指纹，
+  相同（含仅整体平移）即提示"布局几何相同"。个别订单形态（完全不可叠
+  的少量整托、装不下且剩余无法重排等）收敛是货物本身决定的，如实披露
+  而不是假装有差异。
 
 ### 3.6 三条基本原则（所有目标生效，由测试固化）
 
@@ -201,6 +237,9 @@
 - `loaded_counts` / `unloaded_counts`：每个货物 ID 的装入和未装数量。
 - `metrics`：件数、体积利用率、重量利用率、重心、前后左右偏差、步骤数和货区数。
 - `zones`：连续区域清单，供前端图形和打印报告使用。
+- `layout_fingerprint`：平移归一几何指纹（12 位 hex）。整体平移、装载
+  步骤编号或实例编号变化不改变指纹；逐件位置或朝向变化才会改变。
+  前端切换目标后与上一方案对比，相同即披露"布局几何相同"。
 - `pros` / `cons` / `warnings`：由布局指标和质量检查生成。
 
 错误统一为：
@@ -228,6 +267,7 @@ backend/
     packing.py     # 候选生成、目标分支（high_fill/stable/easy）、指标和说明
     validator.py   # 独立物理校验器
   tests/           # API、算法、校验、混装、大订单和目标回归测试
+                   #   test_goal_distinctness.py = 指纹语义 + 三目标差异 + 披露场景
 frontend/src/
   App.tsx
   components/
@@ -277,6 +317,10 @@ README.md
 - `SolutionWorkspace.tsx` 只渲染 `response.solutions[0]`，顶部渲染三个
   优化目标切换按钮；点击非当前目标调用 `onRecalculate(container, goal)`
   重新计算，`recalculating` 时按钮禁用；不得恢复多方案对比或推荐逻辑。
+- 披露提示条：`useRef` 记录上一方案 `{goal, fingerprint}`，
+  `useEffect([response.request_id])` 中在目标切换且指纹相同（且非空）时
+  显示 `.identical-layout-notice`（非 alert、无按钮），否则清除；
+  StrictMode 双跑幂等（第二次 prev.goal === goal 走 else）。
 - `LoadVisualizer.tsx` 的 3D、俯视、侧视和分层图只读取后端 `placements`。
 - `zones` 由后端计算，前端不重新推导另一套布局。
 - Excel 在浏览器内解析，原始 Excel 不上传服务端。
