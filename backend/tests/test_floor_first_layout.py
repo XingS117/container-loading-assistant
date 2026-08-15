@@ -175,6 +175,18 @@ def test_abc_core_profiles_are_distinct_but_keep_the_same_loaded_set():
         for solution in response.solutions
     }
     assert len(signatures) == 4
+    x_signatures = {
+        tuple(
+            (
+                placement.cargo_id,
+                placement.x_mm,
+                placement.z_mm,
+            )
+            for placement in solution.placements
+        )
+        for solution in response.solutions
+    }
+    assert len(x_signatures) == 4
     assert response.solutions[0].metrics.loaded_pieces == 63
     assert response.solutions[1].metrics.loaded_pieces == 63
     assert response.solutions[2].metrics.loaded_pieces == 63

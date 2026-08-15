@@ -1368,7 +1368,15 @@ def _same_sku_band_layout(
         quantity = quantity_by_cargo[cargo_id]
         capacity = capacity_by_cargo[cargo_id]
         minimum = (quantity + capacity - 1) // capacity
-        if strategy == "strict" and cargo_id == middle_id and capacity >= 2:
+        if (
+            strategy == "strict"
+            and cargo_id == middle_id
+            and capacity >= 2
+        ) or (
+            strategy == "easy"
+            and cargo_id == bridge_id
+            and capacity >= 2
+        ):
             return min(quantity, minimum + 3)
         return minimum
 
@@ -1486,7 +1494,7 @@ def _same_sku_band_layout(
             for stack in floor_stacks
             if stack.unit.cargo.id == cargo_id
         ]
-        if strategy == "strict":
+        if strategy in {"strict", "easy"}:
             by_x: dict[int, list[PackedStack]] = defaultdict(list)
             for stack in sorted(
                 candidates,
