@@ -1741,8 +1741,6 @@ def _pure_pallet_floor_first_layout(
         "fill": ("volume", "footprint", "pieces"),
         "stable": ("weight", "volume", "footprint"),
         "easy": ("sku", "pieces", "volume"),
-        # "strict" 仅供 pack_order 的 strict 分支在步骤 2 删除前临时调用
-        "strict": ("volume", "footprint", "pieces"),
     }[strategy]
     candidates: list[tuple[tuple[float, ...], list[PackedStack]]] = []
     for counts in combinations:
@@ -2703,9 +2701,7 @@ def _raise_for_invalid_layout(validation: ValidationResult) -> None:
 def _build_solution(
     request: PackRequest,
     stacks: list[PackedStack],
-    profile: Literal["high_fill", "stable", "easy", "strict_support"],
-    support_coverage_min: float = 1.0,
-    overhang_ratio_max: float = 0.0,
+    profile: Literal["high_fill", "stable", "easy"],
 ) -> PackingSolution:
     placements = _expand_stacks(request, stacks, profile)
     validation = validate_solution(
@@ -2713,8 +2709,6 @@ def _build_solution(
         request.cargo_items,
         placements,
         item_gap_mm=request.item_gap_mm,
-        support_coverage_min=support_coverage_min,
-        overhang_ratio_max=overhang_ratio_max,
     )
     if not validation.valid:
         _raise_for_invalid_layout(validation)
@@ -2729,7 +2723,6 @@ def _build_solution(
         "high_fill": "装载率优先",
         "stable": "重心稳妥",
         "easy": "易操作",
-        "strict_support": "底层优先",
     }
     warnings = []
     if request.door_buffer_mm > 0:
@@ -2759,12 +2752,6 @@ def _build_solution(
         pros = [
             f"装入 {metrics.loaded_pieces} 件，体积利用率 {metrics.volume_utilization_pct}%",
             f"重量利用率 {metrics.weight_utilization_pct}%",
-        ]
-        cons = [f"重心最大偏差 {metrics.weight_imbalance_pct}%"]
-    elif profile == "strict_support":
-        pros = [
-            "优先铺满柜底，剩余上层货物集中在柜体中部",
-            f"装入 {metrics.loaded_pieces} 件，体积利用率 {metrics.volume_utilization_pct}%",
         ]
         cons = [f"重心最大偏差 {metrics.weight_imbalance_pct}%"]
     elif profile == "stable":
@@ -2797,23 +2784,8 @@ def _build_solution(
     )
 
 
-def _layout_signature(solution: PackingSolution) -> tuple:
-    return tuple(
-        sorted(
-            (
-                item.cargo_id,
-                item.instance_index,
-                item.x_mm,
-                item.y_mm,
-                item.z_mm,
-                item.rotation.value,
-            )
-            for item in solution.placements
-        )
-    )
-
-
 def pack_order(request: PackRequest) -> PackResponse:
+    goal = request.optimization_goal
     units = _build_stack_units(request)
     pure_pallet_skus = {unit.cargo.id for unit in units}
     pure_pallet_order = (
@@ -2824,7 +2796,9 @@ def pack_order(request: PackRequest) -> PackResponse:
             for unit in units
         )
     )
-    # 四方案统一优先尝试 SKU 块布局，失败走原回退链
+    # 基线：装载率优先布局。所有目标都先算这条链——
+    # high_fill 直接返回它；stable 以它的装入集合为件数守恒契约；
+    # easy 以它为少装披露基线。
     # 缺陷 B 修复：SKU 块布局改传 merged（散箱上托托盘顶面，轻在上）
     high_merged = _merge_pallet_cartons(request, units)
     high_blocks = (
@@ -2840,120 +2814,127 @@ def pack_order(request: PackRequest) -> PackResponse:
             or _high_fill_candidate(request, units)
         )
     high_placements = _expand_stacks(request, high_stacks, "high_fill")
-    selected_counts = Counter(item.cargo_id for item in high_placements)
-    stable_units = _build_stack_units(request, dict(selected_counts), "stable")
-    merged_stable = _merge_pallet_cartons(request, stable_units)
-    stable_blocks = (
-        _pure_pallet_floor_first_layout(request, stable_units, "stable")
-        if pure_pallet_order
-        else _sku_block_layout(request, merged_stable, "balance")
-    )
-    # floor-first 候选仅当存在叠放（有货位 z > clearance）时才作为配平基础；
-    # 纯落地（不可叠）订单改用 SKU 块配平布局（每 SKU 一块一步）。
-    if stable_blocks is not None and not any(
-        placement.z_mm > request.container.clearance_mm
-        for placement in _expand_stacks(request, stable_blocks, "stable")
-    ):
-        stable_blocks = None
-    if stable_blocks is not None:
-        stable_stacks = _swap_balance(request, stable_blocks)
-    else:
-        balanced = _sku_block_layout(request, merged_stable, "balance")
-        if balanced is not None:
-            stable_stacks = _swap_balance(request, balanced)
-        else:
-            pallet_grid = _pallet_grid_layout(request, stable_units)
-            if pallet_grid is not None:
-                stable_stacks = pallet_grid
-            else:
-                # 混合尺寸纯整托：SKU 块配平布局（重块居中）→ 与"装得多"布局区分
-                balanced_grid = _stable_balance_layout(request, stable_units)
-                if balanced_grid is not None:
-                    stable_stacks = balanced_grid
-                else:
-                    # repack 在 _layer_layout 之前：先保住与"装载率优先"相同
-                    # 的完整集合（repack 只换底位不掉件），再降级分层铺满
-                    # （其柱高分配在底位不足时可能少装）。repack 可能返回
-                    # 空列表（同集合布局不存在），按真值判断落到下一级。
-                    repacked = _repack_same_units(request, merged_stable, "stable")
-                    if repacked:
-                        swapped = _swap_balance(request, repacked)
-                        # 配平互换不得把顶层推到柜长两端（上层集中中间原则）：
-                        # 互换后顶层越界而互换前合格时，保留互换前的布局。
-                        limit = request.container.inner_length_mm / 8
-                        stable_stacks = (
-                            swapped
-                            if _top_layer_center_deviation(request, swapped) <= limit
-                            or _top_layer_center_deviation(request, repacked) > limit
-                            else repacked
-                        )
-                    else:
-                        mixed = _layer_layout(request, merged_stable)
-                        stable_stacks = (
-                            _swap_balance(request, mixed)
-                            if mixed
-                            else _center_stacks(request, high_stacks)
-                        )
-    # easy 链用 high_fill 朝向货栈（compact footprint）：stable 朝向为降
-    # 重心牺牲底面效率，会让块布局超长回退到碎片化货架（37 区问题）。
-    must_load_qty = {item.id: item.quantity for item in request.cargo_items if item.must_load}
+    high_counts = Counter(item.cargo_id for item in high_placements)
 
-    def keeps_must_load(stacks: list[PackedStack]) -> bool:
-        """候选布局是否完整装入所有必装货物（无必装时直接通过）。"""
-        if not must_load_qty:
-            return True
-        counts = Counter(item.cargo_id for item in _expand_stacks(request, stacks, "easy"))
-        return all(counts[cargo_id] >= qty for cargo_id, qty in must_load_qty.items())
+    if goal == "high_fill":
+        solution = _build_solution(request, high_stacks, "high_fill")
+    elif goal == "stable":
+        # 契约：保持装载率优先的装入集合（逐 SKU 件数一致），只做配平。
+        # 每个候选都按展开后的件数 Counter 与基线比对，丢失货物的候选
+        # 直接淘汰；全部不合格时退回 _center_stacks(high_stacks)（件数
+        # 天然一致，作为最终防线）。
+        stable_units = _build_stack_units(request, dict(high_counts), "stable")
+        merged_stable = _merge_pallet_cartons(request, stable_units)
+        limit = request.container.inner_length_mm / 8
 
-    easy_blocks = (
-        _pure_pallet_floor_first_layout(request, units, "easy")
-        if pure_pallet_order
-        else _sku_block_layout(request, high_merged, "easy")
-    )
-    if easy_blocks is not None and keeps_must_load(easy_blocks):
-        easy_stacks = easy_blocks
-    else:
-        easy_region = _easy_region_layout(request, high_merged)
-        if easy_region is not None and keeps_must_load(easy_region):
-            easy_stacks = easy_region
-        else:
-            # 高装载朝向区域布局放不下必装时，退回 stable 朝向区域布局
-            # （排布更宽，可能完整装下必装货物）
-            stable_region = _easy_region_layout(request, merged_stable)
-            if stable_region is not None and keeps_must_load(stable_region):
-                easy_stacks = stable_region
-            else:
-                repacked_easy = _repack_same_units(request, high_merged, "easy")
-                easy_stacks = (
-                    repacked_easy
-                    if repacked_easy is not None and keeps_must_load(repacked_easy)
-                    else high_stacks
-                )
+        def conserves(stacks: list[PackedStack] | None) -> bool:
+            if stacks is None:
+                return False
+            return (
+                Counter(p.cargo_id for p in _expand_stacks(request, stacks, "stable"))
+                == high_counts
+            )
 
-    # 底层优先方案使用独立的 floor-first 候选；无法生成时保持原布局，
-    # 仍由 validate_solution() 保证所有正式方案完整支撑。
-    strict_stacks = (
-        _pure_pallet_floor_first_layout(request, units, "strict")
-        if pure_pallet_order
-        else high_stacks
-    ) or high_stacks
+        def repacked_candidate() -> list[PackedStack] | None:
+            # repack 在 _layer_layout 之前：先保住与"装载率优先"相同的
+            # 完整集合（repack 只换底位不掉件），再降级分层铺满。
+            repacked = _repack_same_units(request, merged_stable, "stable")
+            if not repacked:
+                return None
+            swapped = _swap_balance(request, repacked)
+            # 配平互换不得把顶层推到柜长两端（上层集中中间原则）：
+            # 互换后顶层越界而互换前合格时，保留互换前的布局。
+            if _top_layer_center_deviation(request, swapped) <= limit:
+                return swapped
+            if _top_layer_center_deviation(request, repacked) > limit:
+                return swapped
+            return repacked
 
-    solutions = [
-        _build_solution(request, high_stacks, "high_fill"),
-        _build_solution(request, stable_stacks, "stable"),
-        _build_solution(request, easy_stacks, "easy"),
-        _build_solution(request, strict_stacks, "strict_support"),
-    ]
-    for index, solution in enumerate(solutions):
-        for previous in solutions[:index]:
-            if _layout_signature(solution) == _layout_signature(previous):
-                solution.identical_to = previous.profile
-                break
-    if solutions[2].metrics.loaded_pieces < solutions[0].metrics.loaded_pieces:
-        solutions[2].cons.append(
-            f"为便于装载少装 {solutions[0].metrics.loaded_pieces - solutions[2].metrics.loaded_pieces} 件"
+        stable_blocks = (
+            _pure_pallet_floor_first_layout(request, stable_units, "stable")
+            if pure_pallet_order
+            else _sku_block_layout(request, merged_stable, "balance")
         )
+        # floor-first 候选仅当存在叠放（有货位 z > clearance）时才作为配平
+        # 基础；纯落地（不可叠）订单改用 SKU 块配平布局（每 SKU 一块一步）。
+        if stable_blocks is not None and not any(
+            placement.z_mm > request.container.clearance_mm
+            for placement in _expand_stacks(request, stable_blocks, "stable")
+        ):
+            stable_blocks = None
+        candidate_factories = []
+        if stable_blocks is not None:
+            candidate_factories.append(lambda: _swap_balance(request, stable_blocks))
+        else:
+            candidate_factories.extend(
+                [
+                    lambda: (
+                        _swap_balance(request, balanced)
+                        if (balanced := _sku_block_layout(request, merged_stable, "balance")) is not None
+                        else None
+                    ),
+                    lambda: _pallet_grid_layout(request, stable_units),
+                    # 混合尺寸纯整托：SKU 块配平布局（重块居中）→ 与"装得多"布局区分
+                    lambda: _stable_balance_layout(request, stable_units),
+                    repacked_candidate,
+                    lambda: _layer_layout(request, merged_stable),
+                ]
+            )
+        stable_stacks = None
+        for factory in candidate_factories:
+            candidate = factory()
+            if conserves(candidate):
+                stable_stacks = candidate
+                break
+        if stable_stacks is None:
+            stable_stacks = _center_stacks(request, high_stacks)
+        solution = _build_solution(request, stable_stacks, "stable")
+    else:  # goal == "easy"
+        # easy 链用 high_fill 朝向货栈（compact footprint）：stable 朝向为降
+        # 重心牺牲底面效率，会让块布局超长回退到碎片化货架（37 区问题）。
+        must_load_qty = {item.id: item.quantity for item in request.cargo_items if item.must_load}
 
+        def keeps_must_load(stacks: list[PackedStack]) -> bool:
+            """候选布局是否完整装入所有必装货物（无必装时直接通过）。"""
+            if not must_load_qty:
+                return True
+            counts = Counter(item.cargo_id for item in _expand_stacks(request, stacks, "easy"))
+            return all(counts[cargo_id] >= qty for cargo_id, qty in must_load_qty.items())
+
+        easy_blocks = (
+            _pure_pallet_floor_first_layout(request, units, "easy")
+            if pure_pallet_order
+            else _sku_block_layout(request, high_merged, "easy")
+        )
+        if easy_blocks is not None and keeps_must_load(easy_blocks):
+            easy_stacks = easy_blocks
+        else:
+            easy_region = _easy_region_layout(request, high_merged)
+            if easy_region is not None and keeps_must_load(easy_region):
+                easy_stacks = easy_region
+            else:
+                # 高装载朝向区域布局放不下必装时，退回 stable 朝向区域布局
+                # （排布更宽，可能完整装下必装货物）
+                stable_units = _build_stack_units(request, dict(high_counts), "stable")
+                stable_region = _easy_region_layout(request, _merge_pallet_cartons(request, stable_units))
+                if stable_region is not None and keeps_must_load(stable_region):
+                    easy_stacks = stable_region
+                else:
+                    repacked_easy = _repack_same_units(request, high_merged, "easy")
+                    easy_stacks = (
+                        repacked_easy
+                        if repacked_easy is not None and keeps_must_load(repacked_easy)
+                        else high_stacks
+                    )
+        solution = _build_solution(request, easy_stacks, "easy")
+        # 少装披露：与装载率优先基线的件数差写入"注意"
+        if solution.metrics.loaded_pieces < sum(high_counts.values()):
+            solution.cons.append(
+                f"为便于装载少装 {sum(high_counts.values()) - solution.metrics.loaded_pieces} 件"
+            )
+
+    # optimization_goal 参与 request_id：切换目标时计算结果标识随之变化，
+    # 前端可据此重置展示状态。
     request_json = json.dumps(request.model_dump(mode="json"), sort_keys=True)
     request_id = hashlib.sha256(request_json.encode("utf-8")).hexdigest()[:12]
-    return PackResponse(request_id=request_id, solutions=solutions)
+    return PackResponse(request_id=request_id, solutions=[solution])

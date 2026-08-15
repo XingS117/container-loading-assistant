@@ -99,6 +99,9 @@ class PackRequest(BaseModel):
     item_gap_mm: int = Field(default=0, ge=0, le=1000)
     # 门端操作空间：可用柜长 = 柜长 - door_buffer_mm（默认 300，0=关闭）
     door_buffer_mm: int = Field(default=300, ge=0)
+    # 优化目标偏好：装载率优先 / 重心稳妥 / 易操作。
+    # 每次调用只返回一个方案；切换目标时由前端重新发起计算。
+    optimization_goal: Literal["high_fill", "stable", "easy"] = "high_fill"
     # 旧版互叠参数保留用于兼容请求解析；正式方案始终使用完整支撑约束。
     enable_interstack: bool = Field(default=True)
     # 旧版互叠参数，仅用于兼容请求解析，不改变正式方案安全约束。
@@ -144,7 +147,7 @@ class Zone(BaseModel):
 
 
 class PackingSolution(BaseModel):
-    profile: Literal["high_fill", "stable", "easy", "strict_support"]
+    profile: Literal["high_fill", "stable", "easy"]
     name: str
     placements: list[Placement]
     loaded_counts: dict[str, int]
@@ -154,7 +157,6 @@ class PackingSolution(BaseModel):
     pros: list[str]
     cons: list[str]
     warnings: list[str] = Field(default_factory=list)
-    identical_to: str | None = None
 
 
 class PackResponse(BaseModel):
