@@ -158,6 +158,35 @@ def test_abc_returns_four_named_core_solutions_and_no_interstack():
     assert all(solution.metrics.loaded_pieces == 63 for solution in response.solutions)
 
 
+def test_abc_core_profiles_are_distinct_but_keep_the_same_loaded_set():
+    response = pack_order(abc_request())
+
+    signatures = {
+        tuple(
+            (
+                placement.cargo_id,
+                placement.x_mm,
+                placement.y_mm,
+                placement.z_mm,
+                placement.rotation.value,
+            )
+            for placement in solution.placements
+        )
+        for solution in response.solutions
+    }
+    assert len(signatures) == 4
+    assert response.solutions[0].metrics.loaded_pieces == 63
+    assert response.solutions[1].metrics.loaded_pieces == 63
+    assert response.solutions[2].metrics.loaded_pieces == 63
+    assert response.solutions[3].metrics.loaded_pieces == 63
+
+    bottom_counts = [
+        sum(placement.z_mm == 0 for placement in solution.placements)
+        for solution in response.solutions
+    ]
+    assert bottom_counts[3] > bottom_counts[0]
+
+
 def test_abc_all_core_solutions_are_physically_valid_and_floor_first():
     request = abc_request()
     response = pack_order(request)

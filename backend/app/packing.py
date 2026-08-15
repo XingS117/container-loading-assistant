@@ -1316,6 +1316,7 @@ def _same_sku_band_layout(
     by_cargo: dict[str, StackUnit],
     quantity_by_cargo: Counter[str],
     capacity_by_cargo: dict[str, int],
+    strategy: Literal["fill", "stable", "easy", "strict"],
 ) -> list[PackedStack] | None:
     """Build a deterministic PB-PA-PB-PC style pallet layout.
 
@@ -1366,7 +1367,10 @@ def _same_sku_band_layout(
     def floor_count(cargo_id: str) -> int:
         quantity = quantity_by_cargo[cargo_id]
         capacity = capacity_by_cargo[cargo_id]
-        return (quantity + capacity - 1) // capacity
+        minimum = (quantity + capacity - 1) // capacity
+        if strategy == "strict" and cargo_id == middle_id and capacity >= 2:
+            return min(quantity, minimum + 3)
+        return minimum
 
     bridge_unit = by_cargo[bridge_id]
     middle_unit = by_cargo[middle_id]
@@ -1379,7 +1383,10 @@ def _same_sku_band_layout(
     door_floor = quantity_by_cargo[door_id]
 
     bridge_rows = max(1, (bridge_floor + bridge_columns - 1) // bridge_columns)
-    left_bridge_rows = max(1, bridge_rows // 2)
+    left_bridge_rows = max(
+        1,
+        (bridge_rows + 1) // 2 if strategy == "stable" else bridge_rows // 2,
+    )
     left_bridge_count = min(
         bridge_floor - 1,
         left_bridge_rows * bridge_columns,
@@ -1417,6 +1424,18 @@ def _same_sku_band_layout(
     floor_stacks: list[PackedStack] = []
     next_instance: Counter[str] = Counter()
 
+    def y_start(unit: StackUnit, across: int) -> int:
+        occupied_width = (
+            across * unit.width_mm
+            + max(0, across - 1) * gap
+        )
+        spare_width = max(0, usable_width - occupied_width)
+        if strategy == "stable":
+            return c + spare_width // 2
+        if strategy == "easy":
+            return c + spare_width // 4
+        return c
+
     def add_band(
         unit: StackUnit,
         count: int,
@@ -1424,6 +1443,7 @@ def _same_sku_band_layout(
     ) -> int:
         across = columns(unit)
         rows = max(1, (count + across - 1) // across)
+        band_y_start = y_start(unit, across)
         for index in range(count):
             row, column = divmod(index, across)
             instance_index = next_instance[unit.cargo.id]
@@ -1440,7 +1460,7 @@ def _same_sku_band_layout(
                 PackedStack(
                     unit=one_piece,
                     x_mm=x_start + row * (unit.length_mm + gap),
-                    y_mm=c + column * (unit.width_mm + gap),
+                    y_mm=band_y_start + column * (unit.width_mm + gap),
                     step=1,
                 )
             )
@@ -1461,18 +1481,50 @@ def _same_sku_band_layout(
         remaining = quantity_by_cargo[cargo_id] - next_instance[cargo_id]
         if remaining <= 0:
             continue
-        supports = sorted(
-            (
-                stack
-                for stack in floor_stacks
-                if stack.unit.cargo.id == cargo_id
-            ),
-            key=lambda stack: (
-                abs(stack.x_mm + stack.length_mm / 2 - center_x),
-                abs(stack.y_mm - c),
-                stack.unit.first_instance_index,
-            ),
-        )
+        candidates = [
+            stack
+            for stack in floor_stacks
+            if stack.unit.cargo.id == cargo_id
+        ]
+        if strategy == "strict":
+            by_x: dict[int, list[PackedStack]] = defaultdict(list)
+            for stack in sorted(
+                candidates,
+                key=lambda item: (
+                    item.x_mm,
+                    item.y_mm,
+                    item.unit.first_instance_index,
+                ),
+            ):
+                by_x[stack.x_mm].append(stack)
+            supports = [
+                row[0]
+                for _, row in sorted(by_x.items())
+            ]
+            selected_ids = {id(stack) for stack in supports}
+            supports.extend(
+                sorted(
+                    (
+                        stack
+                        for stack in candidates
+                        if id(stack) not in selected_ids
+                    ),
+                    key=lambda stack: (
+                        abs(stack.x_mm + stack.length_mm / 2 - center_x),
+                        abs(stack.y_mm - c),
+                        stack.unit.first_instance_index,
+                    ),
+                )
+            )
+        else:
+            supports = sorted(
+                candidates,
+                key=lambda stack: (
+                    abs(stack.x_mm + stack.length_mm / 2 - center_x),
+                    abs(stack.y_mm - c),
+                    stack.unit.first_instance_index,
+                ),
+            )
         extra_capacity = capacity_by_cargo[cargo_id] - 1
         for index, support in enumerate(supports):
             if remaining <= 0:
@@ -1514,7 +1566,7 @@ def _same_sku_band_layout(
 def _pure_pallet_floor_first_layout(
     request: PackRequest,
     units: list[StackUnit | CompositeUnit],
-    strategy: Literal["fill", "stable", "easy"],
+    strategy: Literal["fill", "stable", "easy", "strict"],
 ) -> list[PackedStack] | None:
     """Generate floor-first pallet candidates, then stack only on floor slots.
 
@@ -1570,6 +1622,7 @@ def _pure_pallet_floor_first_layout(
         by_cargo,
         quantity_by_cargo,
         capacity_by_cargo,
+        strategy,
     )
     if band_layout is not None:
         return band_layout
@@ -1639,6 +1692,7 @@ def _pure_pallet_floor_first_layout(
         "fill": ("volume", "footprint", "pieces"),
         "stable": ("weight", "volume", "footprint"),
         "easy": ("sku", "pieces", "volume"),
+        "strict": ("volume", "footprint", "pieces"),
     }[strategy]
     candidates: list[tuple[tuple[float, ...], list[PackedStack]]] = []
     for counts in combinations:
@@ -3005,7 +3059,7 @@ def pack_order(request: PackRequest) -> PackResponse:
     # 底层优先方案使用独立的 floor-first 候选；无法生成时保持原布局，
     # 仍由 validate_solution() 保证所有正式方案完整支撑。
     strict_stacks = (
-        _pure_pallet_floor_first_layout(request, units, "fill")
+        _pure_pallet_floor_first_layout(request, units, "strict")
         if pure_pallet_order
         else high_stacks
     ) or high_stacks
