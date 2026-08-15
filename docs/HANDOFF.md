@@ -6,32 +6,38 @@
 
 ### 当前结论
 
-- 项目已完成当前一轮装柜算法重构，并部署到 `https://packing.xingshuwen.com`。
+- 本轮改造（单方案 + 优化目标偏好开关）已在 `main` 分支完成开发与测试，
+  **尚未部署**；线上 `https://packing.xingshuwen.com` 仍运行旧版四方案接口。
 - 生产服务为 `packing-assistant.service`，后端监听 `127.0.0.1:8500`，Nginx 负责 HTTPS 和反向代理。
-- 当前算法工作树为 `codex/container-layout-rebuild`，工作目录为 `.worktrees/algorithm-rebuild`。主分支不要直接覆盖或重置。
-- `POST /api/v1/pack` 正式返回 4 个方案：
-  `high_fill`、`stable`、`easy`、`strict_support`。
-- 当前四个方案的显示名称分别为：
-  「装载率优先」「重心稳妥」「易操作」「底层优先」。
+- 线上镜像工作树为 `.worktrees/algorithm-rebuild`（不要修改）；算法工作已合并到 `main`。
+- `POST /api/v1/pack` 每次返回**单个方案**，由请求字段
+  `optimization_goal` 选择优化目标：`high_fill`（装载率优先）、
+  `stable`（重心稳妥）、`easy`（易操作），默认 `high_fill`；
+  切换目标由前端重新发起计算。
+- `strict_support` 已删除：旧请求传 `optimization_goal: "strict_support"`
+  会返回 422（INVALID_REQUEST）。
 - 旧版 `enable_interstack`、`support_coverage_min`、`overhang_ratio_max`
-  仍可被解析，但仅用于兼容旧调用，不会生成第五个 `interstack` 方案，
-  也不会降低正式方案的完整支撑安全约束。
+  仍可被解析，但仅用于兼容旧调用，不会生成 `interstack` 方案，
+  也不会降低正式方案的完整支撑安全约束；`_interstack_layout` 死代码已清理。
 
 ### 最新变更
 
-- `7b2ec79`：优化同规格叠放与 PB-PA-PB-PC 中部集中布局。
-- `f97c403`：区分四种正式装柜布局策略。
-- `c728a28`：增强四方案的侧视图差异，避免不同方案在视觉上完全相同。
+- `7389f64`：修复两个真实 bug——stable 目标少装 118 件（`_layer_layout`
+  柱高分配数学与 stable 回退链顺序）、easy 目标碎片化 37 区（错误复用
+  stable 朝向货栈）；X/Y 场景三目标均全装 700 件。
+- `2184dd5`：`/api/v1/pack` 收敛为单方案 + `optimization_goal` 目标偏好开关（后端契约）。
+- `ed98368`：stable 散件候选按同 SKU 连续段分组装载步骤（修复 123 步碎片化）。
+- `a8315b9`：后端测试重写为单方案契约，新增 X/Y 端到端、`_layer_layout`
+  柱高数学、`_shelf_layout` 排内纯净化与三原则回归。
+- `76971a0`：前端改为单方案 + 三个优化目标切换按钮（类型/API/组件/测试）。
 
 ### 已验证
 
-- 后端测试：94 项通过。
-- 前端测试：14 项通过。
+- 后端测试：167 项通过。
+- 前端测试：18 项通过。
 - `npm.cmd run build`：通过。
 - Python `compileall`：通过。
 - `git diff --check`：通过。
-- 线上服务状态：`active`。
-- 线上健康检查：`{"status":"ok"}`。
 
 ### 当前工作区注意事项
 
@@ -44,31 +50,34 @@
 ## 1. 项目定位
 
 「装柜方案助手」是面向外贸发货场景的装柜测算工具。用户录入散箱或整托货物后，
-系统按柜型、尺寸、重量、叠放和操作约束生成多种可比较布局。
+系统按柜型、尺寸、重量、叠放和操作约束生成可执行的装柜布局；
+每次计算返回单个方案，并可按优化目标偏好重新计算。
 
 系统使用确定性的启发式算法，不承诺数学意义上的全局最优。实际发货前仍需结合
 真实箱单、柜体铭牌、货物包装强度、现场装卸设备和承运方要求复核。
 
-## 2. 正式方案
+## 2. 优化目标与方案
 
-| Profile ID | 显示名称 | 核心目标 |
+每次 `POST /api/v1/pack` 只返回一个方案；请求字段 `optimization_goal`
+决定使用哪个优化目标（默认 `high_fill`）：
+
+| Goal ID | 显示名称 | 核心目标 |
 | --- | --- | --- |
-| `high_fill` | 装载率优先 | 在满足物理约束的前提下优先装入件数、体积和底层覆盖率 |
-| `stable` | 重心稳妥 | 保持与装载率方案相同的装入货物集合，优先降低前后和左右重心偏差 |
-| `easy` | 易操作 | 优先 SKU 连续区域、较少装载步骤和较少区域切换 |
-| `strict_support` | 底层优先 | 优先铺满柜底，剩余可叠货物集中到柜体中部的对应支撑位置 |
+| `high_fill` | 装载率优先 | 在满足物理约束的前提下优先装入件数和体积 |
+| `stable` | 重心稳妥 | 保持与装载率优先相同的装入货物集合，重新排布以降低前后/左右重心偏差 |
+| `easy` | 易操作 | SKU 连续区域、较少装载步骤；订单过密时允许少装非必装货物并明确披露 |
 
-所有正式方案都必须满足以下硬优先级：
+所有目标都必须满足以下硬优先级：
 
 1. 必装货物完整装入。
 2. 通过 `validate_solution()` 物理校验。
-3. 遵循底层优先规则。
+3. 遵循三条基本原则（见 §3.2/§3.3）：底层先铺满、同规格参数才可叠放、
+   上层集中到柜长中部而不是分散到两边。
 4. 上层货物形成合格的连续区域，不把孤立单件作为正常候选。
-5. 在上述条件满足后，再比较装载率、重心和操作性。
+5. 在上述条件满足后，再按目标比较装载率、重心和操作性。
 
-四个方案可以在货物集合相同的情况下使用不同的底层分带、叠放位置、
-装载顺序和重心策略。若某些场景确实产生相同布局，响应中的 `identical_to`
-会明确标注，不制造虚假的方案差异。
+切换目标由前端重新发起一次计算；`optimization_goal` 参与 `request_id`
+哈希，前端用 `request_id` 变化重置视图状态。
 
 ## 3. 当前算法规则
 
@@ -82,10 +91,10 @@
 - C 类不可叠货物只放在底层。
 - 校验器使用 `STACKING_SPEC_MISMATCH` 拦截不同规格互叠。
 
-### 3.2 底层优先和上层集中
+### 3.2 铺满底层和上层集中
 
 - 先生成底层货位，再处理剩余货物。
-- 底层优先形成连续覆盖区，而不是先在局部位置堆高。
+- 底层先形成连续覆盖区，而不是先在局部位置堆高。
 - 上层货物从柜长方向的中部向两侧展开，优先形成一个主要连续区域。
 - 上层货物优先放到同 SKU、同 footprint 的底层支撑位置正上方。
 - 只有在满足支撑、层数和承重条件时才允许叠放。
@@ -109,7 +118,7 @@
 4. 靠近柜门端的 C 货物，3 托只放底层。
 
 底层完成后，剩余 A、B 分别叠放在各自规格的支撑位置上，
-并尽量从柜长中部向两侧连续展开。该案例 4 个正式方案均装入 63/63 托，
+并尽量从柜长中部向两侧连续展开。该案例三个优化目标均装入 63/63 托，
 上层不放 C，且上层区域通过连续性检查。
 
 ### 3.4 候选生成
@@ -121,19 +130,29 @@
 3. 为纯整托订单优先生成底层分带候选：
    SKU 连续条带、受控混排横排以及高覆盖率二维候选。
 4. 使用 `rectpack` 生成二维底层候选，再由业务规则筛选。
-5. 根据方案目标选择块排序、底层行数、重心位置和装载步骤。
+5. 根据 `optimization_goal` 选择块排序、底层行数、重心位置和装载步骤。
 6. 展开为现有 `Placement` 结构，计算 `zones`、指标和 warning。
-7. 每个正式方案返回前都调用 `validate_solution()`。
+7. 方案返回前调用 `validate_solution()`。
 
 `_expand_stacks()`、`_compute_zones()` 和现有 `Placement` 结构保持不变，
 3D、俯视、侧视、分层图和打印报告直接使用后端返回的 `placements` 与 `zones`。
 
-### 3.5 方案差异
+### 3.5 目标差异
 
-- `high_fill`：按装入件数、体积利用率和底层覆盖率筛选。
-- `stable`：基于 `high_fill` 的装入集合重新排布，优先降低重心偏差。
-- `easy`：按 SKU 连续区域和装载步骤组织布局，必要时才少装非必装货物。
-- `strict_support`：使用独立的底层优先候选，强化底层数量和中部上层集中。
+- `high_fill`：按装入件数和体积利用率筛选布局。
+- `stable`：基于 `high_fill` 的装入集合重新排布（同底面互换 / 配平网格 /
+  同单位重排），逐级取第一个保持装入集合不变的候选并做配平，
+  最终防线为 `_center_stacks`（件数天然守恒）。
+- `easy`：块布局 → 区域布局（带/排）→ 重排的候选链，按 SKU 连续区域和
+  装载步骤组织布局；与装载率优先的件数差写入 `cons`「为便于装载少装 N 件」。
+
+### 3.6 三条基本原则（所有目标生效，由测试固化）
+
+1. 底层先铺满：先把柜底铺满，剩余件数才叠到同规格底位正上方。
+2. 同规格参数才可叠放：同一列内所有件必须同 SKU、同 footprint，
+   校验器用 `STACKING_SPEC_MISMATCH` 拦截不同规格互叠。
+3. 上层集中中间：叠高层从柜长中部向两侧展开，顶层质心距柜长中心
+   不超过 1500 mm（40HQ 场景）。
 
 ## 4. API 约定
 
@@ -143,12 +162,13 @@
 | --- | --- |
 | `GET /health` | 返回 `{"status":"ok"}` |
 | `GET /api/v1/container-presets` | 返回标准柜型 |
-| `POST /api/v1/pack` | 返回 4 个正式装柜方案 |
+| `POST /api/v1/pack` | 返回单个装柜方案（`optimization_goal` 指定目标） |
 
-请求中的旧字段仍保留解析能力：
+请求字段：
 
 ```json
 {
+  "optimization_goal": "stable",
   "door_buffer_mm": 300,
   "enable_interstack": true,
   "support_coverage_min": 0.7,
@@ -157,20 +177,16 @@
 }
 ```
 
-兼容字段说明：
+字段说明：
 
-- `enable_interstack`：无论传入 `true`、`false` 或省略，都不增加第五方案。
+- `optimization_goal`：`high_fill`（默认）/ `stable` / `easy`；其他值返回 422。
+- `enable_interstack`：无论传入 `true`、`false` 或省略，都不增加额外方案。
 - `support_coverage_min`：不改变正式方案的完整支撑安全约束。
 - `overhang_ratio_max`：不改变正式方案的完整支撑安全约束。
 
-响应中的 `solutions` 固定按以下顺序返回：
-
-```text
-high_fill
-stable
-easy
-strict_support
-```
+响应中的 `solutions` 只包含一个方案，其 `profile` 与请求的
+`optimization_goal` 一致；`request_id` 由完整请求 JSON 哈希而来，
+切换目标会得到不同的 `request_id`。
 
 每个方案包含：
 
@@ -179,7 +195,6 @@ strict_support
 - `metrics`：件数、体积利用率、重量利用率、重心、前后左右偏差、步骤数和货区数。
 - `zones`：连续区域清单，供前端图形和打印报告使用。
 - `pros` / `cons` / `warnings`：由布局指标和质量检查生成。
-- `identical_to`：布局签名相同时标记对应的前一个方案。
 
 错误统一为：
 
@@ -203,9 +218,9 @@ backend/
   app/
     main.py        # FastAPI、静态文件、限流、超时和 API
     models.py      # Pydantic 请求/响应模型
-    packing.py     # 候选生成、四方案、指标和说明
+    packing.py     # 候选生成、目标分支（high_fill/stable/easy）、指标和说明
     validator.py   # 独立物理校验器
-  tests/           # API、算法、校验、混装和大订单测试
+  tests/           # API、算法、校验、混装、大订单和目标回归测试
 frontend/src/
   App.tsx
   components/
@@ -249,14 +264,16 @@ README.md
 
 ## 7. 前端实现要点
 
-- `App.tsx` 负责输入、结果和草稿状态，切换到结果页不能丢失输入数据。
+- `App.tsx` 负责输入、结果和草稿状态，切换到结果页不能丢失输入数据；
+  `goal` 状态与结果同批更新，回输入页不重置。
 - `CargoTable.tsx` 的数字输入草稿体验需要保留。
-- `SolutionWorkspace.tsx` 按 `response.solutions` 动态渲染 4 个方案，
-  不得写死第五个互叠方案或相关推荐。
+- `SolutionWorkspace.tsx` 只渲染 `response.solutions[0]`，顶部渲染三个
+  优化目标切换按钮；点击非当前目标调用 `onRecalculate(container, goal)`
+  重新计算，`recalculating` 时按钮禁用；不得恢复多方案对比或推荐逻辑。
 - `LoadVisualizer.tsx` 的 3D、俯视、侧视和分层图只读取后端 `placements`。
 - `zones` 由后端计算，前端不重新推导另一套布局。
 - Excel 在浏览器内解析，原始 Excel 不上传服务端。
-- 打印报告直接使用当前方案的布局和区域数据。
+- 打印报告为单方案版式，直接使用当前方案的布局和区域数据。
 
 ## 8. 本地启动和验证
 
@@ -282,7 +299,7 @@ npm.cmd run build
 ```
 
 前端改动还需检查 390 px 手机、平板和桌面视图，重点确认货物录入、
-4 个方案切换、3D 图、俯视图、侧视图、分层图、Excel 导入和打印。
+3 个优化目标切换、3D 图、俯视图、侧视图、分层图、Excel 导入和打印。
 
 ## 9. 生产部署
 
@@ -319,7 +336,8 @@ curl.exe -fsS https://packing.xingshuwen.com/api/v1/container-presets
 ```
 
 发布前必须先通过本地测试和构建，发布后还需执行一次真实的
-`POST /api/v1/pack`，确认返回 4 个方案且首页静态资源正常。
+`POST /api/v1/pack`，确认返回单个方案（`optimization_goal` 生效、
+`request_id` 随目标变化）且首页静态资源正常。
 
 不要把 SSH 私钥、服务器密码或证书写入代码库、发布包或交接文档。
 
@@ -329,8 +347,9 @@ curl.exe -fsS https://packing.xingshuwen.com/api/v1/container-presets
 2. 修改布局后，必须确认所有正式方案再次通过 `validate_solution()`。
 3. 修改方案 ID 或接口字段时，同步检查 `models.py`、`types.ts`、
    `SolutionWorkspace.tsx` 和相关测试夹具。
-4. 不要恢复 `interstack` 为正式方案，除非重新设计安全规则、API 契约、
-   前端展示和完整回归测试。
+4. 不要恢复 `interstack` 或 `strict_support` 为目标/方案，除非重新设计
+   安全规则、API 契约、前端展示和完整回归测试；也不要恢复一次返回
+   多方案的接口形态（目标切换 = 前端重新发起计算）。
 5. 不要删除或覆盖用户未提交的工作区文件，尤其是 `_temp/` 和测试临时目录。
 
 下一阶段优先使用客户历史装柜单验证：
