@@ -1,5 +1,10 @@
 import { orientationsFor } from "./cargo";
-import type { CargoInput, ContainerSpec, PackResponse } from "../types";
+import type {
+  CargoInput,
+  ContainerSpec,
+  OptimizationGoal,
+  PackResponse,
+} from "../types";
 
 export async function getContainerPresets(): Promise<ContainerSpec[]> {
   const response = await fetch("/api/v1/container-presets");
@@ -11,12 +16,14 @@ export async function packOrder(
   container: ContainerSpec,
   cargoItems: CargoInput[],
   itemGapCm: number,
+  goal: OptimizationGoal = "high_fill",
 ): Promise<PackResponse> {
   const response = await fetch("/api/v1/pack", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       container,
+      optimization_goal: goal,
       item_gap_mm: Math.round(itemGapCm * 10),
       cargo_items: cargoItems.map((item) => ({
         id: item.id,

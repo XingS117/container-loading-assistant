@@ -63,7 +63,6 @@ const solution: PackingSolution = {
   pros: [],
   cons: [],
   warnings: [],
-  identical_to: null,
 };
 
 

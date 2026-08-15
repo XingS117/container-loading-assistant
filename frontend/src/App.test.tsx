@@ -2,62 +2,23 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import App from "./App";
+import { makeContainer, makeResponse } from "./test/fixtures";
 
 
-const preset = {
-  id: "20gp",
-  name: "20GP",
-  inner_length_mm: 5898,
-  inner_width_mm: 2352,
-  inner_height_mm: 2393,
-  door_width_mm: 2340,
-  door_height_mm: 2280,
-  max_payload_g: 28200000,
-  clearance_mm: 0,
-};
-
-const secondPreset = {
+const preset = makeContainer({ id: "20gp", name: "20GP" });
+const secondPreset = makeContainer({
   id: "40hq",
   name: "40HQ",
   inner_length_mm: 12032,
-  inner_width_mm: 2352,
   inner_height_mm: 2698,
-  door_width_mm: 2340,
   door_height_mm: 2585,
   max_payload_g: 28600000,
-  clearance_mm: 0,
-};
+});
 
-const response = {
-  request_id: "abc123",
-  solutions: ["high_fill", "stable", "easy", "strict_support"].map((profile, index) => ({
-    profile,
-    name: ["装载率优先", "重心稳妥", "易操作", "底层优先"][index],
-    placements: [],
-    loaded_counts: { cargo_1: 0 },
-    unloaded_counts: { cargo_1: 10 },
-    metrics: {
-      loaded_pieces: 0,
-      loaded_weight_g: 0,
-      volume_utilization_pct: 0,
-      weight_utilization_pct: 0,
-      center_of_gravity: { x_mm: 0, y_mm: 0, z_mm: 0 },
-      length_imbalance_pct: 0,
-      width_imbalance_pct: 0,
-      weight_imbalance_pct: 0,
-      loading_steps: 0,
-      cargo_zones: 0,
-    },
-    zones: [],
-    pros: ["测试优点"],
-    cons: ["测试缺点"],
-    warnings: [],
-    identical_to: index ? "high_fill" : null,
-  })),
-};
+const response = makeResponse("high_fill");
 
 
-test("loads presets and switches from input to comparable solutions", async () => {
+test("loads presets and switches from input to the single goal solution", async () => {
   vi.spyOn(globalThis, "fetch")
     .mockResolvedValueOnce(new Response(JSON.stringify([preset, secondPreset]), { status: 200 }))
     .mockResolvedValueOnce(new Response(JSON.stringify(response), { status: 200 }))
@@ -72,12 +33,13 @@ test("loads presets and switches from input to comparable solutions", async () =
 
   await userEvent.click(screen.getByRole("button", { name: "生成装柜方案" }));
 
-  await waitFor(() => expect(screen.getByText("方案比较")).toBeInTheDocument());
-  expect(screen.getAllByRole("button", { name: /优先|稳妥|易操作/ })).toHaveLength(4);
-  expect(screen.getByRole("button", { name: /装载率优先/ })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /重心稳妥/ })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /易操作/ })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /底层优先/ })).toBeInTheDocument();
+  await waitFor(() => expect(screen.getByRole("heading", { name: "装柜方案" })).toBeInTheDocument());
+  // 三个优化目标按钮，不再有「底层优先」
+  expect(screen.getAllByRole("button", { name: /装载率优先|重心稳妥|易操作/ })).toHaveLength(3);
+  expect(screen.getByRole("button", { name: /装载率优先/ })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByRole("button", { name: /重心稳妥/ })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.getByRole("button", { name: /易操作/ })).toHaveAttribute("aria-pressed", "false");
+  expect(screen.queryByRole("button", { name: /底层优先/ })).not.toBeInTheDocument();
   expect(screen.queryByText("互叠高装载")).not.toBeInTheDocument();
 
   const containerSelect = screen.getByRole("combobox", { name: "重算柜型" });
@@ -86,6 +48,35 @@ test("loads presets and switches from input to comparable solutions", async () =
 
   await waitFor(() => expect(globalThis.fetch).toHaveBeenCalledTimes(3));
   expect(screen.getByRole("combobox", { name: "重算柜型" })).toHaveValue("40hq");
+});
+
+
+test("switching the goal recalculates with optimization_goal in the request body", async () => {
+  const packBodies: Record<string, unknown>[] = [];
+  vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+    const url = String(input);
+    if (url === "/api/v1/container-presets") {
+      return new Response(JSON.stringify([preset, secondPreset]), { status: 200 });
+    }
+    if (url === "/api/v1/pack") {
+      packBodies.push(JSON.parse(String(init?.body)));
+      return new Response(JSON.stringify(response), { status: 200 });
+    }
+    throw new Error(`未预期的请求: ${url}`);
+  });
+
+  render(<App />);
+  await screen.findByRole("button", { name: /20GP/ });
+
+  await userEvent.click(screen.getByRole("button", { name: "生成装柜方案" }));
+  await screen.findByRole("heading", { name: "装柜方案" });
+  expect(packBodies[0]).toMatchObject({ optimization_goal: "high_fill" });
+
+  await userEvent.click(screen.getByRole("button", { name: /重心稳妥/ }));
+
+  await waitFor(() => expect(packBodies).toHaveLength(2));
+  expect(packBodies[1]).toMatchObject({ optimization_goal: "stable" });
+  expect(screen.getByRole("button", { name: /重心稳妥/ })).toHaveAttribute("aria-pressed", "true");
 });
 
 

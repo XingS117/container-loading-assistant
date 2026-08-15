@@ -9,7 +9,7 @@ import { getContainerPresets, packOrder } from "./lib/api";
 import { createCargo, validateCargo } from "./lib/cargo";
 import { downloadCargoTemplate, readCargoExcel } from "./lib/excel";
 import { trackAnalyticsEvent } from "./lib/analytics";
-import type { CargoInput, ContainerSpec, PackResponse } from "./types";
+import type { CargoInput, ContainerSpec, OptimizationGoal, PackResponse } from "./types";
 
 const STORAGE_KEY = "container-loading-assistant-draft-v1";
 
@@ -37,6 +37,7 @@ export default function App() {
   const [itemGapCm, setItemGapCm] = useState(draft.itemGapCm ?? 0);
   const [clearanceCm, setClearanceCm] = useState(draft.clearanceCm ?? 0);
   const [result, setResult] = useState<PackResponse | null>(null);
+  const [goal, setGoal] = useState<OptimizationGoal>("high_fill");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -58,15 +59,16 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(nextDraft));
   }, [container, cargoItems, itemGapCm, clearanceCm]);
 
-  const calculateFor = async (nextContainer: ContainerSpec) => {
+  const calculateFor = async (nextContainer: ContainerSpec, nextGoal: OptimizationGoal = goal) => {
     const validationError = validateCargo(cargoItems);
     if (validationError) throw new Error(validationError);
     setLoading(true);
     setError(null);
     try {
       const requestContainer = { ...nextContainer, clearance_mm: Math.round(clearanceCm * 10) };
-      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm);
+      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, nextGoal);
       setContainer(nextContainer);
+      setGoal(nextGoal);
       setResult(nextResult);
       trackAnalyticsEvent("pack_solutions_generated");
     } finally {
@@ -77,7 +79,7 @@ export default function App() {
   const calculate = async () => {
     if (!container) return;
     try {
-      await calculateFor(container);
+      await calculateFor(container, goal);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "计算失败，请稍后重试");
     }
@@ -93,7 +95,7 @@ export default function App() {
   };
 
   if (result && container) {
-    return <SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} onBack={() => setResult(null)} onRecalculate={calculateFor} recalculating={loading} />;
+    return <SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} goal={goal} onBack={() => setResult(null)} onRecalculate={calculateFor} recalculating={loading} />;
   }
 
   return (

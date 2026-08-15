@@ -1,7 +1,9 @@
 export type Orientation = "LWH" | "LHW" | "WLH" | "WHL" | "HLW" | "HWL";
 export type CargoKind = "carton" | "pallet";
 export type OrientationMode = "upright" | "side" | "any";
-export type SolutionProfile = "high_fill" | "stable" | "easy" | "strict_support";
+export type SolutionProfile = "high_fill" | "stable" | "easy";
+/** 优化目标偏好：与后端 PackRequest.optimization_goal 对应，切换即重新计算 */
+export type OptimizationGoal = SolutionProfile;
 
 export interface ContainerSpec {
   id: string;
@@ -83,7 +85,6 @@ export interface PackingSolution {
   pros: string[];
   cons: string[];
   warnings: string[];
-  identical_to: SolutionProfile | null;
 }
 
 export interface PackResponse {
