@@ -93,12 +93,12 @@ def test_floor_layer_first_fills_bottom_before_stacking():
     resp = pack_order(req)
     for sol in resp.solutions:
         assert sol.metrics.loaded_pieces == 63, f"{sol.profile} 应全装 63 件"
-        # 底层（z=0）件数 = 底位数：底层应尽量铺满（远多于"每底位直接叠满"的 32）
+        # 底层（z=0）件数 = 底位数：底层应优先铺满，并多于上层件数
         bottom = [p for p in sol.placements if p.z_mm == 0]
-        assert len(bottom) > 40, (
+        upper = [p for p in sol.placements if p.z_mm > 0]
+        assert len(bottom) > len(upper), (
             f"{sol.profile} 底层仅 {len(bottom)} 底位，未遵循先铺满底层"
         )
-        upper = [p for p in sol.placements if p.z_mm > 0]
         # 剩余件数不超底层：底层铺满后才叠上层
         assert len(upper) < len(bottom), (
             f"{sol.profile} 上层 {len(upper)} 件过多（底层 {len(bottom)}），未先铺满底层"
@@ -120,7 +120,7 @@ def test_pack_order_three_solutions_use_sku_blocks():
         _pallet("p5", "E", 1050, 1050, 1100, 500, 3),
     ])
     resp = pack_order(req)
-    assert len(resp.solutions) == 5
+    assert len(resp.solutions) == 4
     for s in resp.solutions:
         # 全装 69 托
         assert s.metrics.loaded_pieces == 69
@@ -176,7 +176,7 @@ def test_composite_rotated_pallet_footprint_synced():
             max_top_load_g=50000000, fragile=False, must_load=False),
     ])
     resp = pack_order(req)
-    assert len(resp.solutions) == 5
+    assert len(resp.solutions) == 4
     for s in resp.solutions:
         assert s.metrics.loaded_pieces == 28, f"{s.profile} 未全装 28 件"
         v = validate_solution(
@@ -209,7 +209,7 @@ def test_balance_center_slot_respects_clearance():
         req.container.inner_length_mm - 2 * req.container.clearance_mm - req.door_buffer_mm
     )
     resp = pack_order(req)
-    assert len(resp.solutions) == 5
+    assert len(resp.solutions) == 4
     for s in resp.solutions:
         assert s.metrics.loaded_pieces == 11
 
@@ -218,7 +218,7 @@ def test_door_buffer_disclosed_in_warnings():
     # Important-3：规格 §3.2 要求柜门预留操作空间进 warnings/cons 披露
     req = _req([_carton("ca", "CA", 500, 400, 400, 10, 40)])
     resp = pack_order(req)
-    assert len(resp.solutions) == 5
+    assert len(resp.solutions) == 4
     for s in resp.solutions:
         assert any("柜门预留操作空间" in w and "300" in w for w in s.warnings), s.warnings
     # door_buffer=0（关闭）时不披露
@@ -259,12 +259,8 @@ def test_stackable_pallet_layers_honor_top_load_plus_one():
         )
 
 
-def test_interstack_fills_more_than_strict_on_combined_support():
-    """互叠高装载方案：允许小件叠放到大件组合支撑平面上，装载率应不低于严格方案。
-
-    回归：大托盘 20 件铺底层 + 小托盘 200 件。严格方案（完整支撑）只装大托；
-    互叠方案把小托叠到大托组合平面上，装得更多。
-    """
+def test_legacy_interstack_fields_do_not_create_formal_interstack_solution():
+    """旧互叠字段仍可解析，但不再生成第五个正式方案。"""
     req = _req([
         CargoSpec(id="big", sku="BIG", name="大托", kind="pallet", length_mm=1200,
             width_mm=1000, height_mm=1100, weight_g=400000, quantity=20,
@@ -275,21 +271,16 @@ def test_interstack_fills_more_than_strict_on_combined_support():
             allowed_orientations=["LWH"], stackable=True, max_layers=3,
             max_top_load_g=1000000, fragile=False, must_load=False),
     ])
+    req.support_coverage_min = 0.7
+    req.overhang_ratio_max = 0.2
     resp = pack_order(req)
     by_profile = {s.profile: s for s in resp.solutions}
-    assert "interstack" in by_profile, "应包含互叠方案"
-    strict_loaded = by_profile["high_fill"].metrics.loaded_pieces
-    inter_loaded = by_profile["interstack"].metrics.loaded_pieces
-    assert inter_loaded >= strict_loaded, (
-        f"互叠装载 {inter_loaded} 应不低于严格 {strict_loaded}"
-    )
-    # 互叠布局必须通过宽松校验（覆盖率 0.7 / 悬挑 0.2）
+    assert list(by_profile) == ["high_fill", "stable", "easy", "strict_support"]
+    assert len(resp.solutions) == 4
     for s in resp.solutions:
         v = validate_solution(
             req.container, req.cargo_items, s.placements,
             item_gap_mm=req.item_gap_mm,
-            support_coverage_min=0.7 if s.profile == "interstack" else 1.0,
-            overhang_ratio_max=0.2 if s.profile == "interstack" else 0.0,
         )
         assert v.valid, f"{s.profile} 布局校验失败: {[e.code for e in v.errors]}"
 

@@ -14,12 +14,18 @@ interface Props {
   recalculating: boolean;
 }
 
+const profileDisplayName: Record<SolutionProfile, string> = {
+  high_fill: "装载率优先",
+  stable: "重心稳妥",
+  easy: "易操作",
+  strict_support: "底层优先",
+};
+
 const profileShortName: Record<SolutionProfile, string> = {
   high_fill: "装载率",
-  stable: "重心偏差",
+  stable: "重心稳妥",
   easy: "装载步骤",
-  strict_support: "完整支撑",
-  interstack: "互叠装载",
+  strict_support: "底层优先",
 };
 
 export function recommendProfile(response: PackResponse): SolutionProfile {
@@ -85,18 +91,15 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
             ? `${solution.metrics.volume_utilization_pct}%`
             : solution.profile === "stable"
               ? `${solution.metrics.weight_imbalance_pct}%`
-              : solution.profile === "interstack"
+              : solution.profile === "strict_support"
                 ? `${solution.metrics.loaded_pieces} 件`
-                : solution.profile === "strict_support"
-                  ? `${solution.metrics.loaded_pieces} 件`
-                  : `${solution.metrics.loading_steps} 步`;
+                : `${solution.metrics.loading_steps} 步`;
           return (
             <button key={solution.profile} type="button" className={`solution-tab ${selected.profile === solution.profile ? "is-active" : ""}`} onClick={() => setSelectedProfile(solution.profile)}>
-              <span className="solution-tab-name">{solution.name}</span>
+              <span className="solution-tab-name">{profileDisplayName[solution.profile]}</span>
               <strong>{primaryValue}</strong>
               <span>{profileShortName[solution.profile]} · {solution.metrics.loaded_pieces} 件</span>
               {recommended === solution.profile && <em className="recommend-badge">推荐</em>}
-              {solution.identical_to && <em>布局与另一方案相同</em>}
             </button>
           );
         })}
@@ -104,7 +107,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
 
       {selected.profile !== "stable" && selected.metrics.length_imbalance_pct > 10 && (
         <p className="balance-warning" role="alert">
-          前后重量偏差较大（{selected.metrics.length_imbalance_pct}%），建议查看「更稳妥」方案
+          前后重量偏差较大（{selected.metrics.length_imbalance_pct}%），建议查看「重心稳妥」方案
         </p>
       )}
 
@@ -146,7 +149,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
           <tbody>
             {response.solutions.map((solution) => (
               <tr key={solution.profile}>
-                <td>{solution.name}</td>
+                <td>{profileDisplayName[solution.profile]}</td>
                 <td>{recommended === solution.profile ? "★" : ""}</td>
                 <td>{solution.metrics.loaded_pieces} 件</td>
                 <td>{solution.metrics.volume_utilization_pct}%</td>
@@ -157,7 +160,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
             ))}
           </tbody>
         </table>
-        <p className="print-recommend">推荐方案：{response.solutions.find((solution) => solution.profile === recommended)?.name}（
+        <p className="print-recommend">推荐方案：{profileDisplayName[recommended]}（
           {recommended === "high_fill" ? "装载率优先" : "在保持装载的前提下降低重心偏差"}）
         </p>
         <h2>货物清单</h2>
@@ -181,12 +184,12 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
 
         {response.solutions.map((solution) => (
           <section className="print-solution-page" key={solution.profile}>
-            <h2>{solution.name}{recommended === solution.profile ? " ★ 推荐" : ""}</h2>
+            <h2>{profileDisplayName[solution.profile]}{recommended === solution.profile ? " ★ 推荐" : ""}</h2>
             <div className="print-pros-cons">
               <div><h3>优点</h3>{solution.pros.map((item) => <p key={item}>{item}</p>)}</div>
               <div><h3>注意</h3>{solution.cons.map((item) => <p key={item}>{item}</p>)}</div>
             </div>
-            {snapshots[solution.profile] && <img className="print-snapshot" src={snapshots[solution.profile]} alt={`${solution.name}三维装柜布局`} />}
+            {snapshots[solution.profile] && <img className="print-snapshot" src={snapshots[solution.profile]} alt={`${profileDisplayName[solution.profile]}三维装柜布局`} />}
             <h3>装柜图（俯视 · 侧视）</h3>
             <div className="print-layouts">
               <StaticLayout mode="top" container={container} placements={solution.placements} zones={solution.zones} cargoItems={cargoItems} testId={`print-top-${solution.profile}`} compact />
@@ -231,7 +234,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
           if (!recLayers.length) return null;
           return (
             <section className="print-solution-page">
-              <h2>{rec.name} · 分层布局（共 {recLayers.length} 层）</h2>
+              <h2>{profileDisplayName[rec.profile]} · 分层布局（共 {recLayers.length} 层）</h2>
               <div className="print-layer-grid">
                 {recLayers.map((layer) => (
                   <div className="print-layer" key={layer}>

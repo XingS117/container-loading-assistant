@@ -237,6 +237,50 @@ def test_rejects_pallet_stacked_on_pallet():
     assert "PALLET_STACKING" in error_codes(result)
 
 
+def test_rejects_different_pallet_specs_stacked_on_each_other():
+    bottom = cargo(
+        "P",
+        kind="pallet",
+        quantity=1,
+        stackable=True,
+        max_layers=2,
+        max_top_load_g=1_000_000,
+        length_mm=1200,
+        width_mm=1000,
+        height_mm=1000,
+    )
+    top = cargo(
+        "Q",
+        kind="pallet",
+        quantity=1,
+        stackable=True,
+        max_layers=2,
+        max_top_load_g=1_000_000,
+        length_mm=1000,
+        width_mm=1000,
+        height_mm=1000,
+    )
+    placements = [
+        placement(
+            "P-0",
+            cargo_id="P",
+            length_mm=1200,
+            width_mm=1000,
+        ),
+        placement(
+            "Q-0",
+            cargo_id="Q",
+            z_mm=1000,
+            length_mm=1000,
+            width_mm=1000,
+        ),
+    ]
+
+    result = validate_solution(container(), [bottom, top], placements)
+
+    assert "STACKING_SPEC_MISMATCH" in error_codes(result)
+
+
 def test_rejects_cartons_exceeding_pallet_top_load():
     pallet_item = cargo(
         "P", kind="pallet", quantity=1, stackable=False, max_layers=1,

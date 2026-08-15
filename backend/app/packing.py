@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 from collections import Counter, defaultdict
 from dataclasses import dataclass, replace
@@ -54,6 +55,7 @@ LAYOUT_ADVICE: dict[str, str] = {
     "MUST_LOAD_MISSING": "必装货物未能全部装入，请减少其他货物数量或更换更大柜型",
     "UNSUPPORTED": "高层货物底面未得到完整支撑，请调整货物尺寸/数量或摆放方式",
     "PALLET_STACKING": "整托上方不能叠放整托，如需叠放请开启该整托的“可叠”选项并设置层数/顶部承重",
+    "STACKING_SPEC_MISMATCH": "只有相同规格参数的整托货物才能相互叠放，请调整叠放位置或拆分底层货物",
     "NON_STACKABLE": "不可叠放货物的上方不应有其他货物，请取消该货物的“可叠”选项",
     "FRAGILE_STACKING": "易碎货物上方不能叠放其他货物，请移除其上方的货物或关闭“可叠”",
     "MAX_LAYERS_EXCEEDED": "货物堆叠层数超过限制，请调大“最大层数”或减少数量",
@@ -799,6 +801,11 @@ def _ordered_units(units: list[StackUnit], strategy: str) -> list[StackUnit]:
         "lightweight": lambda unit: (unit.total_weight_g, -unit.volume_mm3, unit.id),
         "pieces": lambda unit: (-unit.count, unit.total_weight_g, unit.id),
         "sku": lambda unit: (unit.cargo.id, -unit.length_mm * unit.width_mm, unit.id),
+        "unload": lambda unit: (
+            -unit.cargo.unload_order,
+            -unit.volume_mm3,
+            unit.id,
+        ),
     }
     key = key_map[strategy]
     return sorted(required, key=key) + sorted(optional, key=key)
@@ -1266,6 +1273,531 @@ def _pallet_grid_layout(
         )
         for stack in placed
     ]
+
+
+def _rectangle_components(
+    rectangles: list[tuple[int, int, int, int]],
+    gap: int = 0,
+) -> int:
+    """Return connected components for (x, y, length, width) rectangles."""
+    if not rectangles:
+        return 0
+
+    parent = list(range(len(rectangles)))
+
+    def find(index: int) -> int:
+        while parent[index] != index:
+            parent[index] = parent[parent[index]]
+            index = parent[index]
+        return index
+
+    def union(left: int, right: int) -> None:
+        left_root = find(left)
+        right_root = find(right)
+        if left_root != right_root:
+            parent[right_root] = left_root
+
+    for left, (x, y, length, width) in enumerate(rectangles):
+        x_end = x + length
+        y_end = y + width
+        for right in range(left):
+            other_x, other_y, other_length, other_width = rectangles[right]
+            if (
+                min(x_end, other_x + other_length) - max(x, other_x) >= -gap
+                and min(y_end, other_y + other_width) - max(y, other_y) >= -gap
+            ):
+                union(left, right)
+
+    return len({find(index) for index in range(len(rectangles))})
+
+
+def _same_sku_band_layout(
+    request: PackRequest,
+    by_cargo: dict[str, StackUnit],
+    quantity_by_cargo: Counter[str],
+    capacity_by_cargo: dict[str, int],
+) -> list[PackedStack] | None:
+    """Build a deterministic PB-PA-PB-PC style pallet layout.
+
+    This narrow candidate handles three pure-pallet SKUs with two stackable
+    products and one non-stackable product. It gives the common mixed-pallet
+    case an explicit floor sequence that generic 2D packing cannot express.
+    """
+    if len(by_cargo) != 3:
+        return None
+    if any(
+        unit.cargo.unload_order
+        for unit in by_cargo.values()
+    ):
+        return None
+
+    stackable_ids = [
+        cargo_id
+        for cargo_id, capacity in capacity_by_cargo.items()
+        if capacity >= 2 and by_cargo[cargo_id].cargo.stackable
+    ]
+    non_stackable_ids = [
+        cargo_id
+        for cargo_id, capacity in capacity_by_cargo.items()
+        if capacity == 1 or not by_cargo[cargo_id].cargo.stackable
+    ]
+    if len(stackable_ids) != 2 or len(non_stackable_ids) != 1:
+        return None
+
+    # The larger stackable footprint becomes the bridge SKU. For A/B/C this
+    # selects B, leaving A as the middle band.
+    bridge_id, middle_id = sorted(
+        stackable_ids,
+        key=lambda cargo_id: (
+            -by_cargo[cargo_id].length_mm * by_cargo[cargo_id].width_mm,
+            -by_cargo[cargo_id].cargo.weight_g,
+            cargo_id,
+        ),
+    )
+    door_id = non_stackable_ids[0]
+    gap = request.item_gap_mm
+    c = request.container.clearance_mm
+    door_limit = request.container.inner_length_mm - request.door_buffer_mm - c
+    usable_width = request.container.inner_width_mm - 2 * c
+
+    def columns(unit: StackUnit) -> int:
+        return max(1, (usable_width + gap) // (unit.width_mm + gap))
+
+    def floor_count(cargo_id: str) -> int:
+        quantity = quantity_by_cargo[cargo_id]
+        capacity = capacity_by_cargo[cargo_id]
+        return (quantity + capacity - 1) // capacity
+
+    bridge_unit = by_cargo[bridge_id]
+    middle_unit = by_cargo[middle_id]
+    door_unit = by_cargo[door_id]
+    bridge_columns = columns(bridge_unit)
+    middle_columns = columns(middle_unit)
+    door_columns = columns(door_unit)
+    bridge_floor = floor_count(bridge_id)
+    middle_floor = floor_count(middle_id)
+    door_floor = quantity_by_cargo[door_id]
+
+    bridge_rows = max(1, (bridge_floor + bridge_columns - 1) // bridge_columns)
+    left_bridge_rows = max(1, bridge_rows // 2)
+    left_bridge_count = min(
+        bridge_floor - 1,
+        left_bridge_rows * bridge_columns,
+    )
+    right_bridge_count = bridge_floor - left_bridge_count
+    if left_bridge_count <= 0 or right_bridge_count <= 0:
+        return None
+
+    def band_length(unit: StackUnit, count: int, across: int) -> int:
+        rows = max(1, (count + across - 1) // across)
+        return rows * unit.length_mm + max(0, rows - 1) * gap
+
+    bridge_left_length = band_length(
+        bridge_unit,
+        left_bridge_count,
+        bridge_columns,
+    )
+    middle_length = band_length(middle_unit, middle_floor, middle_columns)
+    bridge_right_length = band_length(
+        bridge_unit,
+        right_bridge_count,
+        bridge_columns,
+    )
+    door_length = band_length(door_unit, door_floor, door_columns)
+    total_length = (
+        bridge_left_length
+        + middle_length
+        + bridge_right_length
+        + door_length
+    )
+    start_x = door_limit - total_length
+    if start_x < c:
+        return None
+
+    floor_stacks: list[PackedStack] = []
+    next_instance: Counter[str] = Counter()
+
+    def add_band(
+        unit: StackUnit,
+        count: int,
+        x_start: int,
+    ) -> int:
+        across = columns(unit)
+        rows = max(1, (count + across - 1) // across)
+        for index in range(count):
+            row, column = divmod(index, across)
+            instance_index = next_instance[unit.cargo.id]
+            one_piece = replace(
+                unit,
+                id=f"{unit.cargo.id}-band-floor-{instance_index}",
+                count=1,
+                stack_height_mm=unit.item_height_mm,
+                total_weight_g=unit.cargo.weight_g,
+                first_instance_index=instance_index,
+            )
+            next_instance[unit.cargo.id] += 1
+            floor_stacks.append(
+                PackedStack(
+                    unit=one_piece,
+                    x_mm=x_start + row * (unit.length_mm + gap),
+                    y_mm=c + column * (unit.width_mm + gap),
+                    step=1,
+                )
+            )
+        return rows * unit.length_mm + max(0, rows - 1) * gap
+
+    x_cursor = start_x
+    add_band(bridge_unit, left_bridge_count, x_cursor)
+    x_cursor += bridge_left_length
+    add_band(middle_unit, middle_floor, x_cursor)
+    x_cursor += middle_length
+    add_band(bridge_unit, right_bridge_count, x_cursor)
+    x_cursor += bridge_right_length
+    add_band(door_unit, door_floor, x_cursor)
+
+    final_stacks = list(floor_stacks)
+    center_x = request.container.inner_length_mm / 2
+    for cargo_id in (middle_id, bridge_id):
+        remaining = quantity_by_cargo[cargo_id] - next_instance[cargo_id]
+        if remaining <= 0:
+            continue
+        supports = sorted(
+            (
+                stack
+                for stack in floor_stacks
+                if stack.unit.cargo.id == cargo_id
+            ),
+            key=lambda stack: (
+                abs(stack.x_mm + stack.length_mm / 2 - center_x),
+                abs(stack.y_mm - c),
+                stack.unit.first_instance_index,
+            ),
+        )
+        extra_capacity = capacity_by_cargo[cargo_id] - 1
+        for index, support in enumerate(supports):
+            if remaining <= 0:
+                break
+            extra = min(extra_capacity, remaining)
+            upper = replace(
+                support.unit,
+                id=f"{cargo_id}-band-upper-{index}",
+                count=extra,
+                stack_height_mm=extra * support.unit.item_height_mm,
+                total_weight_g=extra * support.unit.cargo.weight_g,
+                first_instance_index=next_instance[cargo_id],
+            )
+            final_stacks.append(
+                replace(
+                    support,
+                    unit=upper,
+                    z_mm=support.unit.item_height_mm,
+                    step=2,
+                )
+            )
+            remaining -= extra
+            next_instance[cargo_id] += extra
+        if remaining:
+            return None
+
+    placements = _expand_stacks(request, final_stacks, "high_fill")
+    validation = validate_solution(
+        request.container,
+        request.cargo_items,
+        placements,
+        item_gap_mm=gap,
+    )
+    if not validation.valid:
+        return None
+    return final_stacks
+
+
+def _pure_pallet_floor_first_layout(
+    request: PackRequest,
+    units: list[StackUnit | CompositeUnit],
+    strategy: Literal["fill", "stable", "easy"],
+) -> list[PackedStack] | None:
+    """Generate floor-first pallet candidates, then stack only on floor slots.
+
+    ``_build_stack_units`` groups vertically stackable pallets into StackUnit
+    objects. That representation is useful for the general packer, but it
+    hides the number of available floor slots. This path deliberately expands
+    pallets to one-piece units for the 2D floor search, then adds the remaining
+    instances back as centered upper stacks.
+    """
+    if (
+        not units
+        or any(isinstance(unit, CompositeUnit) for unit in units)
+        or any(unit.cargo.kind != "pallet" for unit in units)
+    ):
+        return None
+
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    center_x = request.container.inner_length_mm / 2
+    door_limit = request.container.inner_length_mm - request.door_buffer_mm - c
+
+    by_cargo: dict[str, StackUnit] = {}
+    for unit in units:
+        by_cargo.setdefault(unit.cargo.id, unit)
+    if not by_cargo:
+        return None
+
+    available_height = request.container.inner_height_mm - 2 * c
+    capacity_by_cargo = {
+        cargo_id: _stack_capacity(
+            unit.cargo,
+            unit.orientation,
+            available_height,
+            gap,
+        )
+        for cargo_id, unit in by_cargo.items()
+    }
+    quantity_by_cargo: Counter[str] = Counter()
+    for unit in units:
+        quantity_by_cargo[unit.cargo.id] += unit.count
+    minimum_floor = {
+        cargo_id: (
+            quantity_by_cargo[cargo_id] + capacity - 1
+        ) // capacity
+        for cargo_id, capacity in capacity_by_cargo.items()
+        if capacity > 0
+    }
+    if len(minimum_floor) != len(by_cargo):
+        return None
+
+    band_layout = _same_sku_band_layout(
+        request,
+        by_cargo,
+        quantity_by_cargo,
+        capacity_by_cargo,
+    )
+    if band_layout is not None:
+        return band_layout
+
+    def one_piece_units(counts: dict[str, int]) -> list[StackUnit]:
+        result: list[StackUnit] = []
+        for cargo_id in sorted(counts):
+            sample = by_cargo[cargo_id]
+            for index in range(counts[cargo_id]):
+                result.append(
+                    replace(
+                        sample,
+                        id=f"{cargo_id}-floor-{index}",
+                        count=1,
+                        stack_height_mm=sample.item_height_mm,
+                        total_weight_g=sample.cargo.weight_g,
+                        first_instance_index=index,
+                    )
+                )
+        return result
+
+    # Keep the search small for large orders while retaining the dense middle
+    # values needed by mixed-size pallet orders such as the A/B/C acceptance case.
+    def count_options(cargo_id: str) -> list[int]:
+        minimum = minimum_floor[cargo_id]
+        quantity = quantity_by_cargo[cargo_id]
+        values = {
+            minimum,
+            min(quantity, minimum + 4),
+            min(quantity, minimum + 8),
+            min(quantity, minimum + 12),
+            max(minimum, quantity - 12),
+            max(minimum, quantity - 8),
+            max(minimum, quantity - 4),
+            quantity,
+            (minimum + quantity) // 2,
+        }
+        if quantity <= 36:
+            values.add(max(minimum, quantity - 2))
+        return sorted(values)
+
+    cargo_ids = sorted(by_cargo)
+    option_lists = [count_options(cargo_id) for cargo_id in cargo_ids]
+    combinations: list[dict[str, int]] = []
+    total_combinations = 1
+    for options in option_lists:
+        total_combinations *= len(options)
+    if total_combinations <= 6000:
+        combinations = [
+            dict(zip(cargo_ids, values))
+            for values in itertools.product(*option_lists)
+        ]
+    else:
+        # Deterministic diagonal sampling prevents a large all-pallet order
+        # from turning the floor-first path into an unbounded Cartesian search.
+        for offset in range(max(len(options) for options in option_lists)):
+            combinations.append(
+                {
+                    cargo_id: options[(offset + index) % len(options)]
+                    for index, (cargo_id, options) in enumerate(
+                        zip(cargo_ids, option_lists)
+                    )
+                }
+            )
+
+    orders = {
+        "fill": ("volume", "footprint", "pieces"),
+        "stable": ("weight", "volume", "footprint"),
+        "easy": ("sku", "pieces", "volume"),
+    }[strategy]
+    candidates: list[tuple[tuple[float, ...], list[PackedStack]]] = []
+    for counts in combinations:
+        if any(
+            counts[cargo_id] * capacity_by_cargo[cargo_id]
+            < quantity_by_cargo[cargo_id]
+            for cargo_id in cargo_ids
+        ):
+            continue
+        floor_units = one_piece_units(counts)
+        candidate_orders = orders
+        if any(unit.cargo.unload_order for unit in floor_units):
+            candidate_orders = ("unload",) + orders
+        for algorithm in PACK_ALGOS:
+            for order in candidate_orders:
+                floor_stacks = _pack_units(request, floor_units, algorithm, order)
+                if len(floor_stacks) != len(floor_units):
+                    continue
+                if any(
+                    stack.x_mm + stack.length_mm > door_limit
+                    for stack in floor_stacks
+                ):
+                    continue
+                floor_stacks = [
+                    replace(stack, step=1)
+                    for stack in floor_stacks
+                ]
+
+                by_floor_cargo: dict[str, list[PackedStack]] = defaultdict(list)
+                for stack in floor_stacks:
+                    by_floor_cargo[stack.unit.cargo.id].append(stack)
+                final_stacks = list(floor_stacks)
+                upper_count = 0
+                upper_stack_count_by_cargo: Counter[str] = Counter()
+                for cargo_id in cargo_ids:
+                    slots = sorted(
+                        by_floor_cargo[cargo_id],
+                        key=lambda stack: (
+                            abs(stack.x_mm + stack.length_mm / 2 - center_x),
+                            stack.y_mm,
+                            stack.unit.first_instance_index,
+                        ),
+                    )
+                    remaining = quantity_by_cargo[cargo_id] - counts[cargo_id]
+                    next_instance = counts[cargo_id]
+                    extra_capacity = capacity_by_cargo[cargo_id] - 1
+                    if remaining > len(slots) * extra_capacity:
+                        break
+                    for index, slot in enumerate(slots):
+                        if remaining <= 0:
+                            break
+                        extra = min(extra_capacity, remaining)
+                        upper_unit = replace(
+                            slot.unit,
+                            id=f"{cargo_id}-upper-{index}",
+                            count=extra,
+                            stack_height_mm=extra * slot.unit.item_height_mm,
+                            total_weight_g=extra * slot.unit.cargo.weight_g,
+                            first_instance_index=next_instance,
+                        )
+                        final_stacks.append(
+                            replace(
+                                slot,
+                                unit=upper_unit,
+                                z_mm=slot.unit.item_height_mm,
+                                step=2,
+                            )
+                        )
+                        remaining -= extra
+                        next_instance += extra
+                        upper_count += extra
+                        upper_stack_count_by_cargo[cargo_id] += extra
+                    if remaining:
+                        break
+                else:
+                    placements = _expand_stacks(request, final_stacks, "high_fill")
+                    validation = validate_solution(
+                        request.container,
+                        request.cargo_items,
+                        placements,
+                        item_gap_mm=gap,
+                    )
+                    if not validation.valid:
+                        continue
+                    upper = [
+                        placement
+                        for placement in placements
+                        if placement.z_mm > c
+                    ]
+                    rectangles = [
+                        (
+                            placement.x_mm,
+                            placement.y_mm,
+                            placement.length_mm,
+                            placement.width_mm,
+                        )
+                        for placement in upper
+                    ]
+                    component_count = _rectangle_components(rectangles, gap + 1)
+                    upper_center = (
+                        sum(
+                            placement.x_mm + placement.length_mm / 2
+                            for placement in upper
+                        ) / len(upper)
+                        if upper
+                        else center_x
+                    )
+                    if upper and (
+                        len(upper) == 1
+                        or component_count != 1
+                        or abs(upper_center - center_x) > 1800
+                        or any(
+                            count == 1
+                            for count in Counter(
+                                placement.cargo_id for placement in upper
+                            ).values()
+                        )
+                    ):
+                        continue
+                    floor_span = (
+                        max(
+                            placement.x_mm + placement.length_mm
+                            for placement in placements
+                            if placement.z_mm == c
+                        )
+                        - min(
+                            placement.x_mm
+                            for placement in placements
+                            if placement.z_mm == c
+                        )
+                    )
+                    if strategy == "stable":
+                        score = (
+                            len(floor_stacks),
+                            -abs(upper_center - center_x),
+                            -abs(
+                                _metrics(request, placements).length_imbalance_pct
+                            ),
+                            floor_span,
+                        )
+                    elif strategy == "easy":
+                        score = (
+                            len(floor_stacks),
+                            -_cargo_transitions(floor_stacks),
+                            -len({stack.unit.cargo.id for stack in floor_stacks}),
+                            floor_span,
+                        )
+                    else:
+                        score = (
+                            len(floor_stacks),
+                            floor_span,
+                            -abs(upper_center - center_x),
+                            -component_count,
+                        )
+                    candidates.append((score, final_stacks))
+
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: candidate[0])[1]
 
 
 def _layer_layout(
@@ -2281,7 +2813,7 @@ def _raise_for_invalid_layout(validation: ValidationResult) -> None:
 def _build_solution(
     request: PackRequest,
     stacks: list[PackedStack],
-    profile: Literal["high_fill", "stable", "easy", "interstack", "strict_support"],
+    profile: Literal["high_fill", "stable", "easy", "strict_support"],
     support_coverage_min: float = 1.0,
     overhang_ratio_max: float = 0.0,
 ) -> PackingSolution:
@@ -2304,33 +2836,44 @@ def _build_solution(
     metrics = _metrics(request, placements)
     zones = _compute_zones(request, placements)
     names = {
-        "high_fill": "装得多",
-        "stable": "更稳妥",
+        "high_fill": "装载率优先",
+        "stable": "重心稳妥",
         "easy": "易操作",
-        "interstack": "互叠高装载",
-        "strict_support": "严格完整支撑",
+        "strict_support": "底层优先",
     }
     warnings = []
     if request.door_buffer_mm > 0:
         warnings.append(f"柜门预留操作空间 {request.door_buffer_mm}mm")
     if sum(unloaded_counts.values()):
         warnings.append(f"仍有 {sum(unloaded_counts.values())} 件货物未装入本柜")
+    upper = [
+        item
+        for item in placements
+        if item.z_mm > request.container.clearance_mm
+    ]
+    if upper:
+        rectangles = [
+            (item.x_mm, item.y_mm, item.length_mm, item.width_mm)
+            for item in upper
+        ]
+        component_count = _rectangle_components(
+            rectangles,
+            request.item_gap_mm + 1,
+        )
+        if component_count > 1:
+            warnings.append(f"上层货物被拆成 {component_count} 个区域")
+        upper_by_cargo = Counter(item.cargo_id for item in upper)
+        if len(upper) == 1 or any(count == 1 for count in upper_by_cargo.values()):
+            warnings.append("上层存在孤立单件，现场应复核支撑与装卸顺序")
     if profile == "high_fill":
         pros = [
             f"装入 {metrics.loaded_pieces} 件，体积利用率 {metrics.volume_utilization_pct}%",
             f"重量利用率 {metrics.weight_utilization_pct}%",
         ]
         cons = [f"重心最大偏差 {metrics.weight_imbalance_pct}%"]
-    elif profile == "interstack":
-        pros = [
-            f"装入 {metrics.loaded_pieces} 件，体积利用率 {metrics.volume_utilization_pct}%",
-            "允许小件叠放在组合支撑平面上（支撑覆盖率 ≥ 70%）",
-        ]
-        cons = [f"重心最大偏差 {metrics.weight_imbalance_pct}%"]
-        warnings.append("互叠方案：上层货物底面仅需 ≥70% 被支撑，装载稳定性低于完整支撑方案")
     elif profile == "strict_support":
         pros = [
-            "每个上层货物底面 100% 被下层支撑（无悬挑）",
+            "优先铺满柜底，剩余上层货物集中在柜体中部",
             f"装入 {metrics.loaded_pieces} 件，体积利用率 {metrics.volume_utilization_pct}%",
         ]
         cons = [f"重心最大偏差 {metrics.weight_imbalance_pct}%"]
@@ -2382,52 +2925,90 @@ def _layout_signature(solution: PackingSolution) -> tuple:
 
 def pack_order(request: PackRequest) -> PackResponse:
     units = _build_stack_units(request)
-    # 五方案统一优先尝试 SKU 块布局（装得多/更稳妥/易操作），失败走原回退链
+    pure_pallet_skus = {unit.cargo.id for unit in units}
+    pure_pallet_order = (
+        bool(units)
+        and len(pure_pallet_skus) <= 3
+        and all(
+            unit.cargo.kind == "pallet" and not isinstance(unit, CompositeUnit)
+            for unit in units
+        )
+    )
+    # 四方案统一优先尝试 SKU 块布局，失败走原回退链
     # 缺陷 B 修复：SKU 块布局改传 merged（散箱上托托盘顶面，轻在上）
     high_merged = _merge_pallet_cartons(request, units)
-    high_blocks = _sku_block_layout(request, high_merged, "fill")
+    high_blocks = (
+        _pure_pallet_floor_first_layout(request, units, "fill")
+        if pure_pallet_order
+        else _sku_block_layout(request, high_merged, "fill")
+    )
     if high_blocks is not None:
         high_stacks = high_blocks
     else:
-        high_stacks = _high_fill_candidate(request, units)
+        high_stacks = (
+            _sku_block_layout(request, high_merged, "fill")
+            or _high_fill_candidate(request, units)
+        )
     high_placements = _expand_stacks(request, high_stacks, "high_fill")
     selected_counts = Counter(item.cargo_id for item in high_placements)
     stable_units = _build_stack_units(request, dict(selected_counts), "stable")
     merged_stable = _merge_pallet_cartons(request, stable_units)
-    stable_blocks = _sku_block_layout(request, merged_stable, "balance")
+    stable_blocks = (
+        _pure_pallet_floor_first_layout(request, stable_units, "stable")
+        if pure_pallet_order
+        else _sku_block_layout(request, merged_stable, "balance")
+    )
+    if stable_blocks is not None and not any(
+        placement.z_mm > request.container.clearance_mm
+        for placement in _expand_stacks(request, stable_blocks, "stable")
+    ):
+        stable_blocks = None
     if stable_blocks is not None:
         stable_stacks = _swap_balance(request, stable_blocks)
     else:
-        pallet_grid = _pallet_grid_layout(request, stable_units)
-        if pallet_grid is not None:
-            stable_stacks = pallet_grid
+        balanced = _sku_block_layout(request, merged_stable, "balance")
+        if balanced is not None:
+            stable_stacks = _swap_balance(request, balanced)
         else:
-            # 混合尺寸纯整托：SKU 块配平布局（重块居中）→ 与"装得多"布局区分
-            balanced = _stable_balance_layout(request, stable_units)
-            if balanced is not None:
-                stable_stacks = balanced
+            pallet_grid = _pallet_grid_layout(request, stable_units)
+            if pallet_grid is not None:
+                stable_stacks = pallet_grid
             else:
-                mixed = _layer_layout(request, merged_stable)
-                if mixed is not None:
-                    stable_stacks = mixed
+                # 混合尺寸纯整托：SKU 块配平布局（重块居中）→ 与"装得多"布局区分
+                balanced_grid = _stable_balance_layout(request, stable_units)
+                if balanced_grid is not None:
+                    stable_stacks = balanced_grid
                 else:
-                    stable_stacks = _repack_same_units(
-                        request, merged_stable, "stable"
-                    ) or _center_stacks(request, high_stacks)
-                stable_stacks = _swap_balance(request, stable_stacks)
-    easy_blocks = _sku_block_layout(request, merged_stable, "easy")
+                    mixed = _layer_layout(request, merged_stable)
+                    if mixed is not None:
+                        stable_stacks = mixed
+                    else:
+                        stable_stacks = _repack_same_units(
+                            request, merged_stable, "stable"
+                        ) or _center_stacks(request, high_stacks)
+                    stable_stacks = _swap_balance(request, stable_stacks)
+    easy_blocks = (
+        _pure_pallet_floor_first_layout(request, stable_units, "easy")
+        if pure_pallet_order
+        else _sku_block_layout(request, merged_stable, "easy")
+    )
     if easy_blocks is not None:
         easy_stacks = easy_blocks
     else:
         easy_region = _easy_region_layout(request, merged_stable)
         easy_stacks = easy_region if easy_region is not None else (
-            _repack_same_units(request, merged_stable, "easy") or high_stacks
+            _sku_block_layout(request, merged_stable, "easy")
+            or _repack_same_units(request, merged_stable, "easy")
+            or high_stacks
         )
 
-    # 严格完整支撑方案：与"装得多"同布局（100% 完整支撑、全装），
-    # 但文案强调安全裕度（适合船公司/保险审核场景）。布局相同 → identical_to
-    # 自动标记，前端去重显示。
-    strict_stacks = high_stacks
+    # 底层优先方案使用独立的 floor-first 候选；无法生成时保持原布局，
+    # 仍由 validate_solution() 保证所有正式方案完整支撑。
+    strict_stacks = (
+        _pure_pallet_floor_first_layout(request, units, "fill")
+        if pure_pallet_order
+        else high_stacks
+    ) or high_stacks
 
     solutions = [
         _build_solution(request, high_stacks, "high_fill"),
@@ -2435,26 +3016,6 @@ def pack_order(request: PackRequest) -> PackResponse:
         _build_solution(request, easy_stacks, "easy"),
         _build_solution(request, strict_stacks, "strict_support"),
     ]
-    # 互叠高装载方案（默认开启）：在装得多候选基础上增强，允许小件叠放在
-    # 组合支撑平面上（覆盖率阈值 + 悬挑上限）；若请求关闭互叠则跳过该方案。
-    if request.enable_interstack:
-        interstack_stacks = _interstack_layout(
-            request,
-            high_merged,
-            high_stacks,
-            coverage_min=request.support_coverage_min,
-            overhang_ratio_max=request.overhang_ratio_max,
-        )
-        if interstack_stacks is not None:
-            solutions.append(
-                _build_solution(
-                    request,
-                    interstack_stacks,
-                    "interstack",
-                    support_coverage_min=request.support_coverage_min,
-                    overhang_ratio_max=request.overhang_ratio_max,
-                )
-            )
     for index, solution in enumerate(solutions):
         for previous in solutions[:index]:
             if _layout_signature(solution) == _layout_signature(previous):

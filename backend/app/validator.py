@@ -208,6 +208,27 @@ def validate_solution(
                     support.id,
                 )
             if pallet_above:
+                support_spec = (
+                    item.length_mm,
+                    item.width_mm,
+                    item.height_mm,
+                    item.weight_g,
+                )
+                for other in pallet_above:
+                    above_item = cargo_by_id[other.cargo_id]
+                    above_spec = (
+                        above_item.length_mm,
+                        above_item.width_mm,
+                        above_item.height_mm,
+                        above_item.weight_g,
+                    )
+                    if above_spec != support_spec:
+                        add(
+                            "STACKING_SPEC_MISMATCH",
+                            "只有相同规格参数的整托货物才能相互叠放",
+                            support.id,
+                            other.id,
+                        )
                 # 整托叠放层数受 max_layers 约束；散箱层数由散箱自身校验（不在此限制）
                 pallet_levels = 1 + len({other.z_mm for other in pallet_above})
                 if pallet_levels > item.max_layers:

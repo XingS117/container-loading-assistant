@@ -23,7 +23,7 @@ const cargoItems: CargoInput[] = [];
 function makeSolution(profile: SolutionProfile, lengthImbalance: number): PackResponse["solutions"][number] {
   return {
     profile,
-    name: ({ high_fill: "装得多", stable: "更稳妥", easy: "易操作", strict_support: "严格完整支撑", interstack: "互叠高装载" } as Record<SolutionProfile, string>)[profile],
+    name: ({ high_fill: "装载率优先", stable: "重心稳妥", easy: "易操作", strict_support: "底层优先" } as Record<SolutionProfile, string>)[profile],
     placements: [],
     loaded_counts: {},
     unloaded_counts: {},
@@ -54,6 +54,7 @@ function makeResponse(highFillImbalance: number, stableImbalance: number): PackR
       makeSolution("high_fill", highFillImbalance),
       makeSolution("stable", stableImbalance),
       makeSolution("easy", highFillImbalance),
+      makeSolution("strict_support", highFillImbalance),
     ],
   };
 }
@@ -85,8 +86,10 @@ test("shows balance warning and the recommended stable tab", async () => {
   );
 
   expect(screen.getByText("推荐")).toBeInTheDocument();
-  await userEvent.click(screen.getByRole("button", { name: /装得多/ }));
-  expect(screen.getByRole("alert")).toHaveTextContent("前后重量偏差较大（20%），建议查看「更稳妥」方案");
+  expect(screen.getAllByRole("button", { name: /优先|稳妥|易操作/ })).toHaveLength(4);
+  expect(screen.queryByText("互叠高装载")).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: /装载率优先/ }));
+  expect(screen.getByRole("alert")).toHaveTextContent("前后重量偏差较大（20%），建议查看「重心稳妥」方案");
   expect(screen.getByText("前后偏差")).toBeInTheDocument();
   expect(screen.getByText("左右偏差")).toBeInTheDocument();
 });

@@ -18,7 +18,7 @@ def test_health_and_container_presets():
     assert [item["id"] for item in response.json()] == ["20gp", "40gp", "40hq"]
 
 
-def test_pack_endpoint_returns_three_solutions():
+def test_pack_endpoint_returns_four_core_solutions():
     payload = {
         "container": {
             "id": "small",
@@ -56,7 +56,7 @@ def test_pack_endpoint_returns_three_solutions():
     response = client.post("/api/v1/pack", json=payload)
 
     assert response.status_code == 200
-    assert len(response.json()["solutions"]) == 5
+    assert len(response.json()["solutions"]) == 4
 
 
 def test_pack_endpoint_returns_structured_must_load_error():

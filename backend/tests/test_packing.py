@@ -41,7 +41,7 @@ def boxes(quantity: int = 2, **overrides) -> CargoSpec:
     return CargoSpec(**values)
 
 
-def test_returns_three_deterministic_valid_solutions():
+def test_returns_four_deterministic_valid_solutions():
     request = PackRequest(container=small_container(), cargo_items=[boxes()])
 
     first = pack_order(request)
@@ -52,7 +52,6 @@ def test_returns_three_deterministic_valid_solutions():
         "stable",
         "easy",
         "strict_support",
-        "interstack",
     ]
     assert first.model_dump() == second.model_dump()
     for solution in first.solutions:
