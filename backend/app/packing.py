@@ -1006,6 +1006,29 @@ def _stack_imbalance(request: PackRequest, stacks: list[PackedStack]) -> float:
     )
 
 
+def _assign_sku_block_steps(stacks: list[PackedStack]) -> list[PackedStack]:
+    """为无显式装载步骤的布局按同 SKU 连续段分组分配 step。
+
+    repack 等散件布局的每个栈都没有 step，_expand_stacks 会按栈序号逐个
+    分配，装载步骤/区域数与栈数相同（X/Y 场景曾达 123 步/123 区）。这里
+    把按 (x, y) 排序后相邻且同 cargo_id 的栈合并为同一步，让步骤与区域
+    收敛到 SKU 块粒度。已有显式 step 的布局（块布局/floor-first）不处理。
+    """
+    if not stacks or any(stack.step is not None for stack in stacks):
+        return stacks
+    ordered = sorted(stacks, key=lambda stack: (stack.x_mm, stack.y_mm, stack.unit.id))
+    grouped: list[PackedStack] = []
+    current_step = 1
+    previous_cargo: str | None = None
+    for stack in ordered:
+        cargo_id = stack.unit.cargo.id
+        if previous_cargo is not None and cargo_id != previous_cargo:
+            current_step += 1
+        grouped.append(replace(stack, step=current_step))
+        previous_cargo = cargo_id
+    return grouped
+
+
 def _cargo_transitions(stacks: list[PackedStack]) -> int:
     ordered = sorted(stacks, key=lambda stack: (stack.x_mm, stack.y_mm, stack.unit.cargo.id))
     return sum(
@@ -2888,6 +2911,9 @@ def pack_order(request: PackRequest) -> PackResponse:
                 break
         if stable_stacks is None:
             stable_stacks = _center_stacks(request, high_stacks)
+        # 散件候选（repack/兜底）无显式 step，按同 SKU 连续段分组，
+        # 避免装载步骤/区域碎片化（块布局等已有 step 的布局不受影响）。
+        stable_stacks = _assign_sku_block_steps(stable_stacks)
         solution = _build_solution(request, stable_stacks, "stable")
     else:  # goal == "easy"
         # easy 链用 high_fill 朝向货栈（compact footprint）：stable 朝向为降
