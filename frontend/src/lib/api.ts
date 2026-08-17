@@ -1,4 +1,4 @@
-import { orientationsFor } from "./cargo";
+import { orientationsFor, validateCargo } from "./cargo";
 import type { CargoInput, ContainerSpec, PackResponse } from "../types";
 
 export async function getContainerPresets(): Promise<ContainerSpec[]> {
@@ -12,6 +12,11 @@ export async function packOrder(
   cargoItems: CargoInput[],
   itemGapCm: number,
 ): Promise<PackResponse> {
+  const validationError = validateCargo(cargoItems);
+  if (validationError) throw new Error(validationError);
+  if (cargoItems.some((item) => item.weight_kg == null)) {
+    throw new Error("请先补充所有货物的单托重量");
+  }
   const response = await fetch("/api/v1/pack", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -26,7 +31,7 @@ export async function packOrder(
         length_mm: Math.round(item.length_cm * 10),
         width_mm: Math.round(item.width_cm * 10),
         height_mm: Math.round(item.height_cm * 10),
-        weight_g: Math.round(item.weight_kg * 1000),
+        weight_g: Math.round(item.weight_kg! * 1000),
         quantity: item.quantity,
         allowed_orientations: orientationsFor(item.orientation_mode),
         stackable: item.stackable,

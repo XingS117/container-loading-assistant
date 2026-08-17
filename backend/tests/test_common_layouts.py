@@ -1,7 +1,7 @@
 from collections import Counter
 
 from app.models import CargoSpec, ContainerSpec, PackRequest
-from app.packing import pack_order
+from app.packing import _rectangle_components, pack_order
 from app.validator import validate_solution
 
 
@@ -174,3 +174,60 @@ def test_five_sku_case_pairs_remainder_products_in_floor_rows():
             ), (solution.profile, left_id, right_id)
 
         assert Counter(placement.cargo_id for placement in bottom)["q5"] == 2
+
+
+def test_four_and_five_sku_upper_layers_are_centered_single_components():
+    for request in (four_sku_request(), five_sku_request()):
+        response = pack_order(request)
+        center_x = request.container.inner_length_mm / 2
+        for solution in response.solutions:
+            upper = [
+                placement
+                for placement in solution.placements
+                if placement.z_mm > request.container.clearance_mm
+            ]
+            assert upper
+            assert _rectangle_components(
+                [
+                    (
+                        placement.x_mm,
+                        placement.y_mm,
+                        placement.length_mm,
+                        placement.width_mm,
+                    )
+                    for placement in upper
+                ],
+                request.item_gap_mm + 1,
+            ) == 1, (solution.profile, solution.warnings)
+            upper_center = sum(
+                placement.x_mm + placement.length_mm / 2
+                for placement in upper
+            ) / len(upper)
+            assert abs(upper_center - center_x) <= 1800, (
+                solution.profile,
+                upper_center,
+            )
+            assert not any(
+                "上层货物被拆成" in warning for warning in solution.warnings
+            )
+
+
+def test_four_and_five_sku_profiles_have_four_distinct_layouts():
+    for request in (four_sku_request(), five_sku_request()):
+        response = pack_order(request)
+        signatures = {
+            tuple(
+                (
+                    placement.cargo_id,
+                    placement.instance_index,
+                    placement.x_mm,
+                    placement.y_mm,
+                    placement.z_mm,
+                    placement.rotation.value,
+                )
+                for placement in solution.placements
+            )
+            for solution in response.solutions
+        }
+        assert len(signatures) == 4
+        assert all(solution.identical_to is None for solution in response.solutions)

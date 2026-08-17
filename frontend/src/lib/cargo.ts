@@ -36,12 +36,16 @@ export function validateCargo(rows: CargoInput[]): string | null {
   if (rows.some((row) => !row.sku.trim() || !row.name.trim())) {
     return "SKU 和货物名称不能为空";
   }
+  if (rows.some((row) => row.weight_kg == null)) {
+    return "请先补充所有货物的单托重量";
+  }
   if (
     rows.some(
       (row) =>
-        row.length_cm <= 0 ||
+      row.length_cm <= 0 ||
         row.width_cm <= 0 ||
         row.height_cm <= 0 ||
+        row.weight_kg == null ||
         row.weight_kg <= 0 ||
         row.quantity < 1,
     )

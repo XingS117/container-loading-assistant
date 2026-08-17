@@ -120,7 +120,7 @@ test("loads a common preset and blocks calculation until weights are filled", as
 
   expect(screen.getByRole("button", { name: "常见产品规格" })).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "常见产品规格" }));
-  await userEvent.click(screen.getByRole("button", { name: /四 SKU 案例/ }));
+  await userEvent.click(screen.getByRole("menuitem", { name: /^四 SKU 案例（4 种整托）/ }));
 
   expect(screen.getAllByText("需补充重量").length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: "生成装柜方案" })).toBeDisabled();

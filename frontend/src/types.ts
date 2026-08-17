@@ -23,7 +23,7 @@ export interface CargoInput {
   length_cm: number;
   width_cm: number;
   height_cm: number;
-  weight_kg: number;
+  weight_kg: number | null;
   quantity: number;
   orientation_mode: OrientationMode;
   stackable: boolean;
@@ -32,6 +32,15 @@ export interface CargoInput {
   fragile: boolean;
   must_load: boolean;
   unload_order: number;
+}
+
+export interface CargoPreset {
+  id: string;
+  label: string;
+  kind: "组合" | "单品";
+  containerHint: string;
+  description: string;
+  items: Array<Omit<CargoInput, "id">>;
 }
 
 export interface Placement {
