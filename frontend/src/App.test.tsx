@@ -107,3 +107,21 @@ test("selecting pallet kind keeps the selection and applies pallet defaults", as
   // 整托默认顶部承重 500kg（允许散箱上托）
   expect(screen.getByLabelText("顶部承重 SKU-001")).toHaveValue(500);
 });
+
+
+test("loads a common preset and blocks calculation until weights are filled", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify([preset, secondPreset]), { status: 200 }),
+  );
+  vi.spyOn(window, "confirm").mockReturnValue(true);
+
+  render(<App />);
+  await screen.findByRole("button", { name: /20GP/ });
+
+  expect(screen.getByRole("button", { name: "常见产品规格" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("button", { name: "常见产品规格" }));
+  await userEvent.click(screen.getByRole("button", { name: /四 SKU 案例/ }));
+
+  expect(screen.getAllByText("需补充重量").length).toBeGreaterThan(0);
+  expect(screen.getByRole("button", { name: "生成装柜方案" })).toBeDisabled();
+});
