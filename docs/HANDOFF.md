@@ -34,7 +34,7 @@
 - `git diff --check`：通过。
 - 生产服务重启后状态：`active`，服务器本机 `/health` 返回 `{"status":"ok"}`。
 - 公网健康检查：通过，`/health` 返回 `ok`，容器预设返回 3 个。
-- 公网首页已引用新资源：`assets/index-DaMiBoeg.js`。
+- 本次构建首页资源：`assets/index-B6v2EXMg.js`。
 - 公网真实 `POST /api/v1/pack`：返回 3 个正式方案。
 - 公网 A/B/C 40HQ 回归：3 个方案均装入 63 托，`identical_to` 均为空。
 
