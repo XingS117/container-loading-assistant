@@ -87,7 +87,7 @@ function nextPresetSequence(): number {
 export const COMMON_CARGO_PRESETS: CargoPreset[] = [
   combination(
     "common-abc",
-    "A / B / C 三 SKU 案例",
+    "三 SKU 案例",
     abcItems,
     "B、A、B 底层分带，C 靠柜门底层，A/B 剩余货物集中到中部同规格支撑上。",
   ),
@@ -106,7 +106,7 @@ export const COMMON_CARGO_PRESETS: CargoPreset[] = [
   ...[
     ...fourSkuItems.map((item, index) => single(`common-single-4-${index}`, item, "四 SKU 案例")),
     ...fiveSkuItems.map((item, index) => single(`common-single-5-${index}`, item, "五 SKU 案例")),
-    ...abcItems.map((item, index) => single(`common-single-abc-${index}`, item, "A/B/C 案例")),
+    ...abcItems.map((item, index) => single(`common-single-abc-${index}`, item, "三 SKU 案例")),
   ],
 ];
 

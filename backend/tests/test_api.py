@@ -56,7 +56,7 @@ def test_pack_endpoint_returns_four_core_solutions():
     response = client.post("/api/v1/pack", json=payload)
 
     assert response.status_code == 200
-    assert len(response.json()["solutions"]) == 4
+    assert len(response.json()["solutions"]) == 3
 
 
 def test_pack_endpoint_returns_structured_must_load_error():

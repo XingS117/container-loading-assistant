@@ -144,7 +144,7 @@ class Zone(BaseModel):
 
 
 class PackingSolution(BaseModel):
-    profile: Literal["high_fill", "stable", "easy", "strict_support"]
+    profile: Literal["high_fill", "stable", "easy"]
     name: str
     placements: list[Placement]
     loaded_counts: dict[str, int]

@@ -140,20 +140,18 @@ def test_floor_first_uses_selected_quantity_limits():
     assert loaded_counts == limits
 
 
-def test_abc_returns_four_named_core_solutions_and_no_interstack():
+def test_abc_returns_three_named_core_solutions_and_no_interstack():
     response = pack_order(abc_request())
 
     assert [solution.profile for solution in response.solutions] == [
         "high_fill",
         "stable",
         "easy",
-        "strict_support",
     ]
     assert [solution.name for solution in response.solutions] == [
         "装载率优先",
         "重心稳妥",
         "易操作",
-        "底层优先",
     ]
     assert all(solution.metrics.loaded_pieces == 63 for solution in response.solutions)
 
@@ -174,7 +172,7 @@ def test_abc_core_profiles_are_distinct_but_keep_the_same_loaded_set():
         )
         for solution in response.solutions
     }
-    assert len(signatures) == 4
+    assert len(signatures) == 3
     x_signatures = {
         tuple(
             (
@@ -186,17 +184,11 @@ def test_abc_core_profiles_are_distinct_but_keep_the_same_loaded_set():
         )
         for solution in response.solutions
     }
-    assert len(x_signatures) == 4
+    assert len(x_signatures) == 3
     assert response.solutions[0].metrics.loaded_pieces == 63
     assert response.solutions[1].metrics.loaded_pieces == 63
     assert response.solutions[2].metrics.loaded_pieces == 63
-    assert response.solutions[3].metrics.loaded_pieces == 63
 
-    bottom_counts = [
-        sum(placement.z_mm == 0 for placement in solution.placements)
-        for solution in response.solutions
-    ]
-    assert bottom_counts[3] > bottom_counts[0]
 
 
 def test_abc_all_core_solutions_are_physically_valid_and_floor_first():
@@ -300,5 +292,5 @@ def test_legacy_interstack_request_flag_does_not_create_a_fifth_solution():
     request.enable_interstack = True
     response = pack_order(request)
 
-    assert len(response.solutions) == 4
+    assert len(response.solutions) == 3
     assert all(solution.profile != "interstack" for solution in response.solutions)

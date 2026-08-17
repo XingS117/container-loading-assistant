@@ -18,14 +18,12 @@ const profileDisplayName: Record<SolutionProfile, string> = {
   high_fill: "装载率优先",
   stable: "重心稳妥",
   easy: "易操作",
-  strict_support: "底层优先",
 };
 
 const profileShortName: Record<SolutionProfile, string> = {
   high_fill: "装载率",
   stable: "重心稳妥",
   easy: "装载步骤",
-  strict_support: "底层优先",
 };
 
 export function recommendProfile(response: PackResponse): SolutionProfile {
@@ -91,9 +89,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
             ? `${solution.metrics.volume_utilization_pct}%`
             : solution.profile === "stable"
               ? `${solution.metrics.weight_imbalance_pct}%`
-              : solution.profile === "strict_support"
-                ? `${solution.metrics.loaded_pieces} 件`
-                : `${solution.metrics.loading_steps} 步`;
+              : `${solution.metrics.loading_steps} 步`;
           return (
             <button key={solution.profile} type="button" className={`solution-tab ${selected.profile === solution.profile ? "is-active" : ""}`} onClick={() => setSelectedProfile(solution.profile)}>
               <span className="solution-tab-name">{profileDisplayName[solution.profile]}</span>

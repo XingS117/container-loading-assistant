@@ -3301,7 +3301,7 @@ def _raise_for_invalid_layout(validation: ValidationResult) -> None:
 def _build_solution(
     request: PackRequest,
     stacks: list[PackedStack],
-    profile: Literal["high_fill", "stable", "easy", "strict_support"],
+    profile: Literal["high_fill", "stable", "easy"],
     support_coverage_min: float = 1.0,
     overhang_ratio_max: float = 0.0,
 ) -> PackingSolution:
@@ -3335,7 +3335,6 @@ def _build_solution(
         "high_fill": "装载率优先",
         "stable": "重心稳妥",
         "easy": "易操作",
-        "strict_support": "底层优先",
     }
     warnings = []
     if request.door_buffer_mm > 0:
@@ -3355,12 +3354,6 @@ def _build_solution(
         pros = [
             f"装入 {metrics.loaded_pieces} 件，体积利用率 {metrics.volume_utilization_pct}%",
             f"重量利用率 {metrics.weight_utilization_pct}%",
-        ]
-        cons = [f"重心最大偏差 {metrics.weight_imbalance_pct}%"]
-    elif profile == "strict_support":
-        pros = [
-            "优先铺满柜底，剩余上层货物集中在柜体中部",
-            f"装入 {metrics.loaded_pieces} 件，体积利用率 {metrics.volume_utilization_pct}%",
         ]
         cons = [f"重心最大偏差 {metrics.weight_imbalance_pct}%"]
     elif profile == "stable":
@@ -3488,19 +3481,10 @@ def pack_order(request: PackRequest) -> PackResponse:
             or high_stacks
         )
 
-    # 底层优先方案使用独立的 floor-first 候选；无法生成时保持原布局，
-    # 仍由 validate_solution() 保证所有正式方案完整支撑。
-    strict_stacks = (
-        _pure_pallet_floor_first_layout(request, units, "strict")
-        if pure_pallet_order
-        else high_stacks
-    ) or high_stacks
-
     solutions = [
         _build_solution(request, high_stacks, "high_fill"),
         _build_solution(request, stable_stacks, "stable"),
         _build_solution(request, easy_stacks, "easy"),
-        _build_solution(request, strict_stacks, "strict_support"),
     ]
     for index, solution in enumerate(solutions):
         for previous in solutions[:index]:

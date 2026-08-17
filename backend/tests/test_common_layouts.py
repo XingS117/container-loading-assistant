@@ -99,7 +99,7 @@ def test_four_sku_case_loads_all_fifty_pallets_and_validates():
     request = four_sku_request()
     response = pack_order(request)
 
-    assert [solution.metrics.loaded_pieces for solution in response.solutions] == [50] * 4
+    assert [solution.metrics.loaded_pieces for solution in response.solutions] == [50] * 3
     for solution in response.solutions:
         validation = validate_solution(
             request.container,
@@ -118,7 +118,7 @@ def test_five_sku_case_loads_all_fifty_five_pallets_and_validates():
     request = five_sku_request()
     response = pack_order(request)
 
-    assert [solution.metrics.loaded_pieces for solution in response.solutions] == [55] * 4
+    assert [solution.metrics.loaded_pieces for solution in response.solutions] == [55] * 3
     for solution in response.solutions:
         validation = validate_solution(
             request.container,
@@ -212,7 +212,7 @@ def test_four_and_five_sku_upper_layers_are_centered_single_components():
             )
 
 
-def test_four_and_five_sku_profiles_have_four_distinct_layouts():
+def test_four_and_five_sku_profiles_have_three_distinct_layouts():
     for request in (four_sku_request(), five_sku_request()):
         response = pack_order(request)
         signatures = {
@@ -229,5 +229,5 @@ def test_four_and_five_sku_profiles_have_four_distinct_layouts():
             )
             for solution in response.solutions
         }
-        assert len(signatures) == 4
+        assert len(signatures) == 3
         assert all(solution.identical_to is None for solution in response.solutions)

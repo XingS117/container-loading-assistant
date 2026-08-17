@@ -1,7 +1,7 @@
 export type Orientation = "LWH" | "LHW" | "WLH" | "WHL" | "HLW" | "HWL";
 export type CargoKind = "carton" | "pallet";
 export type OrientationMode = "upright" | "side" | "any";
-export type SolutionProfile = "high_fill" | "stable" | "easy" | "strict_support";
+export type SolutionProfile = "high_fill" | "stable" | "easy";
 
 export interface ContainerSpec {
   id: string;

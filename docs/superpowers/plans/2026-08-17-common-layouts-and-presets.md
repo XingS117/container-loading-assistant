@@ -514,7 +514,7 @@ curl.exe -fsS https://packing.xingshuwen.com/health
 curl.exe -fsS https://packing.xingshuwen.com/api/v1/container-presets
 ```
 
-再提交一次真实 A/B/C `POST /api/v1/pack`，确认仍返回 4 个方案，
+再提交一次真实 A/B/C `POST /api/v1/pack`，确认返回 3 个方案，
 并确认首页静态资源与前端预制入口可加载。
 
 ## 提交顺序

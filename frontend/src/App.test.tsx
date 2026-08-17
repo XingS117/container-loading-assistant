@@ -30,9 +30,9 @@ const secondPreset = {
 
 const response = {
   request_id: "abc123",
-  solutions: ["high_fill", "stable", "easy", "strict_support"].map((profile, index) => ({
+  solutions: ["high_fill", "stable", "easy"].map((profile, index) => ({
     profile,
-    name: ["装载率优先", "重心稳妥", "易操作", "底层优先"][index],
+    name: ["装载率优先", "重心稳妥", "易操作"][index],
     placements: [],
     loaded_counts: { cargo_1: 0 },
     unloaded_counts: { cargo_1: 10 },
@@ -73,11 +73,11 @@ test("loads presets and switches from input to comparable solutions", async () =
   await userEvent.click(screen.getByRole("button", { name: "生成装柜方案" }));
 
   await waitFor(() => expect(screen.getByText("方案比较")).toBeInTheDocument());
-  expect(screen.getAllByRole("button", { name: /优先|稳妥|易操作/ })).toHaveLength(4);
+  expect(screen.getAllByRole("button", { name: /优先|稳妥|易操作/ })).toHaveLength(3);
   expect(screen.getByRole("button", { name: /装载率优先/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /重心稳妥/ })).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /易操作/ })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: /底层优先/ })).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: /底层优先/ })).not.toBeInTheDocument();
   expect(screen.queryByText("互叠高装载")).not.toBeInTheDocument();
 
   const containerSelect = screen.getByRole("combobox", { name: "重算柜型" });
