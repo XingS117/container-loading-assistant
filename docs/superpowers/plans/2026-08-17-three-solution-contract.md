@@ -58,8 +58,8 @@
 - 修改：`docs/superpowers/specs/2026-08-17-common-layouts-and-presets-design.md`
 - 修改：`docs/superpowers/plans/2026-08-17-common-layouts-and-presets.md`
 
-- [ ] **步骤 1：** 将正式方案、API 示例、测试说明和生产验收说明统一改为三套。
-- [ ] **步骤 2：** 将案例标题统一为「三 SKU 案例」「四 SKU 案例」「五 SKU 案例」。
-- [ ] **步骤 3：** 运行后端全量测试、前端全量测试、构建、编译和 `git diff --check`。
-- [ ] **步骤 4：** 部署 backend/frontend dist，验证生产健康接口、首页资源和 A/B/C 真实请求返回三套方案。
-- [ ] **步骤 5：** 提交并推送 GitHub，更新现有 Pull Request。
+- [x] **步骤 1：** 将正式方案、API 示例、测试说明和生产验收说明统一改为三套。
+- [x] **步骤 2：** 将案例标题统一为「三 SKU 案例」「四 SKU 案例」「五 SKU 案例」。
+- [x] **步骤 3：** 运行后端全量测试、前端全量测试、构建、编译和 `git diff --check`。
+- [x] **步骤 4：** 部署 backend/frontend dist，验证生产健康接口、首页资源和 A/B/C 真实请求返回三套方案。
+- [x] **步骤 5：** 提交并推送 GitHub，更新现有 Pull Request。
