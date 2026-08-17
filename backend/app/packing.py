@@ -1556,6 +1556,368 @@ def _same_sku_band_layout(
             )
             remaining -= extra
             next_instance[cargo_id] += extra
+    if remaining:
+            return None
+
+    placements = _expand_stacks(request, final_stacks, "high_fill")
+    validation = validate_solution(
+        request.container,
+        request.cargo_items,
+        placements,
+        item_gap_mm=gap,
+    )
+    if not validation.valid:
+        return None
+    return final_stacks
+
+
+def _floor_orientation_options(
+    request: PackRequest,
+    unit: StackUnit,
+) -> list[tuple[Orientation, int, int, int]]:
+    """Return legal floor orientations as (orientation, length, width, columns)."""
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    usable_width = request.container.inner_width_mm - 2 * c
+    door_width = request.container.door_width_mm - 2 * c
+    available_height = request.container.inner_height_mm - 2 * c
+    options: list[tuple[Orientation, int, int, int]] = []
+    seen: set[tuple[int, int, int]] = set()
+    for orientation in unit.cargo.allowed_orientations:
+        length, width, height = unit.cargo.dimensions_for(orientation)
+        capacity = _stack_capacity(
+            unit.cargo,
+            orientation,
+            available_height,
+            gap,
+        )
+        if (
+            capacity < 1
+            or length > request.container.inner_length_mm - 2 * c
+            or width > usable_width
+            or width > door_width
+            or height > request.container.door_height_mm - 2 * c
+        ):
+            continue
+        columns = (usable_width + gap) // (width + gap)
+        if columns < 1:
+            continue
+        key = (length, width, height)
+        if key in seen:
+            continue
+        seen.add(key)
+        options.append((orientation, length, width, columns))
+    return sorted(
+        options,
+        key=lambda option: (
+            -option[3],
+            option[1],
+            option[2],
+            option[0].value,
+        ),
+    )
+
+
+def _mixed_floor_band_layout(
+    request: PackRequest,
+    by_cargo: dict[str, StackUnit],
+    quantity_by_cargo: Counter[str],
+    capacity_by_cargo: dict[str, int],
+    strategy: Literal["fill", "stable", "easy", "strict"],
+) -> list[PackedStack] | None:
+    """Generate customer-style floor bands for 4/5 pure-pallet SKU orders.
+
+    The candidate keeps complete SKU bands for the main quantities and combines
+    small remainder pallets into one floor row when their footprints fit across
+    the container width. Upper pallets are added only above same-SKU floor slots.
+    """
+    if not 4 <= len(by_cargo) <= 5:
+        return None
+    if any(unit.cargo.unload_order for unit in by_cargo.values()):
+        return None
+
+    c = request.container.clearance_mm
+    gap = request.item_gap_mm
+    usable_width = request.container.inner_width_mm - 2 * c
+    door_limit = request.container.inner_length_mm - request.door_buffer_mm - c
+    cargo_ids = list(by_cargo)
+    options_by_cargo = {
+        cargo_id: _floor_orientation_options(request, by_cargo[cargo_id])
+        for cargo_id in cargo_ids
+    }
+    if any(not options for options in options_by_cargo.values()):
+        return None
+
+    floor_required = {
+        cargo_id: (
+            quantity_by_cargo[cargo_id] + capacity_by_cargo[cargo_id] - 1
+        ) // capacity_by_cargo[cargo_id]
+        for cargo_id in cargo_ids
+    }
+    if any(floor_required[cargo_id] < 1 for cargo_id in cargo_ids):
+        return None
+
+    non_stackable = [
+        cargo_id
+        for cargo_id in cargo_ids
+        if capacity_by_cargo[cargo_id] == 1
+        or not by_cargo[cargo_id].cargo.stackable
+    ]
+    stackable = [
+        cargo_id
+        for cargo_id in cargo_ids
+        if cargo_id not in non_stackable
+    ]
+    pair_ids: list[tuple[str, str]] = []
+    if (
+        len(cargo_ids) == 5
+        and len(non_stackable) == 2
+        and len(stackable) == 3
+    ):
+        first_single, second_single = sorted(
+            non_stackable,
+            key=lambda cargo_id: (
+                quantity_by_cargo[cargo_id],
+                by_cargo[cargo_id].cargo.length_mm
+                * by_cargo[cargo_id].cargo.width_mm,
+                cargo_id,
+            ),
+        )
+        first_stackable = min(
+            stackable,
+            key=lambda cargo_id: (
+                floor_required[cargo_id],
+                by_cargo[cargo_id].cargo.length_mm
+                * by_cargo[cargo_id].cargo.width_mm,
+                cargo_id,
+            ),
+        )
+        remaining_stackable = sorted(
+            (cargo_id for cargo_id in stackable if cargo_id != first_stackable),
+            key=lambda cargo_id: (
+                -floor_required[cargo_id],
+                cargo_id,
+            ),
+        )
+        pair_ids = [
+            (first_stackable, first_single),
+            (remaining_stackable[0], second_single),
+            (remaining_stackable[1], second_single),
+        ]
+
+    pair_options: list[
+        tuple[str, str, tuple[Orientation, int, int, int], tuple[Orientation, int, int, int]]
+    ] = []
+    for left_id, right_id in pair_ids:
+        choices = [
+            (left_option, right_option)
+            for left_option in options_by_cargo[left_id]
+            for right_option in options_by_cargo[right_id]
+            if left_option[2] + gap + right_option[2] <= usable_width
+        ]
+        if not choices:
+            return None
+        left_option, right_option = min(
+            choices,
+            key=lambda choice: (
+                max(choice[0][1], choice[1][1]),
+                -(choice[0][2] + gap + choice[1][2]),
+                choice[0][0].value,
+                choice[1][0].value,
+            ),
+        )
+        pair_options.append((left_id, right_id, left_option, right_option))
+
+    pair_counts: Counter[str] = Counter()
+    for left_id, right_id, _, _ in pair_options:
+        pair_counts[left_id] += 1
+        pair_counts[right_id] += 1
+    if any(
+        pair_counts[cargo_id] > floor_required[cargo_id]
+        for cargo_id in cargo_ids
+    ):
+        return None
+
+    main_counts = {
+        cargo_id: floor_required[cargo_id] - pair_counts[cargo_id]
+        for cargo_id in cargo_ids
+    }
+
+    def main_option(cargo_id: str) -> tuple[Orientation, int, int, int]:
+        count = main_counts[cargo_id]
+        return min(
+            options_by_cargo[cargo_id],
+            key=lambda option: (
+                (
+                    ((count + option[3] - 1) // option[3]) * option[1]
+                    + max(0, (count + option[3] - 1) // option[3] - 1) * gap
+                ),
+                -option[3],
+                option[1],
+                option[2],
+            ),
+        )
+
+    ordered_main_ids = [
+        cargo_id for cargo_id in cargo_ids if main_counts[cargo_id] > 0
+    ]
+    if strategy == "fill":
+        ordered_main_ids.sort(
+            key=lambda cargo_id: (
+                -by_cargo[cargo_id].cargo.length_mm
+                * by_cargo[cargo_id].cargo.width_mm,
+                cargo_id,
+            )
+        )
+    elif strategy == "stable":
+        ordered_main_ids.sort(
+            key=lambda cargo_id: (
+                -by_cargo[cargo_id].cargo.weight_g,
+                cargo_id,
+            )
+        )
+    elif strategy == "strict":
+        ordered_main_ids.sort(
+            key=lambda cargo_id: (
+                -by_cargo[cargo_id].cargo.length_mm
+                * by_cargo[cargo_id].cargo.width_mm,
+                cargo_id,
+            )
+        )
+
+    def band_y_start(width: int) -> int:
+        spare_width = max(0, usable_width - width)
+        if strategy == "stable":
+            return c + spare_width // 2
+        if strategy == "easy":
+            return c + spare_width // 4
+        return c
+
+    if strategy == "stable":
+        pair_options = list(reversed(pair_options))
+    elif strategy == "easy":
+        pair_options = sorted(
+            pair_options,
+            key=lambda pair: (
+                min(cargo_ids.index(pair[0]), cargo_ids.index(pair[1])),
+                max(cargo_ids.index(pair[0]), cargo_ids.index(pair[1])),
+            ),
+        )
+
+    floor_stacks: list[PackedStack] = []
+    floor_by_cargo: dict[str, list[PackedStack]] = defaultdict(list)
+    next_instance: Counter[str] = Counter()
+    x_cursor = c
+    step = 1
+
+    def add_floor_unit(
+        cargo_id: str,
+        option: tuple[Orientation, int, int, int],
+        x_mm: int,
+        y_mm: int,
+        step_number: int,
+    ) -> PackedStack:
+        orientation, length, width, _ = option
+        _, _, height = by_cargo[cargo_id].cargo.dimensions_for(orientation)
+        instance_index = next_instance[cargo_id]
+        unit = replace(
+            by_cargo[cargo_id],
+            id=f"{cargo_id}-mixed-floor-{instance_index}",
+            orientation=orientation,
+            count=1,
+            length_mm=length,
+            width_mm=width,
+            item_height_mm=height,
+            stack_height_mm=height,
+            total_weight_g=by_cargo[cargo_id].cargo.weight_g,
+            first_instance_index=instance_index,
+        )
+        next_instance[cargo_id] += 1
+        stack = PackedStack(
+            unit=unit,
+            x_mm=x_mm,
+            y_mm=y_mm,
+            step=step_number,
+        )
+        floor_stacks.append(stack)
+        floor_by_cargo[cargo_id].append(stack)
+        return stack
+
+    for cargo_id in ordered_main_ids:
+        option = main_option(cargo_id)
+        _, length, width, columns = option
+        count = main_counts[cargo_id]
+        rows = (count + columns - 1) // columns
+        occupied_width = columns * width + max(0, columns - 1) * gap
+        y_start = band_y_start(occupied_width)
+        for index in range(count):
+            row, column = divmod(index, columns)
+            y_mm = y_start + column * (width + gap)
+            add_floor_unit(
+                cargo_id,
+                option,
+                x_cursor + row * (length + gap),
+                y_mm,
+                step,
+            )
+        x_cursor += rows * length + max(0, rows - 1) * gap
+        step += 1
+
+    for left_id, right_id, left_option, right_option in pair_options:
+        row_length = max(left_option[1], right_option[1])
+        row_width = left_option[2] + gap + right_option[2]
+        y_start = band_y_start(row_width)
+        left = add_floor_unit(left_id, left_option, x_cursor, y_start, step)
+        add_floor_unit(
+            right_id,
+            right_option,
+            x_cursor,
+            y_start + left.width_mm + gap,
+            step,
+        )
+        x_cursor += row_length + gap
+        step += 1
+
+    if not floor_stacks or x_cursor - gap > door_limit:
+        return None
+
+    center_x = request.container.inner_length_mm / 2
+    final_stacks = list(floor_stacks)
+    for cargo_id in cargo_ids:
+        remaining = quantity_by_cargo[cargo_id] - next_instance[cargo_id]
+        extra_capacity = capacity_by_cargo[cargo_id] - 1
+        if remaining <= 0 or extra_capacity <= 0:
+            continue
+        supports = sorted(
+            floor_by_cargo[cargo_id],
+            key=lambda stack: (
+                abs(stack.x_mm + stack.length_mm / 2 - center_x),
+                stack.y_mm,
+                stack.unit.first_instance_index,
+            ),
+        )
+        for index, support in enumerate(supports):
+            if remaining <= 0:
+                break
+            extra = min(extra_capacity, remaining)
+            upper = replace(
+                support.unit,
+                id=f"{cargo_id}-mixed-upper-{index}",
+                count=extra,
+                stack_height_mm=extra * support.unit.item_height_mm,
+                total_weight_g=extra * support.unit.cargo.weight_g,
+                first_instance_index=next_instance[cargo_id],
+            )
+            final_stacks.append(
+                replace(
+                    support,
+                    unit=upper,
+                    z_mm=support.unit.item_height_mm,
+                    step=support.step,
+                )
+            )
+            remaining -= extra
+            next_instance[cargo_id] += extra
         if remaining:
             return None
 
@@ -1634,6 +1996,16 @@ def _pure_pallet_floor_first_layout(
     )
     if band_layout is not None:
         return band_layout
+
+    mixed_band_layout = _mixed_floor_band_layout(
+        request,
+        by_cargo,
+        quantity_by_cargo,
+        capacity_by_cargo,
+        strategy,
+    )
+    if mixed_band_layout is not None:
+        return mixed_band_layout
 
     def one_piece_units(counts: dict[str, int]) -> list[StackUnit]:
         result: list[StackUnit] = []
@@ -2990,7 +3362,7 @@ def pack_order(request: PackRequest) -> PackResponse:
     pure_pallet_skus = {unit.cargo.id for unit in units}
     pure_pallet_order = (
         bool(units)
-        and len(pure_pallet_skus) <= 3
+        and len(pure_pallet_skus) <= 5
         and all(
             unit.cargo.kind == "pallet" and not isinstance(unit, CompositeUnit)
             for unit in units
