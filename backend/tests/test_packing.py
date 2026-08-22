@@ -1,7 +1,15 @@
+from dataclasses import replace
+
 import pytest
 
 from app.models import CargoSpec, ContainerSpec, PackRequest
-from app.packing import PackingFailure, pack_order
+from app.packing import (
+    PackedStack,
+    PackingFailure,
+    _build_solution,
+    _build_stack_units,
+    pack_order,
+)
 from app.validator import validate_solution
 
 
@@ -84,6 +92,87 @@ def test_rejects_order_when_must_load_cargo_cannot_fit():
         pack_order(request)
 
     assert exc_info.value.code == "MUST_LOAD_UNSATISFIED"
+
+
+def test_returns_safe_fallback_when_upper_layer_is_not_continuous():
+    container = ContainerSpec(
+        id="fallback",
+        name="次优方案测试柜",
+        inner_length_mm=5000,
+        inner_width_mm=2000,
+        inner_height_mm=3000,
+        door_width_mm=2000,
+        door_height_mm=3000,
+        max_payload_g=5_000_000,
+    )
+    cargo_items = [
+        CargoSpec(
+            id="a",
+            sku="A",
+            name="A",
+            kind="pallet",
+            length_mm=1000,
+            width_mm=1000,
+            height_mm=1000,
+            weight_g=100_000,
+            quantity=2,
+            allowed_orientations=["LWH"],
+            stackable=True,
+            max_layers=2,
+            max_top_load_g=500_000,
+        ),
+        CargoSpec(
+            id="b",
+            sku="B",
+            name="B",
+            kind="pallet",
+            length_mm=1000,
+            width_mm=1000,
+            height_mm=1000,
+            weight_g=100_000,
+            quantity=2,
+            allowed_orientations=["LWH"],
+            stackable=True,
+            max_layers=2,
+            max_top_load_g=500_000,
+        ),
+    ]
+    request = PackRequest(container=container, cargo_items=cargo_items)
+    units = _build_stack_units(request)
+    by_cargo = {unit.cargo.id: unit for unit in units}
+
+    def one_piece(cargo_id: str, instance_index: int, stack_id: str):
+        unit = by_cargo[cargo_id]
+        return replace(
+            unit,
+            id=stack_id,
+            count=1,
+            stack_height_mm=unit.item_height_mm,
+            total_weight_g=unit.cargo.weight_g,
+            first_instance_index=instance_index,
+        )
+
+    stacks = [
+        PackedStack(one_piece("a", 0, "a-floor"), x_mm=0, y_mm=0),
+        PackedStack(
+            one_piece("a", 1, "a-upper"),
+            x_mm=0,
+            y_mm=0,
+            z_mm=1000,
+        ),
+        PackedStack(one_piece("b", 0, "b-floor"), x_mm=3000, y_mm=0),
+        PackedStack(
+            one_piece("b", 1, "b-upper"),
+            x_mm=3000,
+            y_mm=0,
+            z_mm=1000,
+        ),
+    ]
+
+    solution = _build_solution(request, stacks, "high_fill")
+
+    assert solution.metrics.loaded_pieces == 4
+    assert any("未形成单一中部连续区域" in warning for warning in solution.warnings)
 
 
 def test_packs_cartons_and_whole_pallets_together():

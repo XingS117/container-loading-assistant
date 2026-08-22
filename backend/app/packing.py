@@ -2221,7 +2221,7 @@ def _mixed_floor_band_layout(
         placements,
         item_gap_mm=gap,
     )
-    if not validation.valid or not _upper_layout_quality_ok(request, placements):
+    if not validation.valid:
         return None
     return final_stacks
 
@@ -2448,11 +2448,9 @@ def _pure_pallet_floor_first_layout(
                         placements,
                         item_gap_mm=gap,
                     )
-                    if not validation.valid or not _upper_layout_quality_ok(
-                        request,
-                        placements,
-                    ):
+                    if not validation.valid:
                         continue
+                    quality_ok = _upper_layout_quality_ok(request, placements)
                     component_count, upper_center, _ = _upper_layout_diagnostics(
                         request,
                         placements,
@@ -2471,6 +2469,7 @@ def _pure_pallet_floor_first_layout(
                     )
                     if strategy == "stable":
                         score = (
+                            int(quality_ok),
                             len(floor_stacks),
                             -abs(upper_center - center_x),
                             -abs(
@@ -2480,6 +2479,7 @@ def _pure_pallet_floor_first_layout(
                         )
                     elif strategy == "easy":
                         score = (
+                            int(quality_ok),
                             len(floor_stacks),
                             -_cargo_transitions(floor_stacks),
                             -len({stack.unit.cargo.id for stack in floor_stacks}),
@@ -2487,6 +2487,7 @@ def _pure_pallet_floor_first_layout(
                         )
                     else:
                         score = (
+                            int(quality_ok),
                             len(floor_stacks),
                             floor_span,
                             -abs(upper_center - center_x),
@@ -3527,14 +3528,6 @@ def _build_solution(
     )
     if not validation.valid:
         _raise_for_invalid_layout(validation)
-    if (
-        _requires_upper_continuity(request)
-        and not _upper_layout_quality_ok(request, placements)
-    ):
-        raise PackingFailure(
-            "INTERNAL_INVALID_LAYOUT",
-            "候选布局校验失败：上层货物必须形成单一中部连续区域",
-        )
     loaded = Counter(item.cargo_id for item in placements)
     loaded_counts = {item.id: loaded[item.id] for item in request.cargo_items}
     unloaded_counts = {
@@ -3567,11 +3560,51 @@ def _build_solution(
         request,
         placements,
     )
+    upper_quality_ok = (
+        not _requires_upper_continuity(request)
+        or _upper_layout_quality_ok(request, placements)
+    )
     if component_count:
         if component_count > 1:
             warnings.append(f"上层货物被拆成 {component_count} 个区域")
         if isolated:
             warnings.append("上层存在孤立单件，现场应复核支撑与装卸顺序")
+    if not upper_quality_ok:
+        if component_count > 1:
+            warnings.append(
+                "上层未形成单一中部连续区域，已返回物理安全的次优方案，请现场复核"
+            )
+        else:
+            floor = [
+                placement
+                for placement in placements
+                if placement.z_mm == request.container.clearance_mm
+            ]
+            floor_center = (
+                (
+                    min(placement.x_mm for placement in floor)
+                    + max(
+                        placement.x_mm + placement.length_mm
+                        for placement in floor
+                    )
+                )
+                / 2
+                if floor
+                else request.container.inner_length_mm / 2
+            )
+            upper_center = sum(
+                placement.x_mm + placement.length_mm / 2
+                for placement in placements
+                if placement.z_mm > request.container.clearance_mm
+            ) / sum(
+                placement.z_mm > request.container.clearance_mm
+                for placement in placements
+            )
+            warnings.append(
+                f"上层未充分集中在中部（中心偏差 "
+                f"{abs(upper_center - floor_center):.0f}mm），"
+                "已返回物理安全的次优方案，请现场复核"
+            )
     if profile == "high_fill":
         pros = [
             f"装入 {metrics.loaded_pieces} 件，体积利用率 {metrics.volume_utilization_pct}%",
