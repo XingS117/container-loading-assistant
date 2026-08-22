@@ -1,7 +1,5 @@
 from collections import Counter
 
-import pytest
-
 from app.models import CargoSpec, ContainerSpec, PackRequest
 from app.packing import (
     _build_stack_units,
@@ -102,31 +100,31 @@ def test_rectangle_components_detects_width_axis_islands():
     assert _rectangle_components(rectangles, gap=0) == 2
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_floor_first_keeps_unload_order_and_upper_region_contiguous(pack_by_goal, goal):
+def test_floor_first_keeps_unload_order_and_upper_region_contiguous():
     request = abc_request()
     request.cargo_items[0].unload_order = 1
     request.cargo_items[1].unload_order = 2
     request.cargo_items[2].unload_order = 3
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    upper = [placement for placement in solution.placements if placement.z_mm > 0]
-    rectangles = [
-        (
-            placement.x_mm,
-            placement.y_mm,
-            placement.length_mm,
-            placement.width_mm,
+    for solution in response.solutions:
+        upper = [placement for placement in solution.placements if placement.z_mm > 0]
+        rectangles = [
+            (
+                placement.x_mm,
+                placement.y_mm,
+                placement.length_mm,
+                placement.width_mm,
+            )
+            for placement in upper
+        ]
+        assert solution.metrics.loaded_pieces == 63
+        assert _rectangle_components(rectangles, request.item_gap_mm + 1) == 1
+        assert not any(
+            placement.cargo_id == "c" and placement.z_mm > 0
+            for placement in solution.placements
         )
-        for placement in upper
-    ]
-    assert solution.metrics.loaded_pieces == 63
-    assert _rectangle_components(rectangles, request.item_gap_mm + 1) == 1
-    assert not any(
-        placement.cargo_id == "c" and placement.z_mm > 0
-        for placement in solution.placements
-    )
 
 
 def test_floor_first_uses_selected_quantity_limits():
@@ -142,23 +140,24 @@ def test_floor_first_uses_selected_quantity_limits():
     assert loaded_counts == limits
 
 
-def test_each_goal_returns_single_named_solution(pack_by_goal):
-    request = abc_request()
+def test_abc_returns_three_named_core_solutions_and_no_interstack():
+    response = pack_order(abc_request())
 
-    names = {
-        "high_fill": "装载率优先",
-        "stable": "重心稳妥",
-        "easy": "易操作",
-    }
-    for goal, name in names.items():
-        solution = pack_by_goal(request, goal)
-        assert solution.profile == goal
-        assert solution.name == name
-        assert solution.metrics.loaded_pieces == 63
+    assert [solution.profile for solution in response.solutions] == [
+        "high_fill",
+        "stable",
+        "easy",
+    ]
+    assert [solution.name for solution in response.solutions] == [
+        "装载率优先",
+        "重心稳妥",
+        "易操作",
+    ]
+    assert all(solution.metrics.loaded_pieces == 63 for solution in response.solutions)
 
 
-def test_goals_are_distinct_but_keep_the_same_loaded_set(pack_by_goal):
-    request = abc_request()
+def test_abc_core_profiles_are_distinct_but_keep_the_same_loaded_set():
+    response = pack_order(abc_request())
 
     signatures = {
         tuple(
@@ -169,11 +168,11 @@ def test_goals_are_distinct_but_keep_the_same_loaded_set(pack_by_goal):
                 placement.z_mm,
                 placement.rotation.value,
             )
-            for placement in pack_by_goal(request, goal).placements
+            for placement in solution.placements
         )
-        for goal in ["high_fill", "stable", "easy"]
+        for solution in response.solutions
     }
-    assert len(signatures) == 3, "三个目标的布局应互不相同"
+    assert len(signatures) == 3
     x_signatures = {
         tuple(
             (
@@ -181,117 +180,166 @@ def test_goals_are_distinct_but_keep_the_same_loaded_set(pack_by_goal):
                 placement.x_mm,
                 placement.z_mm,
             )
-            for placement in pack_by_goal(request, goal).placements
+            for placement in solution.placements
         )
-        for goal in ["high_fill", "stable", "easy"]
+        for solution in response.solutions
     }
     assert len(x_signatures) == 3
+    assert response.solutions[0].metrics.loaded_pieces == 63
+    assert response.solutions[1].metrics.loaded_pieces == 63
+    assert response.solutions[2].metrics.loaded_pieces == 63
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_every_goal_is_physically_valid_and_floor_first(pack_by_goal, goal):
+
+def test_abc_all_core_solutions_are_physically_valid_and_floor_first():
     request = abc_request()
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    result = validate_solution(
-        request.container,
-        request.cargo_items,
-        solution.placements,
-        item_gap_mm=request.item_gap_mm,
-    )
-    assert result.valid, [issue.code for issue in result.errors]
+    for solution in response.solutions:
+        result = validate_solution(
+            request.container,
+            request.cargo_items,
+            solution.placements,
+            item_gap_mm=request.item_gap_mm,
+        )
+        assert result.valid, [issue.code for issue in result.errors]
 
-    bottom = [
-        placement
-        for placement in solution.placements
-        if placement.z_mm == request.container.clearance_mm
-    ]
-    upper = [
-        placement
-        for placement in solution.placements
-        if placement.z_mm > request.container.clearance_mm
-    ]
-    # 三原则之一：底层先铺满（底位多于上层件）
-    assert len(bottom) > len(upper)
-    assert len(bottom) >= 30
-
-    upper_components = _x_components(upper, request.item_gap_mm + 1)
-    assert len(upper_components) == 1
-    upper_center = sum(
-        placement.x_mm + placement.length_mm / 2
-        for placement in upper
-    ) / len(upper)
-    # 三原则之一：上层集中在柜长中间
-    assert abs(upper_center - request.container.inner_length_mm / 2) <= 1800
-    assert len({(placement.cargo_id, placement.instance_index) for placement in solution.placements}) == 63
-
-
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_upper_layer_is_not_an_isolated_single_piece(pack_by_goal, goal):
-    request = abc_request()
-    solution = pack_by_goal(request, goal)
-
-    upper = [placement for placement in solution.placements if placement.z_mm > 0]
-    counts = Counter(placement.cargo_id for placement in upper)
-    assert sum(counts.values()) >= 2
-    assert all(count >= 2 for count in counts.values())
-
-
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_uses_pb_pa_pb_floor_bands_and_same_sku_upper_support(pack_by_goal, goal):
-    request = abc_request()
-    solution = pack_by_goal(request, goal)
-
-    bottom = [
-        placement
-        for placement in solution.placements
-        if placement.z_mm == request.container.clearance_mm
-    ]
-    upper = [
-        placement
-        for placement in solution.placements
-        if placement.z_mm > request.container.clearance_mm
-    ]
-    pa_bottom = [placement for placement in bottom if placement.cargo_id == "a"]
-    pb_bottom = [placement for placement in bottom if placement.cargo_id == "b"]
-    pc_bottom = [placement for placement in bottom if placement.cargo_id == "c"]
-
-    pb_bands = _x_components(pb_bottom, request.item_gap_mm + 1)
-    pa_band = _x_components(pa_bottom, request.item_gap_mm + 1)
-    assert len(pb_bands) == 2
-    assert len(pa_band) == 1
-    assert pb_bands[0][1] <= pa_band[0][0]
-    assert pa_band[0][1] <= pb_bands[1][0]
-    assert min(placement.x_mm for placement in pc_bottom) >= max(
-        placement.x_mm + placement.length_mm
-        for placement in bottom
-        if placement.cargo_id in {"a", "b"}
-    )
-
-    # 三原则之一：同规格参数才可以叠放——上层件的正下方支撑必须是同 SKU 底层件
-    for elevated in upper:
-        same_sku_support = [
-            support
-            for support in bottom
-            if support.cargo_id == elevated.cargo_id
-            and support.x_mm < elevated.x_mm + elevated.length_mm
-            and support.x_mm + support.length_mm > elevated.x_mm
-            and support.y_mm < elevated.y_mm + elevated.width_mm
-            and support.y_mm + support.width_mm > elevated.y_mm
-            and support.z_mm + support.height_mm == elevated.z_mm
+        bottom = [
+            placement
+            for placement in solution.placements
+            if placement.z_mm == request.container.clearance_mm
         ]
-        assert same_sku_support, (
-            solution.profile,
-            elevated.cargo_id,
-            elevated.x_mm,
-            elevated.y_mm,
+        upper = [
+            placement
+            for placement in solution.placements
+            if placement.z_mm > request.container.clearance_mm
+        ]
+        assert len(bottom) > len(upper)
+        assert len(bottom) >= 30
+
+        upper_components = _x_components(upper, request.item_gap_mm + 1)
+        assert len(upper_components) == 1
+        upper_center = sum(
+            placement.x_mm + placement.length_mm / 2
+            for placement in upper
+        ) / len(upper)
+        floor_center = (
+            min(placement.x_mm for placement in bottom)
+            + max(placement.x_mm + placement.length_mm for placement in bottom)
+        ) / 2
+        assert abs(upper_center - floor_center) <= 1800
+        assert len({(placement.cargo_id, placement.instance_index) for placement in solution.placements}) == 63
+
+
+def test_abc_upper_layer_is_not_an_isolated_single_piece():
+    response = pack_order(abc_request())
+
+    for solution in response.solutions:
+        upper = [placement for placement in solution.placements if placement.z_mm > 0]
+        counts = Counter(placement.cargo_id for placement in upper)
+        assert sum(counts.values()) >= 2
+        assert all(count >= 2 for count in counts.values())
+
+
+def test_abc_uses_pb_pa_pb_floor_bands_and_same_sku_upper_support():
+    request = abc_request()
+    response = pack_order(request)
+
+    for solution in response.solutions:
+        bottom = [
+            placement
+            for placement in solution.placements
+            if placement.z_mm == request.container.clearance_mm
+        ]
+        upper = [
+            placement
+            for placement in solution.placements
+            if placement.z_mm > request.container.clearance_mm
+        ]
+        pa_bottom = [placement for placement in bottom if placement.cargo_id == "a"]
+        pb_bottom = [placement for placement in bottom if placement.cargo_id == "b"]
+        pc_bottom = [placement for placement in bottom if placement.cargo_id == "c"]
+
+        pb_bands = _x_components(pb_bottom, request.item_gap_mm + 1)
+        pa_band = _x_components(pa_bottom, request.item_gap_mm + 1)
+        assert len(pb_bands) == 2
+        assert len(pa_band) == 1
+        assert pb_bands[0][1] <= pa_band[0][0]
+        assert pa_band[0][1] <= pb_bands[1][0]
+        assert min(placement.x_mm for placement in pc_bottom) >= max(
+            placement.x_mm + placement.length_mm
+            for placement in bottom
+            if placement.cargo_id in {"a", "b"}
         )
 
+        for elevated in upper:
+            same_sku_support = [
+                support
+                for support in bottom
+                if support.cargo_id == elevated.cargo_id
+                and support.x_mm < elevated.x_mm + elevated.length_mm
+                and support.x_mm + support.length_mm > elevated.x_mm
+                and support.y_mm < elevated.y_mm + elevated.width_mm
+                and support.y_mm + support.width_mm > elevated.y_mm
+                and support.z_mm + support.height_mm == elevated.z_mm
+            ]
+            assert same_sku_support, (
+                solution.profile,
+                elevated.cargo_id,
+                elevated.x_mm,
+                elevated.y_mm,
+            )
 
-def test_legacy_interstack_request_flag_returns_single_solution():
+
+def test_abc_floor_bands_start_at_container_head_without_front_void():
+    request = abc_request()
+    response = pack_order(request)
+    clearance = request.container.clearance_mm
+
+    for solution in response.solutions:
+        bottom = [
+            placement
+            for placement in solution.placements
+            if placement.z_mm == clearance
+        ]
+        assert solution.metrics.loaded_pieces == 63
+        assert min(placement.x_mm for placement in bottom) == clearance
+
+        bottom_components = _x_components(bottom, request.item_gap_mm + 1)
+        assert len(bottom_components) == 1
+        assert bottom_components[0][0] == clearance
+
+
+def test_abc_floor_first_fills_length_before_using_upper_layers():
+    request = abc_request()
+    response = pack_order(request)
+    door_limit = (
+        request.container.inner_length_mm
+        - request.door_buffer_mm
+        - request.container.clearance_mm
+    )
+
+    for solution in response.solutions:
+        bottom = [
+            placement
+            for placement in solution.placements
+            if placement.z_mm == request.container.clearance_mm
+        ]
+        assert len(bottom) >= 39
+        assert max(
+            placement.x_mm + placement.length_mm for placement in bottom
+        ) >= door_limit - 150
+        assert {
+            placement.rotation.value
+            for placement in bottom
+            if placement.cargo_id == "c"
+        } == {"LWH"}
+
+
+def test_legacy_interstack_request_flag_does_not_create_a_fifth_solution():
     request = abc_request()
     request.enable_interstack = True
     response = pack_order(request)
 
-    assert len(response.solutions) == 1
+    assert len(response.solutions) == 3
     assert all(solution.profile != "interstack" for solution in response.solutions)

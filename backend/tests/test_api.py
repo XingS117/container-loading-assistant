@@ -18,7 +18,7 @@ def test_health_and_container_presets():
     assert [item["id"] for item in response.json()] == ["20gp", "40gp", "40hq"]
 
 
-def _small_payload(**overrides):
+def test_pack_endpoint_returns_four_core_solutions():
     payload = {
         "container": {
             "id": "small",
@@ -52,63 +52,11 @@ def _small_payload(**overrides):
         ],
         "item_gap_mm": 0,
     }
-    payload.update(overrides)
-    return payload
 
-
-def test_pack_endpoint_returns_single_high_fill_solution_by_default():
-    response = client.post("/api/v1/pack", json=_small_payload())
+    response = client.post("/api/v1/pack", json=payload)
 
     assert response.status_code == 200
-    body = response.json()
-    assert len(body["solutions"]) == 1
-    assert body["solutions"][0]["profile"] == "high_fill"
-    assert "identical_to" not in body["solutions"][0]
-
-
-def test_pack_endpoint_returns_requested_goal_solution():
-    for goal in ["high_fill", "stable", "easy"]:
-        response = client.post(
-            "/api/v1/pack",
-            json=_small_payload(optimization_goal=goal),
-        )
-
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert len(body["solutions"]) == 1
-        assert body["solutions"][0]["profile"] == goal
-
-
-def test_pack_endpoint_returns_layout_fingerprint_for_each_goal():
-    import re
-
-    pattern = re.compile(r"^[0-9a-f]{12}$")
-    for goal in ["high_fill", "stable", "easy"]:
-        response = client.post(
-            "/api/v1/pack",
-            json=_small_payload(optimization_goal=goal),
-        )
-
-        assert response.status_code == 200, response.text
-        fingerprint = response.json()["solutions"][0]["layout_fingerprint"]
-        assert pattern.match(fingerprint), f"{goal} 应返回 12 位 hex 布局指纹"
-
-
-def test_pack_endpoint_request_id_varies_with_goal():
-    high = client.post("/api/v1/pack", json=_small_payload(optimization_goal="high_fill")).json()
-    stable = client.post("/api/v1/pack", json=_small_payload(optimization_goal="stable")).json()
-
-    assert high["request_id"] != stable["request_id"]
-
-
-def test_pack_endpoint_rejects_invalid_optimization_goal():
-    response = client.post(
-        "/api/v1/pack",
-        json=_small_payload(optimization_goal="strict_support"),
-    )
-
-    assert response.status_code == 422
-    assert response.json()["error"]["code"] == "INVALID_REQUEST"
+    assert len(response.json()["solutions"]) == 3
 
 
 def test_pack_endpoint_returns_structured_must_load_error():

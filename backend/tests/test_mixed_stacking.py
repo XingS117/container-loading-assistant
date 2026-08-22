@@ -207,29 +207,29 @@ def test_expand_composite_multiple_stacks_do_not_overlap():
     assert len({(p.x_mm, p.y_mm) for p in carton_p}) >= 2
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_mixed_order_pallets_on_bottom_cartons_on_top(pack_by_goal, goal):
+def test_mixed_order_pallets_on_bottom_cartons_on_top():
     container = mixed_container()
     request = PackRequest(
         container=container,
         cargo_items=[pallet_box(must_load=True), carton_box(quantity=8)],
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    assert solution.loaded_counts == {"pallet": 1, "carton": 8}
-    result = validate_solution(
-        container, request.cargo_items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
-    pallet_p = [p for p in solution.placements if p.cargo_id == "pallet"]
-    carton_p = [p for p in solution.placements if p.cargo_id == "carton"]
-    assert pallet_p
-    # 分层铺满：散箱铺在第 1 层（z=0）底面
-    assert all(p.z_mm >= 1100 for p in carton_p), "散箱应上托到托盘顶面（轻在上）"
+    assert response.solutions[0].loaded_counts == {"pallet": 1, "carton": 8}
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        pallet_p = [p for p in solution.placements if p.cargo_id == "pallet"]
+        carton_p = [p for p in solution.placements if p.cargo_id == "carton"]
+        assert pallet_p
+        # 分层铺满：散箱铺在第 1 层（z=0）底面
+        assert all(p.z_mm >= 1100 for p in carton_p), "散箱应上托到托盘顶面（轻在上）"
 
 
-def test_stable_keeps_high_fill_piece_count_and_centers_pallets(pack_by_goal):
+def test_stable_keeps_high_fill_piece_count_and_centers_pallets():
     container = mixed_container()
     request = PackRequest(
         container=container,
@@ -240,9 +240,10 @@ def test_stable_keeps_high_fill_piece_count_and_centers_pallets(pack_by_goal):
         ],
     )
 
-    high_fill = pack_by_goal(request, "high_fill")
-    stable = pack_by_goal(request, "stable")
+    response = pack_order(request)
 
+    high_fill = response.solutions[0]
+    stable = response.solutions[1]
     assert stable.metrics.loaded_pieces == high_fill.metrics.loaded_pieces
     pallet_p = [p for p in stable.placements if p.cargo_id == "pallet"]
     assert pallet_p, "stable 方案应装入整托"
@@ -250,8 +251,7 @@ def test_stable_keeps_high_fill_piece_count_and_centers_pallets(pack_by_goal):
     assert min_x > 0, "stable 托盘带应居中（不贴柜头铺）"
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_mixed_order_partial_pallet_top_loading(pack_by_goal, goal):
+def test_mixed_order_partial_pallet_top_loading():
     container = mixed_container()
     request = PackRequest(
         container=container,
@@ -262,23 +262,23 @@ def test_mixed_order_partial_pallet_top_loading(pack_by_goal, goal):
         ],
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    assert solution.loaded_counts == {"pallet": 1, "pallet2": 1, "carton": 40}
-    result = validate_solution(
-        container, request.cargo_items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
-    pallet_p = [p for p in solution.placements if p.cargo_id == "pallet"]
-    carton_p = [p for p in solution.placements if p.cargo_id == "carton"]
-    assert len(carton_p) == 40
-    # 分层铺满：散箱第 1 层铺底面（40 件底面放得下 → 全部铺底）
-    on_floor = [p for p in carton_p if p.z_mm == container.clearance_mm]
-    assert on_floor, "散箱第 1 层应铺底面"
+    for solution in response.solutions:
+        assert solution.loaded_counts == {"pallet": 1, "pallet2": 1, "carton": 40}
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        pallet_p = [p for p in solution.placements if p.cargo_id == "pallet"]
+        carton_p = [p for p in solution.placements if p.cargo_id == "carton"]
+        assert len(carton_p) == 40
+        # 分层铺满：散箱第 1 层铺底面（40 件底面放得下 → 全部铺底）
+        on_floor = [p for p in carton_p if p.z_mm == container.clearance_mm]
+        assert on_floor, "散箱第 1 层应铺底面"
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_mixed_order_with_item_gap_valid(pack_by_goal, goal):
+def test_mixed_order_with_item_gap_valid():
     container = mixed_container()
     request = PackRequest(
         container=container,
@@ -290,22 +290,22 @@ def test_mixed_order_with_item_gap_valid(pack_by_goal, goal):
         item_gap_mm=10,
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    assert solution.loaded_counts == {"pallet": 1, "pallet2": 1, "carton": 40}
-    result = validate_solution(
-        container, request.cargo_items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
-    pallet_p = [p for p in solution.placements if p.cargo_id == "pallet"]
-    carton_p = [p for p in solution.placements if p.cargo_id == "carton"]
-    assert len(carton_p) == 40
-    # 分层铺满：散箱第 1 层铺底面，超出部分叠高
-    assert any(p.z_mm == 0 for p in carton_p), "散箱第 1 层应铺底面（gap>0）"
+    for solution in response.solutions:
+        assert solution.loaded_counts == {"pallet": 1, "pallet2": 1, "carton": 40}
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        pallet_p = [p for p in solution.placements if p.cargo_id == "pallet"]
+        carton_p = [p for p in solution.placements if p.cargo_id == "carton"]
+        assert len(carton_p) == 40
+        # 分层铺满：散箱第 1 层铺底面，超出部分叠高
+        assert any(p.z_mm == 0 for p in carton_p), "散箱第 1 层应铺底面（gap>0）"
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_mixed_order_with_must_load_carton_and_mixed_unavailable(pack_by_goal, goal):
+def test_mixed_order_with_must_load_carton_and_mixed_unavailable():
     container = mixed_container()
     request = PackRequest(
         container=container,
@@ -316,17 +316,19 @@ def test_mixed_order_with_must_load_carton_and_mixed_unavailable(pack_by_goal, g
         ],
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    assert solution.loaded_counts["carton"] == 8
-    assert solution.loaded_counts["pallet"] == 1
-    result = validate_solution(
-        container, request.cargo_items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
+    high_fill = response.solutions[0]
+    assert high_fill.loaded_counts["carton"] == 8
+    assert high_fill.loaded_counts["pallet"] == 1
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
 
 
-def test_easy_keeps_pallets_when_cartons_overflow(pack_by_goal):
+def test_easy_keeps_pallets_when_cartons_overflow():
     """回归：混装大订单端区放不下全部散箱时，easy 少装优先删散箱而保留托盘。
 
     容器 6000×2400×2400，2 个托盘（1200×1000）+ 300 散箱（max_layers=4，
@@ -344,22 +346,24 @@ def test_easy_keeps_pallets_when_cartons_overflow(pack_by_goal):
         ],
     )
 
-    easy = pack_by_goal(request, "easy")
+    response = pack_order(request)
 
+    easy = response.solutions[2]
     # 少装/端区溢出时托盘不得被优先删掉
     assert easy.loaded_counts["pallet"] >= 1
     assert easy.loaded_counts["pallet2"] >= 1
-    result = validate_solution(
-        container, request.cargo_items, easy.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
+    # 三个方案均通过装载校验
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
     # 发生少装时通过 warnings 披露未装入件数
     if sum(easy.unloaded_counts.values()) > 0:
         assert any("未装入" in message for message in easy.warnings)
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_overflow_cartons_to_end_zones_with_gap_valid(pack_by_goal, goal):
+def test_overflow_cartons_to_end_zones_with_gap_valid():
     """C1 回归（新布局）：散箱溢出中间带后放入两端带剩余空间，
     item_gap>0 时不产生 OVERLAP / CLEARANCE_VIOLATION。
 
@@ -385,43 +389,20 @@ def test_overflow_cartons_to_end_zones_with_gap_valid(pack_by_goal, goal):
         item_gap_mm=10,
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    result = validate_solution(
-        container, request.cargo_items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
-
-
-def test_overflow_cartons_high_fill_loads_cartons(pack_by_goal):
-    """C1 补充：high_fill 在端带溢出场景仍装入散箱（20GP 容量有限）。"""
-    container = ContainerSpec(
-        id="gp20",
-        name="20GP",
-        inner_length_mm=5898,
-        inner_width_mm=2352,
-        inner_height_mm=2393,
-        door_width_mm=2340,
-        door_height_mm=2280,
-        max_payload_g=10_000_000,
-    )
-    request = PackRequest(
-        container=container,
-        cargo_items=[
-            pallet_box(quantity=8, max_top_load_g=0),
-            carton_box(quantity=520, max_layers=8),
-        ],
-        item_gap_mm=10,
-    )
-
-    solution = pack_by_goal(request, "high_fill")
-
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
     # high_fill 分层铺满装入（20GP 容量有限）；easy 允许少装
-    assert solution.loaded_counts["carton"] > 0
+    assert response.solutions[0].loaded_counts["carton"] > 0
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_easy_never_drops_required_cartons(pack_by_goal, goal):
+
+
+def test_easy_never_drops_required_cartons():
     """C2 回归：easy 的 allow_partial 不得丢弃必装散箱。
 
     2 托盘（max_top_load_g=0，不上托）+ 200 必装散箱：端区放不下全部散箱，
@@ -439,17 +420,17 @@ def test_easy_never_drops_required_cartons(pack_by_goal, goal):
         ],
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    assert solution.loaded_counts["carton"] >= 200, "必装散箱不得少装"
-    result = validate_solution(
-        container, request.cargo_items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
+    for solution in response.solutions:
+        assert solution.loaded_counts["carton"] >= 200, "必装散箱不得少装"
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_rotatable_pallet_composite_stays_unrotated(pack_by_goal, goal):
+def test_rotatable_pallet_composite_stays_unrotated():
     """I1 回归：CompositeUnit 托盘不得被旋转放置。
 
     长柜（12032×2450×2698）+ 可旋转托盘（LWH/WLH）+ 8 散箱（全上托）。
@@ -475,22 +456,22 @@ def test_rotatable_pallet_composite_stays_unrotated(pack_by_goal, goal):
         ],
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    result = validate_solution(
-        container, request.cargo_items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
-    pallet_p = [p for p in solution.placements if p.cargo_id == "pallet"]
-    assert pallet_p
-    # 托盘按未旋转 footprint（1200×1000）放置，on_top 偏移坐标系一致
-    assert all(
-        (p.length_mm, p.width_mm) == (1200, 1000) for p in pallet_p
-    ), "托盘不得旋转放置"
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        pallet_p = [p for p in solution.placements if p.cargo_id == "pallet"]
+        assert pallet_p
+        # 托盘按未旋转 footprint（1200×1000）放置，on_top 偏移坐标系一致
+        assert all(
+            (p.length_mm, p.width_mm) == (1200, 1000) for p in pallet_p
+        ), "托盘不得旋转放置"
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_zones_include_pallet_top_cartons(pack_by_goal, goal):
+def test_zones_include_pallet_top_cartons():
     """I2 回归：zones 应包含上叠散箱（规格 3.4 各自成区）。
 
     1 托盘 + 8 散箱全上托：修复前 _compute_zones 过滤 z != floor_z 的
@@ -503,20 +484,20 @@ def test_zones_include_pallet_top_cartons(pack_by_goal, goal):
         cargo_items=[pallet_box(), carton_box(quantity=8)],
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    result = validate_solution(
-        container, request.cargo_items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
-    carton_zones = [z for z in solution.zones if z.cargo_id == "carton"]
-    assert carton_zones, "散箱应在 zones 中各自成区（分层铺满）"
-    pallet_steps = {z.step for z in solution.zones if z.cargo_id == "pallet"}
-    assert pallet_steps  # 托盘自成区；散箱各自成区（不再要求同 step）
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        carton_zones = [z for z in solution.zones if z.cargo_id == "carton"]
+        assert carton_zones, "散箱应在 zones 中各自成区（分层铺满）"
+        pallet_steps = {z.step for z in solution.zones if z.cargo_id == "pallet"}
+        assert pallet_steps  # 托盘自成区；散箱各自成区（不再要求同 step）
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_stackable_pallet_can_stack_when_height_and_load_allow(pack_by_goal, goal):
+def test_stackable_pallet_can_stack_when_height_and_load_allow():
     """整托配置为可叠放（stackable=True）时允许垂直叠放：
     按高度（柜内剩余空间）与顶部承重（max_top_load）自动判定层数。"""
     container = ContainerSpec(id="40hq", name="40HQ", inner_length_mm=12032,
@@ -530,19 +511,19 @@ def test_stackable_pallet_can_stack_when_height_and_load_allow(pack_by_goal, goa
         ],
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    result = validate_solution(
-        container, request.cargo_items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
-    pallets = [p for p in solution.placements if p.cargo_id == "pallet"]
-    assert len(pallets) == 30, "30 个整托都应装入（第 1 层铺满 + 叠高）"
-    assert any(p.z_mm > 0 for p in pallets), "可叠整托超出底面后应叠高（z>0）"
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        pallets = [p for p in solution.placements if p.cargo_id == "pallet"]
+        assert len(pallets) == 30, "30 个整托都应装入（第 1 层铺满 + 叠高）"
+        assert any(p.z_mm > 0 for p in pallets), "可叠整托超出底面后应叠高（z>0）"
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_non_stackable_pallet_rejects_pallet_above(pack_by_goal, goal):
+def test_non_stackable_pallet_rejects_pallet_above():
     """不可叠整托上方再放整托 → PALLET_STACKING（安全兜底）。"""
     container = mixed_container()
     request = PackRequest(
@@ -553,10 +534,11 @@ def test_non_stackable_pallet_rejects_pallet_above(pack_by_goal, goal):
         ],
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    pallets = [p for p in solution.placements if p.cargo_id == "pallet"]
-    assert all(p.z_mm == 0 for p in pallets), "不可叠整托不得叠放"
+    for solution in response.solutions:
+        pallets = [p for p in solution.placements if p.cargo_id == "pallet"]
+        assert all(p.z_mm == 0 for p in pallets), "不可叠整托不得叠放"
 
 
 def test_pallet_top_merge_splits_oversized_stacks():
@@ -584,8 +566,7 @@ def test_pallet_top_merge_splits_oversized_stacks():
     assert on_top_total + independent_total == 8, "拆层不得丢件"
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_split_stacks_do_not_duplicate_instance_indices(pack_by_goal, goal):
+def test_split_stacks_do_not_duplicate_instance_indices():
     """拆层后的上托栈与独立栈 instance_index 不得重叠（validator 防重复）。"""
     container = mixed_container()
     request = PackRequest(
@@ -596,22 +577,22 @@ def test_split_stacks_do_not_duplicate_instance_indices(pack_by_goal, goal):
         ],
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    result = validate_solution(
-        container, request.cargo_items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
-    indices = [
-        p.instance_index
-        for p in solution.placements
-        if p.cargo_id == "carton"
-    ]
-    assert len(indices) == len(set(indices)), "instance_index 不得重复"
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        indices = [
+            p.instance_index
+            for p in solution.placements
+            if p.cargo_id == "carton"
+        ]
+        assert len(indices) == len(set(indices)), "instance_index 不得重复"
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_rotatable_pallets_mixed_order_no_layout_failure(pack_by_goal, goal):
+def test_rotatable_pallets_mixed_order_no_layout_failure():
     """整托允许旋转（LWH+WLH，前端"保持正放"真实提交）+ 混装散箱：
     不得产生 OVERLAP/UNSUPPORTED（_pack_units 曾对 CompositeUnit 旋转导致上叠散箱错位）。"""
     container = ContainerSpec(id="40hq", name="40HQ", inner_length_mm=12032,
@@ -635,16 +616,17 @@ def test_rotatable_pallets_mixed_order_no_layout_failure(pack_by_goal, goal):
     ]
     request = PackRequest(container=container, cargo_items=items)
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    result = validate_solution(
-        container, items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
+    assert len(response.solutions) == 3
+    for solution in response.solutions:
+        result = validate_solution(
+            container, items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_rotatable_pallet_overflow_does_not_crash(pack_by_goal, goal):
+def test_rotatable_pallet_overflow_does_not_crash():
     """CompositeUnit 溢出到中间带/端带时不得触发 replace 旋转崩溃
     （生产 500 复现：TypeError: CompositeUnit.__init__() got unexpected keyword 'length_mm'）。"""
     container = ContainerSpec(id="40hq", name="40HQ", inner_length_mm=12032,
@@ -658,16 +640,17 @@ def test_rotatable_pallet_overflow_does_not_crash(pack_by_goal, goal):
         ],
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    result = validate_solution(
-        container, request.cargo_items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
+    assert len(response.solutions) == 3
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_unload_order_later_unloaded_goes_to_container_head(pack_by_goal, goal):
+def test_unload_order_later_unloaded_goes_to_container_head():
     """先卸后装：卸货顺序大的（后卸）货物先装进柜头（x 小），
     卸货顺序小的（先卸）货物靠柜门（x 大）。"""
     container = ContainerSpec(id="40hq", name="40HQ", inner_length_mm=12032,
@@ -685,18 +668,18 @@ def test_unload_order_later_unloaded_goes_to_container_head(pack_by_goal, goal):
         ],
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
 
-    later = [p for p in solution.placements if p.cargo_id == "later"]
-    first = [p for p in solution.placements if p.cargo_id == "first"]
-    assert later and first, "两类货物都应装入"
-    later_max_x = max(p.x_mm for p in later)
-    first_min_x = min(p.x_mm for p in first)
-    assert later_max_x <= first_min_x, "后卸（order=2）应装进柜头，先卸（order=1）靠柜门"
+    for solution in response.solutions:
+        later = [p for p in solution.placements if p.cargo_id == "later"]
+        first = [p for p in solution.placements if p.cargo_id == "first"]
+        assert later and first, "两类货物都应装入"
+        later_max_x = max(p.x_mm for p in later)
+        first_min_x = min(p.x_mm for p in first)
+        assert later_max_x <= first_min_x, "后卸（order=2）应装进柜头，先卸（order=1）靠柜门"
 
 
-@pytest.mark.parametrize("goal", ["high_fill", "stable", "easy"])
-def test_upper_layer_stacks_toward_container_center(pack_by_goal, goal):
+def test_upper_layer_stacks_toward_container_center():
     """分层铺满：第 1 层铺满柜底，叠高层（顶层）集中在柜长中间（两头低中间高）。"""
     container = ContainerSpec(id="40hq", name="40HQ", inner_length_mm=12032,
         inner_width_mm=2352, inner_height_mm=2698, door_width_mm=2340,
@@ -705,28 +688,29 @@ def test_upper_layer_stacks_toward_container_center(pack_by_goal, goal):
         container=container,
         cargo_items=[
             carton_box(quantity=630, length_mm=500, width_mm=400, height_mm=400,
-                       max_layers=8, max_top_load_g=100_000),
+                       max_layers=8, max_top_load_kg=50),
         ],
     )
 
-    solution = pack_by_goal(request, goal)
+    response = pack_order(request)
     center = 12032 / 2
 
-    result = validate_solution(
-        container, request.cargo_items, solution.placements, request.item_gap_mm
-    )
-    assert result.valid, [error.code for error in result.errors]
-    by_z: dict[int, list] = {}
-    for p in solution.placements:
-        by_z.setdefault(p.z_mm, []).append(p)
-    z_max = max(by_z)
-    floor = by_z[0]
-    top = by_z[z_max]
-    # 第 1 层铺满柜长（从柜头到柜门）；easy 区域化（每 SKU 一带）允许略短
-    floor_x_min = min(p.x_mm for p in floor)
-    floor_x_max = max(p.x_mm + p.length_mm for p in floor)
-    threshold = 9000 if solution.profile == "easy" else 11000
-    assert floor_x_max - floor_x_min > threshold, "第 1 层应铺满柜长"
-    # 顶层（最后一层）重量集中在柜长中间：质心贴近柜长中心
-    top_center = sum(p.x_mm + p.length_mm / 2 for p in top) / len(top)
-    assert abs(top_center - center) <= 1500, "顶层应集中在柜长中间（质心居中）"
+    for solution in response.solutions:
+        result = validate_solution(
+            container, request.cargo_items, solution.placements, request.item_gap_mm
+        )
+        assert result.valid, [error.code for error in result.errors]
+        by_z: dict[int, list] = {}
+        for p in solution.placements:
+            by_z.setdefault(p.z_mm, []).append(p)
+        z_max = max(by_z)
+        floor = by_z[0]
+        top = by_z[z_max]
+        # 第 1 层铺满柜长（从柜头到柜门）；easy 区域化（每 SKU 一带）允许略短
+        floor_x_min = min(p.x_mm for p in floor)
+        floor_x_max = max(p.x_mm + p.length_mm for p in floor)
+        threshold = 9000 if solution.profile == "easy" else 11000
+        assert floor_x_max - floor_x_min > threshold, "第 1 层应铺满柜长"
+        # 顶层（最后一层）重量集中在柜长中间：质心贴近柜长中心
+        top_center = sum(p.x_mm + p.length_mm / 2 for p in top) / len(top)
+        assert abs(top_center - center) <= 1500, "顶层应集中在柜长中间（质心居中）"

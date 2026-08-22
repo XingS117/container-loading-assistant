@@ -7,9 +7,10 @@ import { SolutionWorkspace } from "./components/SolutionWorkspace";
 import voyageBanner from "./assets/voyage-banner.jpg";
 import { getContainerPresets, packOrder } from "./lib/api";
 import { createCargo, validateCargo } from "./lib/cargo";
+import { cloneCargoPreset } from "./lib/cargoPresets";
 import { downloadCargoTemplate, readCargoExcel } from "./lib/excel";
 import { trackAnalyticsEvent } from "./lib/analytics";
-import type { CargoInput, ContainerSpec, OptimizationGoal, PackResponse } from "./types";
+import type { CargoInput, CargoPreset, ContainerSpec, PackResponse } from "./types";
 
 const STORAGE_KEY = "container-loading-assistant-draft-v1";
 
@@ -37,9 +38,9 @@ export default function App() {
   const [itemGapCm, setItemGapCm] = useState(draft.itemGapCm ?? 0);
   const [clearanceCm, setClearanceCm] = useState(draft.clearanceCm ?? 0);
   const [result, setResult] = useState<PackResponse | null>(null);
-  const [goal, setGoal] = useState<OptimizationGoal>("high_fill");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const cargoValidationError = validateCargo(cargoItems);
 
   useEffect(() => {
     getContainerPresets()
@@ -59,16 +60,15 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(nextDraft));
   }, [container, cargoItems, itemGapCm, clearanceCm]);
 
-  const calculateFor = async (nextContainer: ContainerSpec, nextGoal: OptimizationGoal = goal) => {
+  const calculateFor = async (nextContainer: ContainerSpec) => {
     const validationError = validateCargo(cargoItems);
     if (validationError) throw new Error(validationError);
     setLoading(true);
     setError(null);
     try {
       const requestContainer = { ...nextContainer, clearance_mm: Math.round(clearanceCm * 10) };
-      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, nextGoal);
+      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm);
       setContainer(nextContainer);
-      setGoal(nextGoal);
       setResult(nextResult);
       trackAnalyticsEvent("pack_solutions_generated");
     } finally {
@@ -79,10 +79,19 @@ export default function App() {
   const calculate = async () => {
     if (!container) return;
     try {
-      await calculateFor(container, goal);
+      await calculateFor(container);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "计算失败，请稍后重试");
     }
+  };
+
+  const loadPreset = (preset: CargoPreset) => {
+    if (cargoItems.length > 0 && !window.confirm("加载常见规格将替换当前货物清单，是否继续？")) {
+      return;
+    }
+    setCargoItems(cloneCargoPreset(preset));
+    setResult(null);
+    setError(null);
   };
 
   const clearDraft = () => {
@@ -95,7 +104,7 @@ export default function App() {
   };
 
   if (result && container) {
-    return <SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} goal={goal} onBack={() => setResult(null)} onRecalculate={calculateFor} recalculating={loading} />;
+    return <SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} onBack={() => setResult(null)} onRecalculate={calculateFor} recalculating={loading} />;
   }
 
   return (
@@ -121,6 +130,7 @@ export default function App() {
         <CargoTable
           rows={cargoItems}
           onChange={setCargoItems}
+          onLoadPreset={loadPreset}
           onDownloadTemplate={() => downloadCargoTemplate().catch((reason: Error) => setError(reason.message))}
           onImportFile={(file) => {
             readCargoExcel(file)
@@ -141,7 +151,7 @@ export default function App() {
         {error && <div className="form-error" role="alert">{error}</div>}
         <div className="calculate-bar">
           <div><strong>{cargoItems.reduce((sum, item) => sum + item.quantity, 0)}</strong><span>件货物 · {container?.name ?? "读取柜型中"}</span></div>
-          <button type="button" className="calculate-button" onClick={calculate} disabled={!container || loading}>
+          <button type="button" className="calculate-button" onClick={calculate} disabled={!container || loading || Boolean(cargoValidationError)}>
             {loading ? <LoaderCircle className="spin" size={19} /> : <Calculator size={19} />}
             {loading ? "正在计算" : "生成装柜方案"}
           </button>

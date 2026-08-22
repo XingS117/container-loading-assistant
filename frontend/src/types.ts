@@ -2,8 +2,6 @@ export type Orientation = "LWH" | "LHW" | "WLH" | "WHL" | "HLW" | "HWL";
 export type CargoKind = "carton" | "pallet";
 export type OrientationMode = "upright" | "side" | "any";
 export type SolutionProfile = "high_fill" | "stable" | "easy";
-/** 优化目标偏好：与后端 PackRequest.optimization_goal 对应，切换即重新计算 */
-export type OptimizationGoal = SolutionProfile;
 
 export interface ContainerSpec {
   id: string;
@@ -25,7 +23,7 @@ export interface CargoInput {
   length_cm: number;
   width_cm: number;
   height_cm: number;
-  weight_kg: number;
+  weight_kg: number | null;
   quantity: number;
   orientation_mode: OrientationMode;
   stackable: boolean;
@@ -34,6 +32,15 @@ export interface CargoInput {
   fragile: boolean;
   must_load: boolean;
   unload_order: number;
+}
+
+export interface CargoPreset {
+  id: string;
+  label: string;
+  kind: "组合" | "单品";
+  containerHint: string;
+  description: string;
+  items: Array<Omit<CargoInput, "id">>;
 }
 
 export interface Placement {
@@ -85,8 +92,7 @@ export interface PackingSolution {
   pros: string[];
   cons: string[];
   warnings: string[];
-  /** 平移归一几何指纹：切换目标后与上一方案对比，相同则披露"布局几何相同" */
-  layout_fingerprint?: string;
+  identical_to: SolutionProfile | null;
 }
 
 export interface PackResponse {

@@ -2,11 +2,13 @@ import { Download, Plus, Trash2, Upload } from "lucide-react";
 import { useRef, useState } from "react";
 
 import { createCargo } from "../lib/cargo";
-import type { CargoInput } from "../types";
+import { COMMON_CARGO_PRESETS } from "../lib/cargoPresets";
+import type { CargoInput, CargoPreset } from "../types";
 
 interface Props {
   rows: CargoInput[];
   onChange: (rows: CargoInput[]) => void;
+  onLoadPreset?: (preset: CargoPreset) => void;
   onImportFile?: (file: File) => void;
   onDownloadTemplate?: () => void;
 }
@@ -21,18 +23,24 @@ type NumericKey =
   | "max_top_load_kg"
   | "unload_order";
 
-export function CargoTable({ rows, onChange, onImportFile, onDownloadTemplate }: Props) {
+export function CargoTable({ rows, onChange, onLoadPreset, onImportFile, onDownloadTemplate }: Props) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [numericDrafts, setNumericDrafts] = useState<Record<string, string>>({});
+  const [presetOpen, setPresetOpen] = useState(false);
   const update = <K extends keyof CargoInput>(index: number, key: K, value: CargoInput[K]) => {
     onChange(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, [key]: value } : row)));
   };
   const draftKey = (rowId: string, key: NumericKey) => `${rowId}:${key}`;
-  const numericValue = (row: CargoInput, key: NumericKey) => numericDrafts[draftKey(row.id, key)] ?? String(row[key]);
+  const numericValue = (row: CargoInput, key: NumericKey) => (
+    numericDrafts[draftKey(row.id, key)] ?? (row[key] == null ? "" : String(row[key]))
+  );
   const updateNumber = (index: number, key: NumericKey, value: string) => {
     const row = rows[index];
     setNumericDrafts((current) => ({ ...current, [draftKey(row.id, key)]: value }));
-    if (value === "") return;
+    if (value === "") {
+      if (key === "weight_kg") update(index, key, null);
+      return;
+    }
     const number = Number(value);
     if (Number.isFinite(number)) update(index, key, number as CargoInput[NumericKey]);
   };
@@ -52,6 +60,32 @@ export function CargoTable({ rows, onChange, onImportFile, onDownloadTemplate }:
           <h2 id="cargo-heading">货物清单</h2>
         </div>
         <div className="cargo-actions">
+          {onLoadPreset && <div className="preset-picker">
+            <button type="button" className="compact-button" onClick={() => setPresetOpen((open) => !open)} aria-expanded={presetOpen}>
+              常见产品规格
+            </button>
+            {presetOpen && <div className="preset-menu" role="menu">
+              {(["组合", "单品"] as const).map((kind) => (
+                <div key={kind} className="preset-group">
+                  <strong>{kind}</strong>
+                  {COMMON_CARGO_PRESETS.filter((preset) => preset.kind === kind).map((preset) => (
+                    <button
+                      key={preset.id}
+                      type="button"
+                      role="menuitem"
+                      onClick={() => {
+                        onLoadPreset(preset);
+                        setPresetOpen(false);
+                      }}
+                    >
+                      <span>{preset.label}</span>
+                      <small>{preset.containerHint} · {preset.description}</small>
+                    </button>
+                  ))}
+                </div>
+              ))}
+            </div>}
+          </div>}
           {onDownloadTemplate && <button type="button" className="compact-button" onClick={onDownloadTemplate}><Download size={15} />模板</button>}
           {onImportFile && <><button type="button" className="compact-button" onClick={() => fileInputRef.current?.click()}><Upload size={15} />导入 Excel</button><input ref={fileInputRef} className="visually-hidden" type="file" accept=".xlsx" aria-label="选择 Excel 文件" onChange={(event) => { const file = event.target.files?.[0]; if (file) onImportFile(file); event.target.value = ""; }} /></>}
           <span className="section-note">{rows.length} / 30 种</span>
@@ -89,7 +123,7 @@ export function CargoTable({ rows, onChange, onImportFile, onDownloadTemplate }:
                 <input key={key} type="number" min="0.1" step="0.1" aria-label={`${["长", "宽", "高"][dimensionIndex]} ${row.sku}`} value={numericValue(row, key)} onChange={(event) => updateNumber(index, key, event.target.value)} onBlur={() => clearNumericDraft(row.id, key)} />
               ))}
             </div>
-            <label className="unit-input cargo-field"><span className="field-title">单重</span><input type="number" min="0.01" step="0.01" aria-label={`单重 ${row.sku}`} value={numericValue(row, "weight_kg")} onChange={(event) => updateNumber(index, "weight_kg", event.target.value)} onBlur={() => clearNumericDraft(row.id, "weight_kg")} /><span className="unit-suffix">kg</span></label>
+            <label className="unit-input cargo-field"><span className="field-title">单重</span><input type="number" min="0.01" step="0.01" aria-label={`单重 ${row.sku}`} placeholder={row.weight_kg == null ? "需补充" : undefined} value={numericValue(row, "weight_kg")} onChange={(event) => updateNumber(index, "weight_kg", event.target.value)} onBlur={() => clearNumericDraft(row.id, "weight_kg")} /><span className="unit-suffix">kg</span>{row.weight_kg == null && <span className="pending-weight">需补充重量</span>}</label>
             <label className="cargo-field"><span className="field-title">数量</span><input className="quantity-input" type="number" min="1" step="1" aria-label={`数量 ${row.sku}`} value={numericValue(row, "quantity")} onChange={(event) => updateNumber(index, "quantity", event.target.value)} onBlur={() => clearNumericDraft(row.id, "quantity")} /></label>
             <label className="cargo-field"><span className="field-title">摆放</span><select aria-label={`允许摆放 ${row.sku}`} value={row.orientation_mode} onChange={(event) => update(index, "orientation_mode", event.target.value as CargoInput["orientation_mode"])}>
               <option value="upright">保持正放</option>

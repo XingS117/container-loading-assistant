@@ -41,11 +41,15 @@ def validate_solution(
     cargo_items: list[CargoSpec],
     placements: list[Placement],
     item_gap_mm: int = 0,
+    support_coverage_min: float = 1.0,
+    overhang_ratio_max: float = 0.0,
 ) -> ValidationResult:
     """校验装柜方案。
 
-    高层货物必须得到 100% 完整支撑，不允许悬挑（与 packing 层同规格叠放
-    约束一致）。
+    ``support_coverage_min`` / ``overhang_ratio_max`` 用于互叠（interstack）方案：
+    允许上层货物底面只被下层覆盖一部分（覆盖率阈值），并限制任一边悬挑比例
+    （悬挑 ≤ 自身短边 × 该比例）。默认值 1.0 / 0.0 保持"100% 完整支撑、
+    不允许悬挑"的严格模式，向后兼容非互叠方案。
     """
     errors: list[ValidationIssue] = []
     cargo_by_id = {item.id: item for item in cargo_items}
@@ -161,9 +165,31 @@ def validate_solution(
 
         supporters = supporters_by_id[placed.id]
         support_area = sum(_base_intersection_area(placed, other) for other in supporters)
-        required_area = placed.length_mm * placed.width_mm
+        required_area = placed.length_mm * placed.width_mm * support_coverage_min
         if support_area < required_area:
             add("UNSUPPORTED", "高层货物底面未得到完整支撑", placed.id)
+            continue
+        if overhang_ratio_max <= 0:
+            continue
+        # 悬挑检查：上层底面超出支撑件并集外接矩形的任一边距离 ≤ 自身短边 × 比例。
+        # 拼接平面（多个下层件并集）整体支撑时，只约束"上层超出整体轮廓"的
+        # 悬挑量，不限制单个边缘支撑件的局部凸出。
+        if not supporters:
+            continue
+        min_sx = min(support.x_mm for support in supporters)
+        max_sx = max(support.x_mm + support.length_mm for support in supporters)
+        min_sy = min(support.y_mm for support in supporters)
+        max_sy = max(support.y_mm + support.width_mm for support in supporters)
+        short_side = min(placed.length_mm, placed.width_mm)
+        limit = short_side * overhang_ratio_max
+        overhang = max(
+            min_sx - placed.x_mm,
+            placed.x_mm + placed.length_mm - max_sx,
+            min_sy - placed.y_mm,
+            placed.y_mm + placed.width_mm - max_sy,
+        )
+        if overhang > limit:
+            add("UNSUPPORTED", "高层货物悬挑超过限制", placed.id)
 
     for support in known:
         item = cargo_by_id[support.cargo_id]
