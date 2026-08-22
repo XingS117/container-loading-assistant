@@ -102,3 +102,12 @@ test("renders numbered zone outlines in the top view", async () => {
   expect(zones[0]).toHaveTextContent("1");
   expect(zones[0]).toHaveTextContent("A-01 ×2");
 });
+
+
+test("falls back to the top view when WebGL is unavailable", async () => {
+  render(<LoadVisualizer container={container} solution={solution} cargoItems={cargoItems} />);
+
+  expect(await screen.findByRole("status")).toHaveTextContent("当前设备不支持 3D");
+  expect(screen.getByRole("button", { name: "俯视" })).toHaveAttribute("aria-pressed", "true");
+  expect(screen.getByTestId("layout-svg")).toBeInTheDocument();
+});

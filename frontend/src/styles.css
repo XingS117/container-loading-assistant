@@ -150,6 +150,7 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 .visual-stage { position: relative; min-height: 0; display: grid; place-items: stretch; overflow: hidden; background: repeating-linear-gradient(0deg, transparent 0 39px, rgba(23,33,29,.035) 40px), repeating-linear-gradient(90deg, transparent 0 39px, rgba(23,33,29,.035) 40px), #e9eeea; }
 .three-scene { position: absolute; inset: 0; min-height: 100%; }
 .three-scene canvas { display: block; width: 100%; height: 100%; }
+.visual-fallback { position: absolute; z-index: 2; top: 10px; left: 10px; right: 10px; padding: 8px 10px; color: #6f4b0e; background: rgba(255,246,224,.94); border: 1px solid #e6c98c; border-radius: 5px; font-size: 11px; text-align: center; pointer-events: none; }
 .layout-svg { width: 100%; height: 100%; min-height: 460px; padding: 24px; }
 .layout-item { cursor: pointer; transition: opacity .16s ease; }
 .layout-zone .zone-outline { fill: none; stroke: #173029; stroke-width: 3; stroke-dasharray: 10 6; }

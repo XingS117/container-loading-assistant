@@ -29,7 +29,7 @@ interface MeshGroup {
   matrices: THREE.Matrix4[];
 }
 
-function ThreeScene({ container, placements, visibleStep, colors, selectedCargoId, onSelectCargo, onSnapshot }: {
+function ThreeScene({ container, placements, visibleStep, colors, selectedCargoId, onSelectCargo, onSnapshot, onUnavailable }: {
   container: ContainerSpec;
   placements: Placement[];
   visibleStep: number;
@@ -37,19 +37,26 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
   selectedCargoId?: string | null;
   onSelectCargo?: (cargoId: string | null) => void;
   onSnapshot?: (dataUrl: string) => void;
+  onUnavailable?: () => void;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const groupsRef = useRef<MeshGroup[]>([]);
   const rendererRef = useRef<{ renderer: THREE.WebGLRenderer; scene: THREE.Scene; camera: THREE.Camera } | null>(null);
   const onSelectRef = useRef(onSelectCargo);
   const onSnapshotRef = useRef(onSnapshot);
+  const onUnavailableRef = useRef(onUnavailable);
 
   useEffect(() => { onSelectRef.current = onSelectCargo; }, [onSelectCargo]);
   useEffect(() => { onSnapshotRef.current = onSnapshot; }, [onSnapshot]);
+  useEffect(() => { onUnavailableRef.current = onUnavailable; }, [onUnavailable]);
 
   useEffect(() => {
     const host = hostRef.current;
-    if (!host || typeof window.WebGLRenderingContext === "undefined") return;
+    if (!host) return;
+    if (typeof window.WebGLRenderingContext === "undefined" && typeof window.WebGL2RenderingContext === "undefined") {
+      onUnavailableRef.current?.();
+      return;
+    }
 
     const width = Math.max(host.clientWidth, 320);
     const height = Math.max(host.clientHeight, 320);
@@ -61,7 +68,13 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
 
     const camera = new THREE.PerspectiveCamera(37, width / height, 0.01, 100);
     camera.position.set(12.5, 8.2, 10.8);
-    const renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    } catch {
+      onUnavailableRef.current?.();
+      return;
+    }
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     renderer.setSize(width, height);
     renderer.shadowMap.enabled = true;
@@ -69,6 +82,11 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
     renderer.domElement.dataset.layoutCanvas = "true";
     renderer.domElement.setAttribute("aria-label", "三维装柜布局图");
     host.appendChild(renderer.domElement);
+    const handleContextLost = (event: Event) => {
+      event.preventDefault();
+      onUnavailableRef.current?.();
+    };
+    renderer.domElement.addEventListener("webglcontextlost", handleContextLost);
 
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
@@ -181,20 +199,24 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
       try { onSnapshotRef.current?.(renderer.domElement.toDataURL("image/png")); } catch { /* Canvas export can be blocked by browser policy. */ }
     });
 
-    const observer = new ResizeObserver(() => {
+    const resize = () => {
       const nextWidth = Math.max(host.clientWidth, 320);
       const nextHeight = Math.max(host.clientHeight, 320);
       camera.aspect = nextWidth / nextHeight;
       camera.updateProjectionMatrix();
       renderer.setSize(nextWidth, nextHeight);
-    });
-    observer.observe(host);
+    };
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
+    if (observer) observer.observe(host);
+    else window.addEventListener("resize", resize);
     rendererRef.current = { renderer, scene, camera };
 
     return () => {
       cancelAnimationFrame(frame);
-      observer.disconnect();
+      observer?.disconnect();
+      if (!observer) window.removeEventListener("resize", resize);
       renderer.domElement.removeEventListener("pointerdown", handlePointer);
+      renderer.domElement.removeEventListener("webglcontextlost", handleContextLost);
       controls.dispose();
       scene.traverse((object) => {
         if (object instanceof THREE.Mesh || object instanceof THREE.LineSegments) {
@@ -301,6 +323,7 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
 
 export function LoadVisualizer({ container, solution, cargoItems, selectedCargoId, onSelectCargo, onSnapshot }: Props) {
   const [mode, setMode] = useState<ViewMode>("3d");
+  const [threeUnavailable, setThreeUnavailable] = useState(false);
   const maxStep = Math.max(1, ...solution.placements.map((item) => item.step));
   const [step, setStep] = useState(maxStep);
   const layers = useMemo(
@@ -320,6 +343,15 @@ export function LoadVisualizer({ container, solution, cargoItems, selectedCargoI
     return () => window.clearInterval(timer);
   }, [playing, maxStep]);
 
+  const changeMode = (nextMode: ViewMode) => {
+    setMode(nextMode);
+    if (nextMode === "3d") setThreeUnavailable(false);
+  };
+  const handleThreeUnavailable = () => {
+    setThreeUnavailable(true);
+    setMode("top");
+  };
+
   const visible = useMemo(() => {
     const byStep = solution.placements.filter((item) => item.step <= step);
     return mode === "layers" ? byStep.filter((item) => item.z_mm === layers[layerIndex]) : byStep;
@@ -336,7 +368,7 @@ export function LoadVisualizer({ container, solution, cargoItems, selectedCargoI
     <div className="load-visualizer">
       <div className="visual-controls no-print">
         <div className="view-switcher" role="group" aria-label="布局视图">
-          {modes.map(({ id, label, icon: Icon }) => <button key={id} type="button" className={mode === id ? "is-active" : ""} aria-label={label} title={label} aria-pressed={mode === id} onClick={() => setMode(id)}><Icon size={16} /><span>{label}</span></button>)}
+          {modes.map(({ id, label, icon: Icon }) => <button key={id} type="button" className={mode === id ? "is-active" : ""} aria-label={label} title={label} aria-pressed={mode === id} onClick={() => changeMode(id)}><Icon size={16} /><span>{label}</span></button>)}
         </div>
         <div className="step-control">
           <button type="button" className="icon-button" aria-label={playing ? "暂停装载演示" : "播放装载演示"} title={playing ? "暂停" : "播放"} onClick={() => setPlaying((value) => !value)}>{playing ? <Pause size={16} /> : <Play size={16} />}</button>
@@ -345,7 +377,12 @@ export function LoadVisualizer({ container, solution, cargoItems, selectedCargoI
       </div>
 
       <div className="visual-stage">
-        {mode === "3d" ? <ThreeScene container={container} placements={solution.placements} visibleStep={step} colors={colors} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onSnapshot={onSnapshot} /> : <StaticLayout mode={mode} container={container} placements={visible} zones={solution.zones} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} />}
+        {mode === "3d" && !threeUnavailable ? <ThreeScene container={container} placements={solution.placements} visibleStep={step} colors={colors} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onSnapshot={onSnapshot} onUnavailable={handleThreeUnavailable} /> : (
+          <>
+            {threeUnavailable && mode === "top" && <div className="visual-fallback" role="status" aria-live="polite">当前设备不支持 3D，已自动切换为二维俯视图。</div>}
+            <StaticLayout mode={mode === "3d" ? "top" : mode} container={container} placements={visible} zones={solution.zones} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} />
+          </>
+        )}
       </div>
 
       {mode === "layers" && layers.length > 0 && <label className="layer-control no-print"><span>层高 {(layers[layerIndex] / 10).toFixed(1)} cm</span><input aria-label="查看层高" type="range" min="0" max={Math.max(0, layers.length - 1)} value={layerIndex} onChange={(event) => setLayerIndex(Number(event.target.value))} /></label>}
