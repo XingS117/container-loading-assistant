@@ -5,6 +5,11 @@ frontend/dist/
 backend/.pytest_cache/
 backend/.pytest-tmp/
 .pytest-tmp/
+.pytest-tmp-*/
+.playwright-cli/
+.reasonix/
+.worktrees/
+_temp/
 backend/**/__pycache__/
 .venv/
 .uv-cache/
