@@ -89,6 +89,12 @@ export default function App() {
     if (cargoItems.length > 0 && !window.confirm("加载常见规格将替换当前货物清单，是否继续？")) {
       return;
     }
+    const hintedContainer = presets.find(
+      (item) =>
+        item.name === preset.containerHint
+        || item.id.toLowerCase() === preset.containerHint.toLowerCase(),
+    );
+    if (hintedContainer) setContainer(hintedContainer);
     setCargoItems(cloneCargoPreset(preset));
     setResult(null);
     setError(null);

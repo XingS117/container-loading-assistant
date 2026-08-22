@@ -117,11 +117,13 @@ test("loads a common preset and blocks calculation until weights are filled", as
 
   render(<App />);
   await screen.findByRole("button", { name: /20GP/ });
+  await userEvent.click(screen.getByRole("button", { name: /20GP/ }));
 
   expect(screen.getByRole("button", { name: "常见产品规格" })).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "常见产品规格" }));
   await userEvent.click(screen.getByRole("menuitem", { name: /^四 SKU 案例（4 种整托）/ }));
 
+  expect(screen.getByRole("button", { name: /40HQ/ })).toHaveAttribute("aria-pressed", "true");
   expect(screen.getAllByText("需补充重量").length).toBeGreaterThan(0);
   expect(screen.getByRole("button", { name: "生成装柜方案" })).toBeDisabled();
 });
