@@ -80,9 +80,11 @@ git diff --check
 
 说明自定义组合现在使用通用排组候选，预置模板仍优先；记录 AI 仅做策略推荐、必须经过后端物理校验且未配置时自动回退。
 
-- [ ] **步骤 2：提交实现**
+- [x] **步骤 2：提交实现**
 
 ```powershell
 git add backend/app/packing.py backend/tests/test_packing.py docs/HANDOFF.md docs/superpowers/specs/2026-08-23-generic-floor-band-search-design.md docs/superpowers/plans/2026-08-23-generic-floor-band-search.md
 git commit -m "feat(算法): 增强自定义整托排组搜索"
 ```
+
+结果：已提交为 `8a716ac`。本次只完成本地实现与验证，未执行生产部署或 GitHub 推送。
