@@ -31,9 +31,11 @@ export function CargoTable({ rows, onChange, onLoadPreset, onImportFile, onDownl
     onChange(rows.map((row, rowIndex) => (rowIndex === index ? { ...row, [key]: value } : row)));
   };
   const draftKey = (rowId: string, key: NumericKey) => `${rowId}:${key}`;
-  const numericValue = (row: CargoInput, key: NumericKey) => (
-    numericDrafts[draftKey(row.id, key)] ?? (row[key] == null ? "" : String(row[key]))
-  );
+  const numericValue = (row: CargoInput, key: NumericKey) => {
+    if (numericDrafts[draftKey(row.id, key)] !== undefined) return numericDrafts[draftKey(row.id, key)];
+    if (row[key] == null || (key === "quantity" && row.quantity === 0)) return "";
+    return String(row[key]);
+  };
   const updateNumber = (index: number, key: NumericKey, value: string) => {
     const row = rows[index];
     setNumericDrafts((current) => ({ ...current, [draftKey(row.id, key)]: value }));
@@ -51,6 +53,8 @@ export function CargoTable({ rows, onChange, onLoadPreset, onImportFile, onDownl
       return remaining;
     });
   };
+  const combinationPresets = COMMON_CARGO_PRESETS.filter((preset) => preset.kind === "组合");
+  const singlePresets = COMMON_CARGO_PRESETS.filter((preset) => preset.kind === "单品");
 
   return (
     <section className="section-block cargo-section" aria-labelledby="cargo-heading">
@@ -65,10 +69,9 @@ export function CargoTable({ rows, onChange, onLoadPreset, onImportFile, onDownl
               常见产品规格
             </button>
             {presetOpen && <div className="preset-menu" role="menu">
-              {(["组合", "单品"] as const).map((kind) => (
-                <div key={kind} className="preset-group">
-                  <strong>{kind}</strong>
-                  {COMMON_CARGO_PRESETS.filter((preset) => preset.kind === kind).map((preset) => (
+              <div className="preset-group">
+                <strong>组合案例 · 整套加载</strong>
+                {combinationPresets.map((preset) => (
                     <button
                       key={preset.id}
                       type="button"
@@ -81,9 +84,25 @@ export function CargoTable({ rows, onChange, onLoadPreset, onImportFile, onDownl
                       <span>{preset.label}</span>
                       <small>{preset.containerHint} · {preset.description}</small>
                     </button>
-                  ))}
-                </div>
-              ))}
+                ))}
+              </div>
+              <div className="preset-group">
+                <strong>常用单品规格 · 只预填基本尺寸</strong>
+                {singlePresets.map((preset) => (
+                  <button
+                    key={preset.id}
+                    type="button"
+                    role="menuitem"
+                    onClick={() => {
+                      onLoadPreset(preset);
+                      setPresetOpen(false);
+                    }}
+                  >
+                    <span>{preset.label}</span>
+                    <small>{preset.containerHint} · {preset.description}</small>
+                  </button>
+                ))}
+              </div>
             </div>}
           </div>}
           {onDownloadTemplate && <button type="button" className="compact-button" onClick={onDownloadTemplate}><Download size={15} />模板</button>}
@@ -94,13 +113,21 @@ export function CargoTable({ rows, onChange, onLoadPreset, onImportFile, onDownl
 
       <div className="cargo-table" role="table" aria-label="货物清单">
         <div className="cargo-table-head" role="row">
-          <span>货物</span><span>类型</span><span>长 × 宽 × 高 (cm)</span><span>单重</span><span>数量</span><span>摆放</span><span>叠放</span><span>约束</span><span />
+          <span>货物代号/名称</span><span>类型</span><span>长 × 宽 × 高 (cm)</span><span>单重</span><span>数量</span><span>摆放</span><span>叠放</span><span>约束</span><span />
         </div>
         {rows.map((row, index) => (
           <div className="cargo-row" role="row" key={row.id}>
-            <div className="cargo-identity cargo-field" data-label="货物">
-              <input aria-label={`SKU ${index + 1}`} value={row.sku} onChange={(event) => update(index, "sku", event.target.value)} />
-              <input aria-label={`货物名称 ${index + 1}`} value={row.name} onChange={(event) => update(index, "name", event.target.value)} />
+            <div className="cargo-identity cargo-field" data-label="货物代号/名称">
+              <input
+                aria-label={`货物代号或名称 ${index + 1}`}
+                value={row.sku}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  onChange(rows.map((item, rowIndex) => (
+                    rowIndex === index ? { ...item, sku: value, name: value } : item
+                  )));
+                }}
+              />
             </div>
             <label className="cargo-field"><span className="field-title">类型</span><select aria-label={`货物类型 ${row.sku}`} value={row.kind} onChange={(event) => {
               const next = event.target.value as CargoInput["kind"];
@@ -108,7 +135,7 @@ export function CargoTable({ rows, onChange, onLoadPreset, onImportFile, onDownl
                 // 一次更新多个字段：update() 基于闭包旧 rows，连续多次调用会互相覆盖
                 onChange(rows.map((item, rowIndex) => (
                   rowIndex === index
-                    ? { ...item, kind: "pallet", stackable: false, max_top_load_kg: 500 }
+                    ? { ...item, kind: "pallet", stackable: true, max_layers: 2, max_top_load_kg: 500 }
                     : item
                 )));
               } else {

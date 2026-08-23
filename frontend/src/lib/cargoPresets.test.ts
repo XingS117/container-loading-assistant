@@ -3,6 +3,8 @@ import { COMMON_CARGO_PRESETS, cloneCargoPreset } from "./cargoPresets";
 test("contains three combinations and twelve single-product presets", () => {
   expect(COMMON_CARGO_PRESETS.filter((item) => item.kind === "组合")).toHaveLength(3);
   expect(COMMON_CARGO_PRESETS.filter((item) => item.kind === "单品")).toHaveLength(12);
+  expect(new Set(COMMON_CARGO_PRESETS.filter((item) => item.kind === "单品").map((item) => item.group))).toEqual(new Set(["常用单品规格"]));
+  expect(COMMON_CARGO_PRESETS.filter((item) => item.kind === "单品").every((item) => item.items[0].quantity === 0)).toBe(true);
 });
 
 test("contains the confirmed common dimensions and quantities", () => {
@@ -18,6 +20,9 @@ test("contains the confirmed common dimensions and quantities", () => {
   ]);
   expect(fiveSku?.items.map((item) => item.quantity)).toEqual([22, 25, 5, 1, 2]);
   expect(abc?.items.map((item) => item.weight_kg)).toEqual([150, 280, 400]);
+  expect(abc?.items.map((item) => item.sku)).toEqual(["ZT1", "ZT2", "ZT3"]);
+  expect(fourSku?.items.map((item) => item.sku)).toEqual(["ZT1", "ZT2", "ZT3", "ZT4"]);
+  expect(fiveSku?.items.map((item) => item.sku)).toEqual(["ZT1", "ZT2", "ZT3", "ZT4", "ZT5"]);
 });
 
 test("marks missing weights without sharing mutable rows", () => {

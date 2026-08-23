@@ -102,9 +102,10 @@ test("selecting pallet kind keeps the selection and applies pallet defaults", as
 
   // 关键回归：选中整托后下拉必须保持整托（此前多次 update 互相覆盖导致跳回散箱）
   expect(screen.getByRole("combobox", { name: "货物类型 SKU-001" })).toHaveValue("pallet");
-  // 整托不可叠（可叠复选框不勾选）
-  expect(screen.getByRole("checkbox", { name: /可叠/ })).not.toBeChecked();
-  // 整托默认顶部承重 500kg（允许散箱上托）
+  // 整托默认可叠两层，特殊规格由用户取消或调整。
+  expect(screen.getByRole("checkbox", { name: /可叠/ })).toBeChecked();
+  expect(screen.getByLabelText("最大层数 SKU-001")).toHaveValue(2);
+  // 整托默认顶部承重 500kg。
   expect(screen.getByLabelText("顶部承重 SKU-001")).toHaveValue(500);
 });
 
@@ -121,7 +122,7 @@ test("loads a common preset and blocks calculation until weights are filled", as
 
   expect(screen.getByRole("button", { name: "常见产品规格" })).toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: "常见产品规格" }));
-  await userEvent.click(screen.getByRole("menuitem", { name: /^四 SKU 案例（4 种整托）/ }));
+  await userEvent.click(screen.getByRole("menuitem", { name: /^四 SKU 案例（4 种整托，50 托）/ }));
 
   expect(screen.getByRole("button", { name: /40HQ/ })).toHaveAttribute("aria-pressed", "true");
   expect(screen.getAllByText("需补充重量").length).toBeGreaterThan(0);

@@ -38,6 +38,7 @@ export interface CargoPreset {
   id: string;
   label: string;
   kind: "组合" | "单品";
+  group: string;
   containerHint: string;
   description: string;
   items: Array<Omit<CargoInput, "id">>;

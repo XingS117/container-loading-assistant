@@ -7,7 +7,8 @@ export function createCargo(sku?: string): CargoInput {
   return {
     id: `cargo_${Date.now()}_${sequence}`,
     sku: sku ?? `SKU-${String(sequence).padStart(3, "0")}`,
-    name: "标准纸箱",
+    // name remains in the model for old API and Excel data; the UI uses one label field.
+    name: sku ?? `SKU-${String(sequence).padStart(3, "0")}`,
     kind: "carton",
     length_cm: 60,
     width_cm: 40,
@@ -33,8 +34,8 @@ export function orientationsFor(mode: CargoInput["orientation_mode"]): Orientati
 export function validateCargo(rows: CargoInput[]): string | null {
   if (!rows.length) return "请至少添加一种货物";
   if (rows.length > 30) return "单次最多支持 30 种货物";
-  if (rows.some((row) => !row.sku.trim() || !row.name.trim())) {
-    return "SKU 和货物名称不能为空";
+  if (rows.some((row) => !row.sku.trim())) {
+    return "货物代号或名称不能为空";
   }
   if (rows.some((row) => row.weight_kg == null)) {
     return "请先补充所有货物的单托重量";

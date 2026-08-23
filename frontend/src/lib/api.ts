@@ -26,7 +26,7 @@ export async function packOrder(
       cargo_items: cargoItems.map((item) => ({
         id: item.id,
         sku: item.sku.trim(),
-        name: item.name.trim(),
+        name: item.name.trim() || item.sku.trim(),
         kind: item.kind,
         length_mm: Math.round(item.length_cm * 10),
         width_mm: Math.round(item.width_cm * 10),

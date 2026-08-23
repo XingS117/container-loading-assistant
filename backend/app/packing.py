@@ -62,6 +62,8 @@ LAYOUT_ADVICE: dict[str, str] = {
     "TOP_LOAD_EXCEEDED": "货物顶部承重不足，请调大“顶部承重”或减少该位置货物数量",
 }
 
+SOFT_LAYOUT_FALLBACK_WARNING = "未完全满足上层连续集中要求，当前为次优方案，请现场复核"
+
 
 @dataclass(frozen=True)
 class StackUnit:
@@ -858,12 +860,12 @@ def _pack_units(
     return packed
 
 
-def _candidate_score(stacks: list[PackedStack]) -> tuple[int, int, int]:
-    return (
-        sum(stack.unit.volume_mm3 for stack in stacks),
-        sum(stack.unit.count for stack in stacks),
-        -len(stacks),
-    )
+def _candidate_score(
+    request: PackRequest,
+    stacks: list[PackedStack],
+) -> tuple[float, ...]:
+    placements = _expand_stacks(request, stacks, "high_fill")
+    return _layout_quality_score(request, placements, "high_fill")
 
 
 def _required_satisfied(request: PackRequest, stacks: list[PackedStack]) -> bool:
@@ -907,21 +909,31 @@ def _high_fill_candidate(request: PackRequest, units: list[StackUnit]) -> list[P
         mixed = _layer_layout(request, merged, band_grid=False)
         if mixed is not None and _required_satisfied(request, mixed):
             layer_candidates.append(mixed)
-    if layer_candidates:
-        return max(layer_candidates, key=_candidate_score)
-    if not candidates:
+    all_candidates = candidates + layer_candidates
+    if not all_candidates:
         missing_required = [unit for unit in units if unit.required]
-        cargo_names = "、".join(sorted({unit.cargo.sku for unit in missing_required}))
+        if missing_required:
+            cargo_names = "、".join(
+                sorted({unit.cargo.sku for unit in missing_required})
+            )
+            raise PackingFailure(
+                "MUST_LOAD_UNSATISFIED",
+                f"必装货物 {cargo_names} 无法全部放入当前柜型",
+                hint="请减少其他货物数量或更换更大柜型，确保必装货物能全部装入",
+            )
         raise PackingFailure(
-            "MUST_LOAD_UNSATISFIED",
-            f"必装货物 {cargo_names} 无法全部放入当前柜型",
-            hint="请减少其他货物数量或更换更大柜型，确保必装货物能全部装入",
+            "LAYOUT_NOT_FEASIBLE",
+            "当前柜型未找到物理安全的可选货物布局",
+            hint="系统已尽力搜索安全方案，请减少货物数量或更换更大柜型",
         )
-    best_score = max(_candidate_score(candidate) for candidate in candidates)
+    best_score = max(
+        _candidate_score(request, candidate)
+        for candidate in all_candidates
+    )
     best_candidates = [
         candidate
-        for candidate in candidates
-        if _candidate_score(candidate) == best_score
+        for candidate in all_candidates
+        if _candidate_score(request, candidate) == best_score
     ]
     return min(best_candidates, key=lambda candidate: _stack_imbalance(request, candidate))
 
@@ -1311,20 +1323,92 @@ def _rectangle_components(
     return len({find(index) for index in range(len(rectangles))})
 
 
-def _upper_layout_diagnostics(
+@dataclass(frozen=True)
+class LayoutQuality:
+    floor_count: int
+    upper_count: int
+    floor_x_components: int
+    floor_coverage_pct: float
+    upper_components: int
+    upper_center_mm: float
+    upper_center_deviation_mm: float
+    upper_isolated_count: int
+    sku_transitions: int
+
+
+def _interval_components(
+    intervals: list[tuple[int, int]],
+    tolerance: int,
+) -> int:
+    if not intervals:
+        return 0
+    components = 0
+    current_end: int | None = None
+    for start, end in sorted(intervals):
+        if current_end is None or start > current_end + tolerance:
+            components += 1
+            current_end = end
+        else:
+            current_end = max(current_end, end)
+    return components
+
+
+def _interval_union_length(
+    intervals: list[tuple[int, int]],
+    tolerance: int,
+) -> int:
+    if not intervals:
+        return 0
+    total = 0
+    current_start: int | None = None
+    current_end: int | None = None
+    for start, end in sorted(intervals):
+        if current_start is None:
+            current_start, current_end = start, end
+            continue
+        if start <= current_end + tolerance:
+            current_end = max(current_end, end)
+            continue
+        total += current_end - current_start
+        current_start, current_end = start, end
+    return total + (current_end - current_start)
+
+
+def _layout_quality(
     request: PackRequest,
     placements: list[Placement],
-) -> tuple[int, float, bool]:
-    """Return upper-layer components, center position, and isolated status."""
+) -> LayoutQuality:
     clearance = request.container.clearance_mm
+    tolerance = request.item_gap_mm + 1
+    floor = [
+        placement
+        for placement in placements
+        if placement.z_mm == clearance
+    ]
     upper = [
         placement
         for placement in placements
         if placement.z_mm > clearance
     ]
-    if not upper:
-        return 0, 0.0, False
-    rectangles = [
+    floor_intervals = [
+        (placement.x_mm, placement.x_mm + placement.length_mm)
+        for placement in floor
+    ]
+    floor_components = _interval_components(floor_intervals, tolerance)
+    if floor_intervals:
+        floor_start = min(start for start, _ in floor_intervals)
+        floor_end = max(end for _, end in floor_intervals)
+        floor_span = floor_end - floor_start
+        floor_coverage_pct = round(
+            _interval_union_length(floor_intervals, tolerance)
+            / floor_span
+            * 100,
+            2,
+        ) if floor_span else 100.0
+    else:
+        floor_coverage_pct = 0.0
+
+    upper_rectangles = [
         (
             placement.x_mm,
             placement.y_mm,
@@ -1333,37 +1417,17 @@ def _upper_layout_diagnostics(
         )
         for placement in upper
     ]
-    component_count = _rectangle_components(
-        rectangles,
-        request.item_gap_mm + 1,
-    )
-    upper_center = sum(
-        placement.x_mm + placement.length_mm / 2
-        for placement in upper
-    ) / len(upper)
-    upper_by_cargo = Counter(placement.cargo_id for placement in upper)
-    isolated = len(upper) == 1 or any(
-        count == 1 for count in upper_by_cargo.values()
-    )
-    return component_count, upper_center, isolated
-
-
-def _upper_layout_quality_ok(
-    request: PackRequest,
-    placements: list[Placement],
-) -> bool:
-    """Require one upper component centered over the occupied floor region."""
-    component_count, upper_center, _ = _upper_layout_diagnostics(
-        request,
-        placements,
-    )
-    if component_count == 0:
-        return True
-    floor = [
-        placement
-        for placement in placements
-        if placement.z_mm == request.container.clearance_mm
-    ]
+    if len(upper_rectangles) > 300:
+        # The large-order path approximates connectivity on the length axis.
+        upper_components = _interval_components(
+            [
+                (x, x + length)
+                for x, _, length, _ in upper_rectangles
+            ],
+            tolerance,
+        )
+    else:
+        upper_components = _rectangle_components(upper_rectangles, tolerance)
     if floor:
         floor_center = (
             min(placement.x_mm for placement in floor)
@@ -1371,21 +1435,138 @@ def _upper_layout_quality_ok(
         ) / 2
     else:
         floor_center = request.container.inner_length_mm / 2
-    return (
-        component_count == 1
-        and abs(upper_center - floor_center) <= 1800
+    if upper:
+        upper_center = sum(
+            placement.x_mm + placement.length_mm / 2
+            for placement in upper
+        ) / len(upper)
+        upper_center_deviation = abs(upper_center - floor_center)
+    else:
+        upper_center = request.container.inner_length_mm / 2
+        upper_center_deviation = 0.0
+
+    if len(upper_rectangles) > 300:
+        # Large orders use an X-axis approximation to keep diagnostics linearithmic.
+        # Exact pairwise component checks are retained for normal-sized orders.
+        isolated_count = 0 if upper_components <= 1 else upper_components
+    else:
+        isolated_count = 0
+        for index, rectangle in enumerate(upper_rectangles):
+            has_neighbor = any(
+                index != other_index
+                and _rectangle_components(
+                    [rectangle, other_rectangle],
+                    tolerance,
+                ) == 1
+                for other_index, other_rectangle in enumerate(upper_rectangles)
+            )
+            if not has_neighbor:
+                isolated_count += 1
+
+    ordered = sorted(
+        placements,
+        key=lambda placement: (
+            placement.z_mm > clearance,
+            placement.x_mm,
+            placement.y_mm,
+            placement.z_mm,
+        ),
+    )
+    sku_transitions = sum(
+        first.cargo_id != second.cargo_id
+        for first, second in zip(ordered, ordered[1:])
+    )
+    return LayoutQuality(
+        floor_count=len(floor),
+        upper_count=len(upper),
+        floor_x_components=floor_components,
+        floor_coverage_pct=floor_coverage_pct,
+        upper_components=upper_components,
+        upper_center_mm=upper_center,
+        upper_center_deviation_mm=upper_center_deviation,
+        upper_isolated_count=isolated_count,
+        sku_transitions=sku_transitions,
     )
 
 
-def _requires_upper_continuity(request: PackRequest) -> bool:
-    """Apply the middle-focused rule to pure-pallet layouts only.
+def _layout_quality_score(
+    request: PackRequest,
+    placements: list[Placement],
+    profile: str,
+) -> tuple[float, ...]:
+    quality = _layout_quality(request, placements)
+    floor_first = int(
+        quality.upper_count == 0
+        or quality.floor_count >= quality.upper_count
+    )
+    floor_continuous = int(
+        quality.floor_count == 0
+        or quality.floor_x_components == 1
+    )
+    upper_continuous = int(
+        quality.upper_count == 0
+        or quality.upper_components == 1
+    )
+    upper_compact = int(
+        quality.upper_count == 0
+        or quality.upper_isolated_count == 0
+    )
+    common = (
+        floor_first,
+        floor_continuous,
+        quality.floor_coverage_pct,
+        upper_continuous,
+        upper_compact,
+        -quality.upper_center_deviation_mm,
+    )
+    loaded = float(len(placements))
+    if profile == "stable":
+        metrics = _metrics(request, placements)
+        return (loaded,) + common + (
+            -metrics.weight_imbalance_pct,
+            -quality.sku_transitions,
+        )
+    if profile == "easy":
+        return (loaded,) + common + (
+            -quality.sku_transitions,
+        )
+    return (loaded,) + (
+        float(sum(
+            item.length_mm * item.width_mm * item.height_mm
+            for item in placements
+        )),
+    ) + common
 
-    Mixed pallet/carton loads legitimately use separate end and middle zones;
-    those zones must still pass the physical validator, but they are not
-    equivalent to the customer's pure-pallet floor-first layout.
-    """
-    return bool(request.cargo_items) and all(
-        item.kind == "pallet" for item in request.cargo_items
+
+def _upper_layout_diagnostics(
+    request: PackRequest,
+    placements: list[Placement],
+) -> tuple[int, float, bool]:
+    """Return upper-layer components, center position, and isolated status."""
+    quality = _layout_quality(request, placements)
+    if not quality.upper_count:
+        return 0, 0.0, False
+    return (
+        quality.upper_components,
+        quality.upper_center_mm,
+        quality.upper_isolated_count > 0,
+    )
+
+
+def _upper_layout_quality_ok(
+    request: PackRequest,
+    placements: list[Placement],
+) -> bool:
+    """Require one upper component centered over the occupied floor region."""
+    quality = _layout_quality(request, placements)
+    if quality.upper_count == 0:
+        return True
+    return (
+        quality.floor_count >= quality.upper_count
+        and quality.floor_x_components <= 1
+        and quality.upper_components == 1
+        and quality.upper_isolated_count == 0
+        and quality.upper_center_deviation_mm <= 1800
     )
 
 
@@ -2467,32 +2648,22 @@ def _pure_pallet_floor_first_layout(
                             if placement.z_mm == c
                         )
                     )
-                    if strategy == "stable":
-                        score = (
-                            int(quality_ok),
-                            len(floor_stacks),
-                            -abs(upper_center - center_x),
-                            -abs(
-                                _metrics(request, placements).length_imbalance_pct
-                            ),
-                            floor_span,
-                        )
-                    elif strategy == "easy":
-                        score = (
-                            int(quality_ok),
-                            len(floor_stacks),
-                            -_cargo_transitions(floor_stacks),
-                            -len({stack.unit.cargo.id for stack in floor_stacks}),
-                            floor_span,
-                        )
-                    else:
-                        score = (
-                            int(quality_ok),
-                            len(floor_stacks),
-                            floor_span,
-                            -abs(upper_center - center_x),
-                            -component_count,
-                        )
+                    profile_name = {
+                        "fill": "high_fill",
+                        "stable": "stable",
+                        "easy": "easy",
+                        "strict": "easy",
+                    }[strategy]
+                    score = _layout_quality_score(
+                        request,
+                        placements,
+                        profile_name,
+                    ) + (
+                        int(quality_ok),
+                        floor_span,
+                        -abs(upper_center - center_x),
+                        -component_count,
+                    )
                     candidates.append((score, final_stacks))
 
     if not candidates:
@@ -3544,8 +3715,11 @@ def _build_solution(
     if request.door_buffer_mm > 0:
         warnings.append(f"柜门预留操作空间 {request.door_buffer_mm}mm")
         max_end = max(
-            placement.x_mm + placement.length_mm
-            for placement in placements
+            (
+                placement.x_mm + placement.length_mm
+                for placement in placements
+            ),
+            default=request.container.clearance_mm,
         )
         actual_door_reserve = request.container.inner_length_mm - max_end
         if actual_door_reserve < request.door_buffer_mm:
@@ -3554,57 +3728,56 @@ def _build_solution(
                 f"较目标少 {request.door_buffer_mm - actual_door_reserve}mm，"
                 "请现场复核"
             )
-    if sum(unloaded_counts.values()):
+    unloaded_total = sum(unloaded_counts.values())
+    if unloaded_total:
         warnings.append(f"仍有 {sum(unloaded_counts.values())} 件货物未装入本柜")
-    component_count, _, isolated = _upper_layout_diagnostics(
-        request,
-        placements,
-    )
-    upper_quality_ok = (
-        not _requires_upper_continuity(request)
-        or _upper_layout_quality_ok(request, placements)
-    )
-    if component_count:
-        if component_count > 1:
-            warnings.append(f"上层货物被拆成 {component_count} 个区域")
-        if isolated:
-            warnings.append("上层存在孤立单件，现场应复核支撑与装卸顺序")
-    if not upper_quality_ok:
-        if component_count > 1:
+        requested_weight = sum(
+            item.quantity * item.weight_g for item in request.cargo_items
+        )
+        remaining_payload = max(0, request.container.max_payload_g - metrics.loaded_weight_g)
+        if requested_weight > request.container.max_payload_g:
+            overload = requested_weight - request.container.max_payload_g
             warnings.append(
-                "上层未形成单一中部连续区域，已返回物理安全的次优方案，请现场复核"
+                f"订单总重 {requested_weight / 1_000_000:.2f}t，超过柜体最大载重 "
+                f"{request.container.max_payload_g / 1_000_000:.2f}t（超出 "
+                f"{overload / 1_000_000:.2f}t）；即使柜内空间足够，也无法全部装入一柜，"
+                "请分柜或改用更高载重柜型"
             )
-        else:
-            floor = [
-                placement
-                for placement in placements
-                if placement.z_mm == request.container.clearance_mm
-            ]
-            floor_center = (
-                (
-                    min(placement.x_mm for placement in floor)
-                    + max(
-                        placement.x_mm + placement.length_mm
-                        for placement in floor
-                    )
-                )
-                / 2
-                if floor
-                else request.container.inner_length_mm / 2
+        if remaining_payload > 0:
+            warnings.append(
+                f"当前方案仍剩载重 {remaining_payload / 1_000_000:.2f}t；未装货物并非仅因总载重已满，"
+                "还受柜内可用底面、允许朝向、同规格支撑、层数或柜门操作空间等安全约束限制"
             )
-            upper_center = sum(
-                placement.x_mm + placement.length_mm / 2
-                for placement in placements
-                if placement.z_mm > request.container.clearance_mm
-            ) / sum(
-                placement.z_mm > request.container.clearance_mm
-                for placement in placements
-            )
+    quality = _layout_quality(request, placements)
+    component_count = quality.upper_components
+    upper_quality_ok = _upper_layout_quality_ok(request, placements)
+    if component_count > 1:
+        warnings.append(f"上层货物被拆成 {component_count} 个区域")
+    if quality.upper_isolated_count:
+        warnings.append(
+            f"上层存在 {quality.upper_isolated_count} 件几何孤立货物，"
+            "现场应复核支撑与装卸顺序"
+        )
+    if not upper_quality_ok:
+        warnings.append(SOFT_LAYOUT_FALLBACK_WARNING)
+        if component_count > 1:
+            warnings.append("上层未形成单一中部连续区域，请现场复核")
+        elif quality.upper_count:
             warnings.append(
                 f"上层未充分集中在中部（中心偏差 "
-                f"{abs(upper_center - floor_center):.0f}mm），"
-                "已返回物理安全的次优方案，请现场复核"
+                f"{quality.upper_center_deviation_mm:.0f}mm），"
+                "请现场复核"
             )
+    if quality.floor_count and (
+        quality.floor_x_components > 1
+        or quality.floor_coverage_pct < 95
+        or quality.floor_count < quality.upper_count
+    ):
+        warnings.append(
+            f"底层连续铺满程度不足（连续区 {quality.floor_x_components} 个，"
+            f"覆盖率 {quality.floor_coverage_pct:.1f}%），"
+            "当前为物理安全的次优方案，请现场复核"
+        )
     if profile == "high_fill":
         pros = [
             f"装入 {metrics.loaded_pieces} 件，体积利用率 {metrics.volume_utilization_pct}%",
@@ -3657,8 +3830,44 @@ def _layout_signature(solution: PackingSolution) -> tuple:
     )
 
 
+def _validated_candidate(
+    request: PackRequest,
+    stacks: list[PackedStack] | None,
+    profile: str,
+    expected_counts: Counter[str] | None = None,
+) -> list[PackedStack] | None:
+    """Accept only physically valid candidates before result construction."""
+    if not stacks:
+        return None
+    placements = _expand_stacks(request, stacks, profile)
+    if not _required_satisfied(request, stacks):
+        return None
+    validation = validate_solution(
+        request.container,
+        request.cargo_items,
+        placements,
+        item_gap_mm=request.item_gap_mm,
+    )
+    if not validation.valid:
+        return None
+    if expected_counts is not None:
+        actual_counts = Counter(placement.cargo_id for placement in placements)
+        if actual_counts != expected_counts:
+            return None
+    return stacks
+
+
 def pack_order(request: PackRequest) -> PackResponse:
     units = _build_stack_units(request)
+    if not units:
+        solutions = [
+            _build_solution(request, [], "high_fill"),
+            _build_solution(request, [], "stable"),
+            _build_solution(request, [], "easy"),
+        ]
+        request_json = json.dumps(request.model_dump(mode="json"), sort_keys=True)
+        request_id = hashlib.sha256(request_json.encode("utf-8")).hexdigest()[:12]
+        return PackResponse(request_id=request_id, solutions=solutions)
     pure_pallet_skus = {unit.cargo.id for unit in units}
     pure_pallet_order = (
         bool(units)
@@ -3676,12 +3885,24 @@ def pack_order(request: PackRequest) -> PackResponse:
         if pure_pallet_order
         else _sku_block_layout(request, high_merged, "fill")
     )
-    if high_blocks is not None:
-        high_stacks = high_blocks
-    else:
-        high_stacks = (
-            _sku_block_layout(request, high_merged, "fill")
-            or _high_fill_candidate(request, units)
+    high_stacks = _validated_candidate(request, high_blocks, "high_fill")
+    if high_stacks is None:
+        high_stacks = _validated_candidate(
+            request,
+            _sku_block_layout(request, high_merged, "fill"),
+            "high_fill",
+        )
+    if high_stacks is None:
+        high_stacks = _validated_candidate(
+            request,
+            _high_fill_candidate(request, units),
+            "high_fill",
+        )
+    if high_stacks is None:
+        raise PackingFailure(
+            "LAYOUT_NOT_FEASIBLE",
+            "当前柜型没有找到物理安全的装柜方案",
+            hint="请减少货物数量或更换更大柜型",
         )
     high_placements = _expand_stacks(request, high_stacks, "high_fill")
     selected_counts = Counter(item.cargo_id for item in high_placements)
@@ -3692,49 +3913,90 @@ def pack_order(request: PackRequest) -> PackResponse:
         if pure_pallet_order
         else _sku_block_layout(request, merged_stable, "balance")
     )
-    if stable_blocks is not None and not any(
-        placement.z_mm > request.container.clearance_mm
-        for placement in _expand_stacks(request, stable_blocks, "stable")
-    ):
-        stable_blocks = None
+    stable_stacks: list[PackedStack] | None = None
     if stable_blocks is not None:
-        stable_stacks = _swap_balance(request, stable_blocks)
-    else:
+        stable_candidate = _swap_balance(request, stable_blocks)
+        stable_placements = _expand_stacks(request, stable_candidate, "stable")
+        if any(
+            placement.z_mm > request.container.clearance_mm
+            for placement in stable_placements
+        ):
+            stable_stacks = _validated_candidate(
+                request,
+                stable_candidate,
+                "stable",
+                selected_counts,
+            )
+    if stable_stacks is None:
         balanced = _sku_block_layout(request, merged_stable, "balance")
         if balanced is not None:
-            stable_stacks = _swap_balance(request, balanced)
-        else:
-            pallet_grid = _pallet_grid_layout(request, stable_units)
-            if pallet_grid is not None:
-                stable_stacks = pallet_grid
-            else:
-                # 混合尺寸纯整托：SKU 块配平布局（重块居中）→ 与"装得多"布局区分
-                balanced_grid = _stable_balance_layout(request, stable_units)
-                if balanced_grid is not None:
-                    stable_stacks = balanced_grid
-                else:
-                    mixed = _layer_layout(request, merged_stable)
-                    if mixed is not None:
-                        stable_stacks = mixed
-                    else:
-                        stable_stacks = _repack_same_units(
-                            request, merged_stable, "stable"
-                        ) or _center_stacks(request, high_stacks)
-                    stable_stacks = _swap_balance(request, stable_stacks)
-    easy_blocks = (
-        _pure_pallet_floor_first_layout(request, stable_units, "easy")
-        if pure_pallet_order
-        else _sku_block_layout(request, merged_stable, "easy")
-    )
-    if easy_blocks is not None:
-        easy_stacks = easy_blocks
-    else:
-        easy_region = _easy_region_layout(request, merged_stable)
-        easy_stacks = easy_region if easy_region is not None else (
-            _sku_block_layout(request, merged_stable, "easy")
-            or _repack_same_units(request, merged_stable, "easy")
-            or high_stacks
+            stable_stacks = _validated_candidate(
+                request,
+                _swap_balance(request, balanced),
+                "stable",
+                selected_counts,
+            )
+    if stable_stacks is None:
+        pallet_grid = _pallet_grid_layout(request, stable_units)
+        stable_stacks = _validated_candidate(request, pallet_grid, "stable", selected_counts)
+    if stable_stacks is None:
+        balanced_grid = _stable_balance_layout(request, stable_units)
+        stable_stacks = _validated_candidate(
+            request,
+            balanced_grid,
+            "stable",
+            selected_counts,
         )
+    if stable_stacks is None:
+        mixed = _layer_layout(request, merged_stable)
+        stable_stacks = _validated_candidate(request, mixed, "stable", selected_counts)
+    if stable_stacks is None:
+        repacked = _repack_same_units(request, merged_stable, "stable")
+        stable_stacks = _validated_candidate(
+            request,
+            repacked,
+            "stable",
+            selected_counts,
+        )
+    if stable_stacks is None:
+        stable_stacks = _validated_candidate(
+            request,
+            _center_stacks(request, high_stacks),
+            "stable",
+            selected_counts,
+        )
+    if stable_stacks is None:
+        stable_stacks = high_stacks
+    stable_stacks = _swap_balance(request, stable_stacks)
+    easy_merged = _merge_pallet_cartons(request, units)
+    easy_blocks = (
+        _pure_pallet_floor_first_layout(request, units, "easy")
+        if pure_pallet_order
+        else _sku_block_layout(request, easy_merged, "easy")
+    )
+    easy_stacks = _validated_candidate(request, easy_blocks, "easy")
+    if easy_stacks is None:
+        easy_stacks = _validated_candidate(
+            request,
+            _easy_region_layout(request, easy_merged),
+            "easy",
+        )
+    if easy_stacks is None:
+        easy_stacks = _validated_candidate(
+            request,
+            _sku_block_layout(request, easy_merged, "easy"),
+            "easy",
+        )
+    if easy_stacks is None:
+        easy_stacks = _validated_candidate(
+            request,
+            _repack_same_units(request, easy_merged, "easy"),
+            "easy",
+        )
+    if easy_stacks is None:
+        easy_stacks = _validated_candidate(request, high_stacks, "easy")
+    if easy_stacks is None:
+        easy_stacks = high_stacks
 
     solutions = [
         _build_solution(request, high_stacks, "high_fill"),
@@ -3748,9 +4010,8 @@ def pack_order(request: PackRequest) -> PackResponse:
                 break
     if solutions[2].metrics.loaded_pieces < solutions[0].metrics.loaded_pieces:
         solutions[2].cons.append(
-            f"为便于装载少装 {solutions[0].metrics.loaded_pieces - solutions[2].metrics.loaded_pieces} 件"
+            f"为保持整托区域连续，少装 {solutions[0].metrics.loaded_pieces - solutions[2].metrics.loaded_pieces} 件"
         )
-
     request_json = json.dumps(request.model_dump(mode="json"), sort_keys=True)
     request_id = hashlib.sha256(request_json.encode("utf-8")).hexdigest()[:12]
     return PackResponse(request_id=request_id, solutions=solutions)

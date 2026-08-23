@@ -8,6 +8,8 @@ from app.packing import (
     PackingFailure,
     _build_solution,
     _build_stack_units,
+    _expand_stacks,
+    _high_fill_candidate,
     pack_order,
 )
 from app.validator import validate_solution
@@ -72,6 +74,21 @@ def test_returns_three_deterministic_valid_solutions():
         ).valid
 
 
+def test_cargo_label_does_not_change_layout():
+    request = PackRequest(container=small_container(), cargo_items=[boxes()])
+    renamed_item = request.cargo_items[0].model_copy(
+        update={"sku": "用户自定义代号", "name": "用户自定义名称"}
+    )
+    renamed = request.model_copy(update={"cargo_items": [renamed_item]})
+
+    original = pack_order(request)
+    renamed_response = pack_order(renamed)
+
+    assert [solution.model_dump() for solution in original.solutions] == [
+        solution.model_dump() for solution in renamed_response.solutions
+    ]
+
+
 def test_reports_unloaded_quantity_when_order_exceeds_container():
     request = PackRequest(container=small_container(), cargo_items=[boxes(quantity=3)])
 
@@ -80,6 +97,46 @@ def test_reports_unloaded_quantity_when_order_exceeds_container():
     for solution in response.solutions:
         assert solution.loaded_counts == {"box-a": 2}
         assert solution.unloaded_counts == {"box-a": 1}
+
+
+def test_warns_when_the_order_exceeds_container_payload():
+    request = PackRequest(
+        container=small_container().model_copy(update={"max_payload_g": 100_000}),
+        cargo_items=[boxes(quantity=2, weight_g=100_000)],
+    )
+
+    response = pack_order(request)
+
+    for solution in response.solutions:
+        assert any("订单总重" in warning and "超过柜体最大载重" in warning for warning in solution.warnings)
+
+
+def test_all_profiles_keep_high_fill_loaded_set_when_rearrangement_cannot_improve_it():
+    container = ContainerSpec(
+        id="profile-counts",
+        name="方案装入数量测试柜",
+        inner_length_mm=5898,
+        inner_width_mm=2352,
+        inner_height_mm=2393,
+        door_width_mm=2340,
+        door_height_mm=2280,
+        max_payload_g=28_200_000,
+    )
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            boxes(id="c0", sku="C0", quantity=14, length_mm=700, width_mm=600, height_mm=500, weight_g=81_000, allowed_orientations=["LWH", "WLH"], stackable=True, max_layers=2, max_top_load_g=500_000, kind="pallet"),
+            boxes(id="c1", sku="C1", quantity=5, length_mm=500, width_mm=500, height_mm=700, weight_g=198_000, allowed_orientations=["LWH", "WLH"], stackable=True, max_layers=2, max_top_load_g=500_000, kind="pallet"),
+            boxes(id="c2", sku="C2", quantity=5, length_mm=700, width_mm=600, height_mm=800, weight_g=141_000, allowed_orientations=["LWH", "WLH"], stackable=False, max_layers=1, max_top_load_g=0, kind="pallet"),
+            boxes(id="c3", sku="C3", quantity=9, length_mm=800, width_mm=700, height_mm=600, weight_g=183_000, allowed_orientations=["LWH", "WLH"], stackable=False, max_layers=1, max_top_load_g=0, kind="pallet"),
+        ],
+    )
+
+    response = pack_order(request)
+
+    assert response.solutions[1].loaded_counts == response.solutions[0].loaded_counts
+    high_fill_candidate = _high_fill_candidate(request, _build_stack_units(request))
+    assert len(_expand_stacks(request, high_fill_candidate, "high_fill")) == 33
 
 
 def test_rejects_order_when_must_load_cargo_cannot_fit():
@@ -173,6 +230,166 @@ def test_returns_safe_fallback_when_upper_layer_is_not_continuous():
 
     assert solution.metrics.loaded_pieces == 4
     assert any("未形成单一中部连续区域" in warning for warning in solution.warnings)
+
+
+def test_soft_layout_quality_never_blocks_safe_solution(monkeypatch):
+    import app.packing as packing
+
+    request = PackRequest(
+        container=ContainerSpec(
+            id="soft-rule",
+            name="软规则测试柜",
+            inner_length_mm=5000,
+            inner_width_mm=2000,
+            inner_height_mm=3000,
+            door_width_mm=2000,
+            door_height_mm=3000,
+            max_payload_g=5_000_000,
+        ),
+        cargo_items=[
+            CargoSpec(
+                id="a",
+                sku="A",
+                name="A",
+                kind="pallet",
+                length_mm=1000,
+                width_mm=1000,
+                height_mm=1000,
+                weight_g=100_000,
+                quantity=2,
+                allowed_orientations=["LWH"],
+                stackable=True,
+                max_layers=2,
+                max_top_load_g=500_000,
+            ),
+            CargoSpec(
+                id="b",
+                sku="B",
+                name="B",
+                kind="pallet",
+                length_mm=1000,
+                width_mm=1000,
+                height_mm=1000,
+                weight_g=100_000,
+                quantity=2,
+                allowed_orientations=["LWH"],
+                stackable=True,
+                max_layers=2,
+                max_top_load_g=500_000,
+            ),
+        ],
+    )
+    monkeypatch.setattr(packing, "_upper_layout_quality_ok", lambda *_: False)
+
+    response = packing.pack_order(request)
+
+    assert len(response.solutions) == 3
+    for solution in response.solutions:
+        assert solution.metrics.loaded_pieces == 4
+        assert "未完全满足上层连续集中要求，当前为次优方案，请现场复核" in solution.warnings
+        assert validate_solution(
+            request.container,
+            request.cargo_items,
+            solution.placements,
+        ).valid
+
+
+def test_invalid_primary_candidate_is_skipped_before_solution_build(monkeypatch):
+    import app.packing as packing
+
+    request = PackRequest(
+        container=ContainerSpec(
+            id="candidate-gate",
+            name="候选门控测试柜",
+            inner_length_mm=5000,
+            inner_width_mm=2000,
+            inner_height_mm=3000,
+            door_width_mm=2000,
+            door_height_mm=3000,
+            max_payload_g=5_000_000,
+        ),
+        cargo_items=[
+            CargoSpec(
+                id="a",
+                sku="A",
+                name="A",
+                kind="pallet",
+                length_mm=1000,
+                width_mm=1000,
+                height_mm=1000,
+                weight_g=100_000,
+                quantity=2,
+                allowed_orientations=["LWH"],
+                stackable=True,
+                max_layers=2,
+                max_top_load_g=500_000,
+            ),
+        ],
+    )
+    unit = _build_stack_units(request)[0]
+    monkeypatch.setattr(
+        packing,
+        "_pure_pallet_floor_first_layout",
+        lambda *_: [
+            PackedStack(
+                unit=unit,
+                x_mm=10_000,
+                y_mm=0,
+                step=1,
+            )
+        ],
+    )
+
+    response = packing.pack_order(request)
+
+    assert len(response.solutions) == 3
+    for solution in response.solutions:
+        assert validate_solution(
+            request.container,
+            request.cargo_items,
+            solution.placements,
+        ).valid
+
+
+def test_optional_unfit_cargo_returns_safe_empty_fallback():
+    request = PackRequest(
+        container=ContainerSpec(
+            id="optional-unfit",
+            name="可选货物测试柜",
+            inner_length_mm=2000,
+            inner_width_mm=1000,
+            inner_height_mm=1000,
+            door_width_mm=1000,
+            door_height_mm=1000,
+            max_payload_g=5_000_000,
+        ),
+        cargo_items=[
+            CargoSpec(
+                id="too-large",
+                sku="OPTIONAL",
+                name="可选超大件",
+                kind="carton",
+                length_mm=3000,
+                width_mm=500,
+                height_mm=500,
+                weight_g=100_000,
+                quantity=1,
+                allowed_orientations=["LWH"],
+                stackable=False,
+                max_layers=1,
+                max_top_load_g=0,
+                must_load=False,
+            )
+        ],
+    )
+
+    response = pack_order(request)
+
+    assert len(response.solutions) == 3
+    for solution in response.solutions:
+        assert solution.metrics.loaded_pieces == 0
+        assert solution.unloaded_counts["too-large"] == 1
+        assert any("未装入" in warning for warning in solution.warnings)
 
 
 def test_packs_cartons_and_whole_pallets_together():
@@ -275,9 +492,9 @@ def test_rotatable_cargo_still_rotates_when_another_sku_has_fixed_orientation():
 
     response = pack_order(PackRequest(container=container, cargo_items=[fixed, rotatable]))
 
-    # 分层铺满贪心：固定朝向货物占满柜宽后，可旋转货物在该小柜最多平铺 2 件
-    assert response.solutions[0].loaded_counts == {"fixed": 1, "rotatable": 2}
-    assert response.solutions[0].metrics.loaded_pieces == 3
+    # 二维候选与分层候选统一比较后，旋转货物可补满最后一个可用位置。
+    assert response.solutions[0].loaded_counts == {"fixed": 1, "rotatable": 3}
+    assert response.solutions[0].metrics.loaded_pieces == 4
 
 
 def test_considers_lighter_combination_instead_of_pretrimming_by_volume():

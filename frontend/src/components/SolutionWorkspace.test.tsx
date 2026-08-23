@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { recommendProfile, SolutionWorkspace } from "./SolutionWorkspace";
+import { classifySolutionWarning, recommendProfile, SolutionWorkspace } from "./SolutionWorkspace";
 import type { CargoInput, ContainerSpec, PackResponse, SolutionProfile } from "../types";
 
 
@@ -67,6 +67,15 @@ test("recommends stable when high_fill is imbalanced and stable improves it", ()
 test("keeps high_fill when already balanced or improvement is small", () => {
   expect(recommendProfile(makeResponse(8, 3))).toBe("high_fill");
   expect(recommendProfile(makeResponse(20, 17))).toBe("high_fill");
+});
+
+
+test("classifies solution notices by operational severity", () => {
+  expect(classifySolutionWarning("订单总重 28.65t，超过柜体最大载重 28.60t")).toBe("critical");
+  expect(classifySolutionWarning("仍有 1 件货物未装入本柜")).toBe("caution");
+  expect(classifySolutionWarning("上层未充分集中在中部，请现场复核")).toBe("caution");
+  expect(classifySolutionWarning("柜门预留操作空间 300mm")).toBe("info");
+  expect(classifySolutionWarning("当前方案仍剩载重 0.75t")).toBe("info");
 });
 
 

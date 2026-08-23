@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, CheckCircle2, Printer, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CheckCircle2, CircleX, Info, Printer, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { LoadVisualizer, StaticLayout } from "./LoadVisualizer";
@@ -26,6 +26,20 @@ const profileShortName: Record<SolutionProfile, string> = {
   easy: "装载步骤",
 };
 
+type WarningSeverity = "critical" | "caution" | "info";
+
+const warningMeta: Record<WarningSeverity, { title: string; Icon: typeof AlertTriangle }> = {
+  critical: { title: "必须处理", Icon: CircleX },
+  caution: { title: "需要现场复核", Icon: AlertTriangle },
+  info: { title: "方案信息", Icon: Info },
+};
+
+export function classifySolutionWarning(warning: string): WarningSeverity {
+  if (/订单总重.*超过柜体最大载重|必装货物.*未全部装入/.test(warning)) return "critical";
+  if (/柜门预留操作空间|当前方案仍剩载重/.test(warning)) return "info";
+  return "caution";
+}
+
 export function recommendProfile(response: PackResponse): SolutionProfile {
   const highFill = response.solutions.find((solution) => solution.profile === "high_fill");
   const stable = response.solutions.find((solution) => solution.profile === "stable");
@@ -49,6 +63,12 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
   const selected = response.solutions.find((solution) => solution.profile === selectedProfile) ?? response.solutions[0];
   const cargoById = Object.fromEntries(cargoItems.map((item) => [item.id, item]));
   const recommended = recommendProfile(response);
+  const warningGroups = useMemo(() => (
+    (["critical", "caution", "info"] as const).map((severity) => ({
+      severity,
+      warnings: selected.warnings.filter((warning) => classifySolutionWarning(warning) === severity),
+    })).filter((group) => group.warnings.length > 0)
+  ), [selected.warnings]);
   useEffect(() => {
     setSelectedProfile(recommendProfile(response));
   }, [response.request_id]);
@@ -124,13 +144,21 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
             <h2>装入明细</h2>
             {cargoItems.map((cargo) => (
               <div className="summary-row" key={cargo.id}>
-                <span><i aria-hidden="true" />{cargo.sku}<small>{cargo.name}</small></span>
+                <span><i aria-hidden="true" />{cargo.sku}</span>
                 <strong>{selected.loaded_counts[cargo.id] ?? 0} / {cargo.quantity}</strong>
                 {(selected.unloaded_counts[cargo.id] ?? 0) > 0 && <em>余 {selected.unloaded_counts[cargo.id]} 件</em>}
               </div>
             ))}
           </div>
-          {selected.warnings.map((warning) => <p className="result-warning" key={warning}><AlertTriangle size={16} />{warning}</p>)}
+          {warningGroups.length > 0 && <section className="result-notices" aria-label="方案提示">
+            {warningGroups.map(({ severity, warnings }) => {
+              const { title, Icon } = warningMeta[severity];
+              return <div className={`notice-group notice-group--${severity}`} key={severity}>
+                <h2><Icon size={16} />{title}</h2>
+                {warnings.map((warning) => <p className="result-warning" key={warning}>{warning}</p>)}
+              </div>;
+            })}
+          </section>}
         </aside>
       </section>
 
@@ -162,13 +190,12 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
         <h2>货物清单</h2>
         <table className="print-table">
           <thead>
-            <tr><th>SKU</th><th>名称</th><th>类型</th><th>尺寸（长×宽×高 cm）</th><th>单重 kg</th><th>数量</th></tr>
+            <tr><th>货物代号/名称</th><th>类型</th><th>尺寸（长×宽×高 cm）</th><th>单重 kg</th><th>数量</th></tr>
           </thead>
           <tbody>
             {cargoItems.map((cargo) => (
               <tr key={cargo.id}>
                 <td>{cargo.sku}</td>
-                <td>{cargo.name}</td>
                 <td>{cargo.kind === "pallet" ? "整托" : "散箱"}</td>
                 <td>{cargo.length_cm} × {cargo.width_cm} × {cargo.height_cm}</td>
                 <td>{cargo.weight_kg}</td>
@@ -194,13 +221,12 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
             <h3>装入明细</h3>
             <table className="print-table">
               <thead>
-                <tr><th>SKU</th><th>名称</th><th>装入</th><th>未装</th><th>订货量</th></tr>
+                <tr><th>货物代号/名称</th><th>装入</th><th>未装</th><th>订货量</th></tr>
               </thead>
               <tbody>
                 {cargoItems.map((cargo) => (
                   <tr key={cargo.id}>
                     <td>{cargo.sku}</td>
-                    <td>{cargo.name}</td>
                     <td>{solution.loaded_counts[cargo.id] ?? 0} 件</td>
                     <td>{solution.unloaded_counts[cargo.id] ?? 0} 件</td>
                     <td>{cargo.quantity} 件</td>
