@@ -59,6 +59,63 @@ def test_pack_endpoint_returns_four_core_solutions():
     assert len(response.json()["solutions"]) == 3
 
 
+def test_pack_endpoint_passes_optional_ai_hint_without_changing_response_contract(monkeypatch):
+    from app.ai_strategy import LayoutHint
+    from app.packing import pack_order
+
+    payload = {
+        "container": {
+            "id": "small",
+            "name": "小型测试柜",
+            "inner_length_mm": 2000,
+            "inner_width_mm": 1000,
+            "inner_height_mm": 1000,
+            "door_width_mm": 1000,
+            "door_height_mm": 1000,
+            "max_payload_g": 1000000,
+            "clearance_mm": 0,
+        },
+        "cargo_items": [{
+            "id": "a",
+            "sku": "A",
+            "name": "标准箱",
+            "kind": "carton",
+            "length_mm": 1000,
+            "width_mm": 1000,
+            "height_mm": 1000,
+            "weight_g": 100000,
+            "quantity": 1,
+            "allowed_orientations": ["LWH"],
+            "stackable": False,
+            "max_layers": 1,
+            "max_top_load_g": 0,
+        }],
+    }
+    captured = {}
+
+    monkeypatch.setattr(
+        main,
+        "load_ai_layout_hint",
+        lambda _request, api_key: LayoutHint(("a",), {}),
+    )
+
+    async def calculation(request):
+        captured["hint"] = request.ai_layout_hint
+        return pack_order(request)
+
+    monkeypatch.setattr(main, "run_pack_calculation", calculation)
+
+    response = client.post(
+        "/api/v1/pack",
+        json=payload,
+        headers={"X-AI-API-Key": "sk-browser-test"},
+    )
+
+    assert response.status_code == 200
+    assert captured["hint"] == {"sku_order": ["a"], "orientations": {}}
+    assert len(response.json()["solutions"]) == 3
+
+
 def test_pack_endpoint_returns_structured_must_load_error():
     payload = {
         "container": {

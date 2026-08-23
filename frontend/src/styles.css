@@ -101,8 +101,9 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 .add-cargo-button { margin-top: 10px; }
 
 .settings-block { padding-top: 4px; }
-.settings-grid { display: grid; grid-template-columns: 190px 190px 1fr; gap: 12px; align-items: end; padding: 15px; background: rgba(255,255,255,.8); border: 1px solid var(--line); border-radius: 7px; }
+.settings-grid { display: grid; grid-template-columns: 190px 190px minmax(260px, 1fr); gap: 12px; align-items: end; padding: 15px; background: rgba(255,255,255,.8); border: 1px solid var(--line); border-radius: 7px; }
 .settings-grid > label { display: grid; gap: 7px; color: var(--muted); font-size: 12px; }
+.ai-key-field input { min-width: 0; }
 .setting-summary { min-height: 34px; display: flex; align-items: center; justify-content: flex-end; gap: 8px; color: var(--muted); font-size: 12px; }
 .form-error { padding: 11px 13px; color: #7f2f2a; background: #fff1ef; border: 1px solid #e7b6b2; border-radius: 5px; }
 

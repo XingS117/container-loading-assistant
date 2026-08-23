@@ -11,6 +11,7 @@ export async function packOrder(
   container: ContainerSpec,
   cargoItems: CargoInput[],
   itemGapCm: number,
+  aiApiKey?: string,
 ): Promise<PackResponse> {
   const validationError = validateCargo(cargoItems);
   if (validationError) throw new Error(validationError);
@@ -19,7 +20,10 @@ export async function packOrder(
   }
   const response = await fetch("/api/v1/pack", {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: {
+      "Content-Type": "application/json",
+      ...(aiApiKey?.trim() ? { "X-AI-API-Key": aiApiKey.trim() } : {}),
+    },
     body: JSON.stringify({
       container,
       item_gap_mm: Math.round(itemGapCm * 10),

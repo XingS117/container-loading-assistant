@@ -1,3 +1,4 @@
 fastapi==0.116.1
 rectpack==0.2.2
 uvicorn[standard]==0.35.0
+httpx==0.28.1

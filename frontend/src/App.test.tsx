@@ -110,6 +110,22 @@ test("selecting pallet kind keeps the selection and applies pallet defaults", as
 });
 
 
+test("keeps the optional DeepSeek key in session storage only", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify([preset, secondPreset]), { status: 200 }),
+  );
+
+  render(<App />);
+  await screen.findByRole("button", { name: /20GP/ });
+
+  const keyInput = screen.getByLabelText("DeepSeek V4 API Key（可选）");
+  await userEvent.type(keyInput, "sk-session-test");
+
+  expect(sessionStorage.getItem("container-loading-assistant-deepseek-key-v1")).toBe("sk-session-test");
+  expect(localStorage.getItem("container-loading-assistant-deepseek-key-v1")).toBeNull();
+});
+
+
 test("loads a common preset and blocks calculation until weights are filled", async () => {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response(JSON.stringify([preset, secondPreset]), { status: 200 }),

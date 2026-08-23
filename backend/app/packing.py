@@ -2559,12 +2559,32 @@ def _generic_floor_band_layout(
         preferred_orders.reverse()
     elif strategy == "easy":
         preferred_orders = [preferred_orders[0], preferred_orders[1]]
+    ai_hint = request.ai_layout_hint or {}
+    hinted_order = ai_hint.get("sku_order")
+    if isinstance(hinted_order, list):
+        hinted_ids = [
+            cargo_id for cargo_id in hinted_order
+            if isinstance(cargo_id, str) and cargo_id in by_cargo
+        ]
+        hinted_ids.extend(cargo_id for cargo_id in cargo_ids if cargo_id not in hinted_ids)
+        if set(hinted_ids) == set(cargo_ids):
+            preferred_orders.insert(0, hinted_ids)
     for order in preferred_orders:
         if order not in order_variants:
             order_variants.append(order)
 
     option_variants = [
-        options_by_cargo[cargo_id][:3]
+        (
+            sorted(
+                options_by_cargo[cargo_id][:3],
+                key=lambda option: (
+                    option[0].value != ai_hint.get("orientations", {}).get(cargo_id),
+                    option[0].value,
+                ),
+            )
+            if isinstance(ai_hint.get("orientations"), dict)
+            else options_by_cargo[cargo_id][:3]
+        )
         for cargo_id in cargo_ids
     ]
     candidates: list[tuple[tuple[float, ...], list[PackedStack]]] = []

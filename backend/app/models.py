@@ -104,6 +104,8 @@ class PackRequest(BaseModel):
     # 旧版互叠参数，仅用于兼容请求解析，不改变正式方案安全约束。
     support_coverage_min: float = Field(default=0.7, ge=0.0, le=1.0)
     overhang_ratio_max: float = Field(default=0.2, ge=0.0, le=0.5)
+    # Internal, optional AI strategy hint. It is never trusted for physical validation.
+    ai_layout_hint: dict[str, object] | None = None
 
     @model_validator(mode="after")
     def validate_total_quantity(self) -> "PackRequest":

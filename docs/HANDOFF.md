@@ -32,12 +32,14 @@
 - AI 暂不作为坐标计算器或硬依赖。后续接入时只让 AI 推荐历史模板和排组策略，
   由确定性算法生成坐标并由 `validate_solution()` 复核，API 不可用时自动回退本地算法。
 - 本轮算法实现已提交为 `8a716ac`；本次工作尚未执行生产部署或 GitHub 推送。
+- 已增加可选 DeepSeek V4 策略增强基础配置：后端读取 `DEEPSEEK_API_KEY`，前端可临时输入 Key，
+  通过 `X-AI-API-Key` 请求头传递；Key 不进入请求体或本机草稿。未配置时完全使用本地确定性算法。
 - GitHub 同步状态以本文件更新后的 `main` 分支和远程 `origin/main` 为准。
 
 ### 已验证
 
-- 后端测试：117 项通过。
-- 前端测试：22 项通过。
+- 后端测试：120 项通过。
+- 前端测试：24 项通过。
 - `npm.cmd run build`：通过。
 - 生产服务状态：`active`，服务器本机和公网 `/health` 均返回 `{"status":"ok"}`。
 - 公网真实 `POST /api/v1/pack`：标准五 SKU 返回 3 个方案，每套装入 55 托。
@@ -386,6 +388,15 @@ curl.exe -fsS https://packing.xingshuwen.com/api/v1/container-presets
 - **成本备选：** DeepSeek V3 级别模型，适合做候选策略初筛和批量历史案例归纳，但必须使用严格 JSON Schema、低温度和后端兜底校验。
 
 首版 AI 请求只提交货物参数摘要、柜型、历史模板特征和候选质量指标，要求返回排组策略而不是坐标。所有策略必须经过本地候选生成和 `validate_solution()`；超时、空响应、非法 JSON 或物理不可行时，直接使用本地结果。
+
+当前基础配置：
+
+```text
+DEEPSEEK_API_KEY=服务端密钥（可选）
+DEEPSEEK_MODEL=deepseek-v4（可选，默认值）
+```
+
+前端输入适合个人或测试使用；正式部署优先配置服务端环境变量，避免把共享密钥暴露给浏览器用户。
 
 阶段版本验收命令：
 

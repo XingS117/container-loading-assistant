@@ -9,12 +9,14 @@ from collections import defaultdict, deque
 from pathlib import Path
 
 import anyio.to_process
+import anyio.to_thread
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .models import ContainerSpec, PackRequest, PackResponse
+from .ai_strategy import load_ai_layout_hint
 from .packing import PackingFailure, pack_order
 
 
@@ -159,13 +161,18 @@ async def run_pack_calculation(request: PackRequest) -> PackResponse:
 
 
 @app.post("/api/v1/pack", response_model=PackResponse)
-async def pack(request: PackRequest) -> PackResponse | JSONResponse:
+async def pack(request: PackRequest, http_request: Request) -> PackResponse | JSONResponse:
     if not pack_slots.acquire(blocking=False):
         return JSONResponse(
             status_code=503,
             content={"error": {"code": "CALCULATION_BUSY", "message": "当前计算任务较多，请稍后重试"}},
         )
     try:
+        ai_key = http_request.headers.get("X-AI-API-Key")
+        # AI is advisory only; timeout/errors leave the deterministic path unchanged.
+        hint = await anyio.to_thread.run_sync(load_ai_layout_hint, request, ai_key)
+        if hint is not None:
+            request = request.model_copy(update={"ai_layout_hint": hint.as_dict()})
         return await asyncio.wait_for(
             run_pack_calculation(request),
             timeout=PACK_TIMEOUT_SECONDS,

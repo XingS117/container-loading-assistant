@@ -23,3 +23,16 @@ test("does not send an order when a cargo weight is missing", async () => {
   );
   expect(fetchSpy).not.toHaveBeenCalled();
 });
+
+test("sends an optional AI key only as a request header", async () => {
+  const response = { request_id: "ai", solutions: [] };
+  const fetchSpy = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(new Response(JSON.stringify(response), { status: 200 }));
+
+  await packOrder(container, [createCargo("AI-KEY")], 0, "sk-test");
+
+  const request = fetchSpy.mock.calls[0][1] as RequestInit;
+  expect(new Headers(request.headers).get("X-AI-API-Key")).toBe("sk-test");
+  expect(request.body).not.toContain("sk-test");
+});

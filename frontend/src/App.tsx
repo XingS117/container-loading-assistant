@@ -13,6 +13,7 @@ import { trackAnalyticsEvent } from "./lib/analytics";
 import type { CargoInput, CargoPreset, ContainerSpec, PackResponse } from "./types";
 
 const STORAGE_KEY = "container-loading-assistant-draft-v1";
+const AI_KEY_STORAGE_KEY = "container-loading-assistant-deepseek-key-v1";
 
 interface Draft {
   containerId: string;
@@ -37,6 +38,9 @@ export default function App() {
   const [cargoItems, setCargoItems] = useState<CargoInput[]>(draft.cargoItems?.length ? draft.cargoItems : [createCargo("SKU-001")]);
   const [itemGapCm, setItemGapCm] = useState(draft.itemGapCm ?? 0);
   const [clearanceCm, setClearanceCm] = useState(draft.clearanceCm ?? 0);
+  const [deepseekApiKey, setDeepseekApiKey] = useState(
+    () => sessionStorage.getItem(AI_KEY_STORAGE_KEY) ?? "",
+  );
   const [result, setResult] = useState<PackResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -67,7 +71,7 @@ export default function App() {
     setError(null);
     try {
       const requestContainer = { ...nextContainer, clearance_mm: Math.round(clearanceCm * 10) };
-      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm);
+      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, deepseekApiKey);
       setContainer(nextContainer);
       setResult(nextResult);
       trackAnalyticsEvent("pack_solutions_generated");
@@ -83,6 +87,12 @@ export default function App() {
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "计算失败，请稍后重试");
     }
+  };
+
+  const updateDeepseekApiKey = (value: string) => {
+    setDeepseekApiKey(value);
+    if (value.trim()) sessionStorage.setItem(AI_KEY_STORAGE_KEY, value);
+    else sessionStorage.removeItem(AI_KEY_STORAGE_KEY);
   };
 
   const loadPreset = (preset: CargoPreset) => {
@@ -150,7 +160,8 @@ export default function App() {
           <div className="settings-grid">
             <label><span>货物间隙</span><span className="unit-input"><input type="number" min="0" step="0.1" value={itemGapCm} onChange={(event) => setItemGapCm(Number(event.target.value))} /><i>cm</i></span></label>
             <label><span>柜体安全边距</span><span className="unit-input"><input type="number" min="0" step="0.1" value={clearanceCm} onChange={(event) => setClearanceCm(Number(event.target.value))} /><i>cm</i></span></label>
-            <div className="setting-summary"><FileSpreadsheet size={18} /><span>尺寸按厘米录入，计算时使用整数毫米</span></div>
+            <label className="ai-key-field"><span>DeepSeek V4 API Key（可选）</span><input type="password" value={deepseekApiKey} onChange={(event) => updateDeepseekApiKey(event.target.value)} placeholder="不填写也可正常使用" autoComplete="off" /></label>
+            <div className="setting-summary"><FileSpreadsheet size={18} /><span>尺寸按厘米录入，计算时使用整数毫米<br />API Key 仅存当前会话，不填写也可使用本地算法</span></div>
           </div>
         </section>
 
