@@ -1,3 +1,4 @@
+from collections import Counter
 from dataclasses import replace
 
 import pytest
@@ -9,6 +10,7 @@ from app.packing import (
     _build_solution,
     _build_stack_units,
     _expand_stacks,
+    _generic_floor_band_layout,
     _high_fill_candidate,
     pack_order,
 )
@@ -137,6 +139,120 @@ def test_all_profiles_keep_high_fill_loaded_set_when_rearrangement_cannot_improv
     assert response.solutions[1].loaded_counts == response.solutions[0].loaded_counts
     high_fill_candidate = _high_fill_candidate(request, _build_stack_units(request))
     assert len(_expand_stacks(request, high_fill_candidate, "high_fill")) == 33
+
+
+def test_generic_floor_band_search_handles_non_preset_four_sku_mix():
+    container = ContainerSpec(
+        id="custom-four",
+        name="自定义四 SKU 测试柜",
+        inner_length_mm=6000,
+        inner_width_mm=2400,
+        inner_height_mm=2500,
+        door_width_mm=2400,
+        door_height_mm=2300,
+        max_payload_g=20_000_000,
+    )
+    request = PackRequest(
+        container=container,
+        cargo_items=[
+            boxes(
+                id="custom-a",
+                sku="ZT-A",
+                name="自定义 A",
+                kind="pallet",
+                length_mm=600,
+                width_mm=600,
+                height_mm=700,
+                quantity=9,
+                allowed_orientations=["LWH", "WLH"],
+                stackable=True,
+                max_layers=2,
+                max_top_load_g=500_000,
+            ),
+            boxes(
+                id="custom-b",
+                sku="ZT-B",
+                name="自定义 B",
+                kind="pallet",
+                length_mm=700,
+                width_mm=700,
+                height_mm=700,
+                quantity=9,
+                allowed_orientations=["LWH", "WLH"],
+                stackable=True,
+                max_layers=2,
+                max_top_load_g=500_000,
+            ),
+            boxes(
+                id="custom-c",
+                sku="ZT-C",
+                name="自定义 C",
+                kind="pallet",
+                length_mm=900,
+                width_mm=800,
+                height_mm=700,
+                quantity=3,
+                allowed_orientations=["LWH", "WLH"],
+                stackable=False,
+                max_layers=1,
+                max_top_load_g=0,
+            ),
+            boxes(
+                id="custom-d",
+                sku="ZT-D",
+                name="自定义 D",
+                kind="pallet",
+                length_mm=1000,
+                width_mm=700,
+                height_mm=700,
+                quantity=2,
+                allowed_orientations=["LWH", "WLH"],
+                stackable=False,
+                max_layers=1,
+                max_top_load_g=0,
+            ),
+        ],
+    )
+    units = _build_stack_units(request)
+    by_cargo = {unit.cargo.id: unit for unit in units}
+    quantity_by_cargo = Counter(unit.cargo.id for unit in units for _ in range(unit.count))
+    capacity_by_cargo = {
+        cargo_id: 2 if unit.cargo.stackable else 1
+        for cargo_id, unit in by_cargo.items()
+    }
+
+    floor = _generic_floor_band_layout(
+        request,
+        by_cargo,
+        quantity_by_cargo,
+        capacity_by_cargo,
+        "fill",
+    )
+
+    assert floor is not None
+    floor_items = [
+        stack for stack in floor
+        if stack.z_mm == request.container.clearance_mm
+    ]
+    upper_items = [
+        stack for stack in floor
+        if stack.z_mm > request.container.clearance_mm
+    ]
+    assert {stack.unit.cargo.id for stack in floor_items} == set(by_cargo)
+    assert len(floor_items) > len(upper_items)
+    assert all(
+        stack.unit.cargo.id in {"custom-a", "custom-b"}
+        for stack in upper_items
+    )
+
+    response = pack_order(request)
+    assert len(response.solutions) == 3
+    for solution in response.solutions:
+        assert validate_solution(
+            request.container,
+            request.cargo_items,
+            solution.placements,
+        ).valid
 
 
 def test_rejects_order_when_must_load_cargo_cannot_fit():
