@@ -110,7 +110,7 @@ test("shows the AI strategy status separately from safety notices", () => {
       status: "considered",
       provider: "DeepSeek",
       model: "deepseek-v4-flash",
-      message: "AI 策略建议已获取，最终布局仍以本地物理校验和评分为准",
+      message: "AI 策略建议已获取，并已参与候选布局排序；最终布局仍以本地物理校验和评分为准",
       sku_order: ["a"],
       orientations: {},
     },

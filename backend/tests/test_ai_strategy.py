@@ -1,6 +1,6 @@
 import httpx
 
-from app.ai_strategy import load_ai_layout_hint, verify_ai_connection
+from app.ai_strategy import load_ai_layout_hint, load_ai_layout_hint_diagnostic, verify_ai_connection
 from app.models import CargoSpec, ContainerSpec, PackRequest
 
 
@@ -60,6 +60,22 @@ def test_no_api_key_disables_ai_without_network_call(monkeypatch):
     monkeypatch.setattr(httpx, "post", fail_if_called)
 
     assert load_ai_layout_hint(ai_request()) is None
+
+
+def test_reports_read_timeout_from_ai_provider(monkeypatch):
+    captured = {}
+
+    def timeout_post(_url, **kwargs):
+        captured.update(kwargs)
+        raise httpx.ReadTimeout("provider timed out")
+
+    monkeypatch.setattr(httpx, "post", timeout_post)
+
+    result = load_ai_layout_hint_diagnostic(ai_request(), api_key="test-key")
+
+    assert result.hint is None
+    assert result.error == "timeout"
+    assert captured["timeout"] == 10.0
 
 
 def test_parses_openai_compatible_deepseek_hint(monkeypatch):

@@ -1520,22 +1520,82 @@ def _layout_quality_score(
         -quality.upper_center_deviation_mm,
     )
     loaded = float(len(placements))
+    ai_score = _ai_strategy_score(request, placements)
     if profile == "stable":
         metrics = _metrics(request, placements)
         return (loaded,) + common + (
             -metrics.weight_imbalance_pct,
             -quality.sku_transitions,
-        )
+        ) + ai_score
     if profile == "easy":
         return (loaded,) + common + (
             -quality.sku_transitions,
-        )
+        ) + ai_score
     return (loaded,) + (
         float(sum(
             item.length_mm * item.width_mm * item.height_mm
             for item in placements
         )),
-    ) + common
+    ) + common + ai_score
+
+
+def _ai_strategy_score(
+    request: PackRequest,
+    placements: list[Placement],
+) -> tuple[float, ...]:
+    """Score an AI hint only after physical and profile priorities are equal.
+
+    The hint can prefer a cabinet-length SKU order and legal orientations, but
+    it cannot make an unsafe candidate win because this tuple is appended after
+    the deterministic layout quality terms.
+    """
+    hint = request.ai_layout_hint
+    if not isinstance(hint, dict):
+        return ()
+    raw_order = hint.get("sku_order")
+    raw_orientations = hint.get("orientations")
+    hinted_order = [item_id for item_id in raw_order or [] if isinstance(item_id, str)]
+    hinted_orientations = raw_orientations if isinstance(raw_orientations, dict) else {}
+    if not hinted_order and not hinted_orientations:
+        return ()
+
+    floor = [
+        placement
+        for placement in placements
+        if placement.z_mm == request.container.clearance_mm
+    ]
+    first_x: dict[str, int] = {}
+    for placement in floor:
+        first_x[placement.cargo_id] = min(
+            first_x.get(placement.cargo_id, placement.x_mm),
+            placement.x_mm,
+        )
+    present_order = [item_id for item_id in hinted_order if item_id in first_x]
+    order_score = 0.0
+    pair_count = 0
+    for index, left_id in enumerate(present_order):
+        for right_id in present_order[index + 1:]:
+            pair_count += 1
+            if first_x[left_id] <= first_x[right_id]:
+                order_score += 1.0
+    if pair_count:
+        order_score /= pair_count
+
+    orientation_matches = 0
+    orientation_total = 0
+    for placement in placements:
+        expected = hinted_orientations.get(placement.cargo_id)
+        if not isinstance(expected, str):
+            continue
+        orientation_total += 1
+        if placement.rotation.value == expected:
+            orientation_matches += 1
+    orientation_score = (
+        orientation_matches / orientation_total
+        if orientation_total
+        else 0.0
+    )
+    return order_score, orientation_score
 
 
 def _upper_layout_diagnostics(
@@ -2792,9 +2852,6 @@ def _pure_pallet_floor_first_layout(
         capacity_by_cargo,
         strategy,
     )
-    if band_layout is not None:
-        return band_layout
-
     mixed_band_layout = _mixed_floor_band_layout(
         request,
         by_cargo,
@@ -2802,9 +2859,6 @@ def _pure_pallet_floor_first_layout(
         capacity_by_cargo,
         strategy,
     )
-    if mixed_band_layout is not None:
-        return mixed_band_layout
-
     generic_band_layout = _generic_floor_band_layout(
         request,
         by_cargo,
@@ -2812,7 +2866,26 @@ def _pure_pallet_floor_first_layout(
         capacity_by_cargo,
         strategy,
     )
-    if generic_band_layout is not None:
+    if request.ai_layout_hint:
+        guided_candidates = [
+            candidate
+            for candidate in (band_layout, mixed_band_layout, generic_band_layout)
+            if candidate is not None
+        ]
+        if guided_candidates:
+            return max(
+                guided_candidates,
+                key=lambda candidate: _layout_quality_score(
+                    request,
+                    _expand_stacks(request, candidate, "high_fill"),
+                    {"fill": "high_fill", "stable": "stable", "easy": "easy", "strict": "easy"}[strategy],
+                ),
+            )
+    elif band_layout is not None:
+        return band_layout
+    elif mixed_band_layout is not None:
+        return mixed_band_layout
+    elif generic_band_layout is not None:
         return generic_band_layout
 
     def one_piece_units(counts: dict[str, int]) -> list[StackUnit]:

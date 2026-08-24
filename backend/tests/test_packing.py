@@ -3,7 +3,7 @@ from dataclasses import replace
 
 import pytest
 
-from app.models import CargoSpec, ContainerSpec, PackRequest
+from app.models import CargoSpec, ContainerSpec, Orientation, PackRequest, Placement
 from app.packing import (
     PackedStack,
     PackingFailure,
@@ -11,6 +11,7 @@ from app.packing import (
     _build_stack_units,
     _expand_stacks,
     _generic_floor_band_layout,
+    _ai_strategy_score,
     _high_fill_candidate,
     pack_order,
 )
@@ -89,6 +90,37 @@ def test_cargo_label_does_not_change_layout():
     assert [solution.model_dump() for solution in original.solutions] == [
         solution.model_dump() for solution in renamed_response.solutions
     ]
+
+
+def test_ai_strategy_score_rewards_requested_floor_order_and_orientation():
+    request = PackRequest(
+        container=small_container(),
+        cargo_items=[
+            boxes(id="cargo-a", quantity=1, allowed_orientations=["LWH", "WLH"]),
+            boxes(id="cargo-b", quantity=1, allowed_orientations=["LWH", "WLH"]),
+        ],
+        ai_layout_hint={
+            "sku_order": ["cargo-b", "cargo-a"],
+            "orientations": {"cargo-a": "WLH", "cargo-b": "LWH"},
+        },
+    )
+    matching = [
+        Placement(
+            id="b", cargo_id="cargo-b", instance_index=0, x_mm=0, y_mm=0,
+            z_mm=0, length_mm=1000, width_mm=500, height_mm=500,
+            rotation=Orientation.LWH, weight_g=100_000, step=1,
+        ),
+        Placement(
+            id="a", cargo_id="cargo-a", instance_index=0, x_mm=1000, y_mm=0,
+            z_mm=0, length_mm=500, width_mm=1000, height_mm=500,
+            rotation=Orientation.WLH, weight_g=100_000, step=1,
+        ),
+    ]
+    reversed_layout = [matching[1], matching[0]]
+    reversed_layout[0] = matching[1].model_copy(update={"x_mm": 0})
+    reversed_layout[1] = matching[0].model_copy(update={"x_mm": 1000})
+
+    assert _ai_strategy_score(request, matching) > _ai_strategy_score(request, reversed_layout)
 
 
 def test_reports_unloaded_quantity_when_order_exceeds_container():

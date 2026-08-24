@@ -12,6 +12,7 @@ import httpx
 from .models import PackRequest
 
 logger = logging.getLogger("container_loading_assistant.ai")
+AI_REQUEST_TIMEOUT_SECONDS = 10.0
 PROVIDER_DEFAULTS = {
     "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"), "host": "api.deepseek.com"},
     "qwen": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen3-max", "host": "dashscope.aliyuncs.com"},
@@ -29,6 +30,18 @@ class LayoutHint:
             "sku_order": list(self.sku_order),
             "orientations": self.orientations or {},
         }
+
+
+@dataclass(frozen=True)
+class LayoutHintResult:
+    hint: LayoutHint | None
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class CompletionResult:
+    payload: dict[str, Any] | None
+    error: str | None = None
 
 
 def resolve_ai_api_key(api_key: str | None) -> str:
@@ -105,10 +118,10 @@ def _post_chat_completion(
     base_url: str | None,
     messages: list[dict[str, str]],
     response_format: dict[str, str] | None = None,
-) -> dict[str, Any] | None:
+) -> CompletionResult:
     connection = _resolve_connection(api_key, provider, model, base_url)
     if connection is None:
-        return None
+        return CompletionResult(None, "invalid_config")
     key, selected_model, url, provider_id = connection
     body: dict[str, Any] = {"model": selected_model, "temperature": 0.1, "messages": messages}
     if response_format is not None:
@@ -118,13 +131,22 @@ def _post_chat_completion(
             url,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json=body,
-            timeout=4.0,
+            timeout=AI_REQUEST_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
-        return response.json()
+        payload = response.json()
+        if not isinstance(payload, dict):
+            return CompletionResult(None, "invalid_response")
+        return CompletionResult(payload)
+    except httpx.ReadTimeout as exc:
+        logger.warning("%s AI connection unavailable: ReadTimeout", provider_id)
+        return CompletionResult(None, "timeout")
+    except httpx.HTTPStatusError as exc:
+        logger.warning("%s AI connection unavailable: HTTPStatusError", provider_id)
+        return CompletionResult(None, "http_error")
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
         logger.warning("%s AI connection unavailable: %s", provider_id, type(exc).__name__)
-        return None
+        return CompletionResult(None, "request_error")
 
 
 def load_ai_layout_hint(
@@ -134,6 +156,22 @@ def load_ai_layout_hint(
     model: str | None = None,
     base_url: str | None = None,
 ) -> LayoutHint | None:
+    return load_ai_layout_hint_diagnostic(
+        request,
+        api_key=api_key,
+        provider=provider,
+        model=model,
+        base_url=base_url,
+    ).hint
+
+
+def load_ai_layout_hint_diagnostic(
+    request: PackRequest,
+    api_key: str | None = None,
+    provider: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> LayoutHintResult:
     prompt = {
         "container": request.container.model_dump(mode="json"),
         "cargo_items": [item.model_dump(mode="json") for item in request.cargo_items],
@@ -157,16 +195,18 @@ def load_ai_layout_hint(
         ],
     }
     try:
-        payload = _post_chat_completion(
+        completion = _post_chat_completion(
             api_key, provider, model, base_url, body["messages"], {"type": "json_object"},
         )
-        if payload is None:
-            return None
+        if completion.payload is None:
+            return LayoutHintResult(None, completion.error)
+        payload = completion.payload
         content = payload.get("choices", [{}])[0].get("message", {}).get("content")
-        return _parse_hint(_content_json(content) or {}, request)
+        hint = _parse_hint(_content_json(content) or {}, request)
+        return LayoutHintResult(hint, None if hint is not None else "invalid_response")
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         logger.warning("AI layout hint unavailable: %s", type(exc).__name__)
-        return None
+        return LayoutHintResult(None, "invalid_response")
 
 
 def verify_ai_connection(
@@ -175,13 +215,14 @@ def verify_ai_connection(
     model: str | None,
     base_url: str | None,
 ) -> str | None:
-    payload = _post_chat_completion(
+    completion = _post_chat_completion(
         api_key,
         provider,
         model,
         base_url,
         [{"role": "user", "content": "Reply with OK."}],
     )
+    payload = completion.payload
     if payload is None or not payload.get("choices"):
         return None
     return "连接成功，模型可用于策略建议"

@@ -16,7 +16,13 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .models import AIStrategyStatus, ContainerSpec, PackRequest, PackResponse
-from .ai_strategy import PROVIDER_DEFAULTS, load_ai_layout_hint, resolve_ai_api_key, verify_ai_connection
+from .ai_strategy import (
+    PROVIDER_DEFAULTS,
+    LayoutHintResult,
+    load_ai_layout_hint_diagnostic,
+    resolve_ai_api_key,
+    verify_ai_connection,
+)
 from .packing import PackingFailure, pack_order
 
 
@@ -165,6 +171,7 @@ def ai_strategy_status(
     provider: str | None,
     model: str | None,
     hint: object | None,
+    error: str | None = None,
 ) -> AIStrategyStatus:
     if not (api_key or "").strip():
         return AIStrategyStatus(
@@ -175,11 +182,18 @@ def ai_strategy_status(
     defaults = PROVIDER_DEFAULTS.get(provider_id, {})
     selected_model = (model or defaults.get("model") or "").strip() or None
     if hint is None:
+        reason = {
+            "timeout": "AI 服务响应超时",
+            "http_error": "AI 服务返回错误",
+            "invalid_config": "AI 地址、模型或 API Key 配置无效",
+            "invalid_response": "AI 返回内容无法识别",
+            "request_error": "AI 网络请求失败",
+        }.get(error, "AI 服务暂时不可用")
         return AIStrategyStatus(
             status="fallback",
             provider=provider_id,
             model=selected_model,
-            message="AI 策略未生效，已自动使用本地安全算法",
+            message=f"{reason}，已自动使用本地安全算法",
         )
     sku_order = getattr(hint, "sku_order", ())
     orientations = getattr(hint, "orientations", None) or {}
@@ -187,7 +201,7 @@ def ai_strategy_status(
         status="considered",
         provider=provider_id,
         model=selected_model,
-        message="AI 策略建议已获取，最终布局仍以本地物理校验和评分为准",
+        message="AI 策略建议已获取，并已参与候选布局排序；最终布局仍以本地物理校验和评分为准",
         sku_order=list(sku_order),
         orientations=orientations,
     )
@@ -208,8 +222,8 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
         base_url = http_request.headers.get("X-AI-Base-URL")
         # AI is advisory only; timeout/errors leave the deterministic path unchanged.
         try:
-            hint = await anyio.to_thread.run_sync(
-                lambda: load_ai_layout_hint(
+            hint_result: LayoutHintResult = await anyio.to_thread.run_sync(
+                lambda: load_ai_layout_hint_diagnostic(
                     request,
                     api_key=ai_key,
                     provider=provider,
@@ -217,10 +231,13 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
                     base_url=base_url,
                 ),
             )
+            hint = hint_result.hint
+            hint_error = hint_result.error
         except Exception as exc:
             logger.warning("AI layout hint failed; using local algorithm: %s", type(exc).__name__)
             hint = None
-        strategy_status = ai_strategy_status(effective_ai_key, provider, model, hint)
+            hint_error = "request_error"
+        strategy_status = ai_strategy_status(effective_ai_key, provider, model, hint, hint_error)
         if hint is not None:
             request = request.model_copy(update={"ai_layout_hint": hint.as_dict()})
         result = await asyncio.wait_for(
