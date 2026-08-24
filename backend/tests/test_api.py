@@ -18,7 +18,9 @@ def test_health_and_container_presets():
     assert [item["id"] for item in response.json()] == ["20gp", "40gp", "40hq"]
 
 
-def test_pack_endpoint_returns_four_core_solutions():
+def test_pack_endpoint_returns_four_core_solutions(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+
     payload = {
         "container": {
             "id": "small",
@@ -57,6 +59,14 @@ def test_pack_endpoint_returns_four_core_solutions():
 
     assert response.status_code == 200
     assert len(response.json()["solutions"]) == 3
+    assert response.json()["ai_strategy"] == {
+        "status": "disabled",
+        "provider": None,
+        "model": None,
+        "message": "未启用 AI 策略，当前使用本地装柜算法",
+        "sku_order": [],
+        "orientations": {},
+    }
 
 
 def test_pack_endpoint_passes_optional_ai_hint_without_changing_response_contract(monkeypatch):
@@ -98,6 +108,7 @@ def test_pack_endpoint_passes_optional_ai_hint_without_changing_response_contrac
         "load_ai_layout_hint",
         lambda _request, **_kwargs: LayoutHint(("a",), {}),
     )
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "server-key")
 
     async def calculation(request):
         captured["hint"] = request.ai_layout_hint
@@ -105,15 +116,73 @@ def test_pack_endpoint_passes_optional_ai_hint_without_changing_response_contrac
 
     monkeypatch.setattr(main, "run_pack_calculation", calculation)
 
-    response = client.post(
-        "/api/v1/pack",
-        json=payload,
-        headers={"X-AI-API-Key": "sk-browser-test"},
-    )
+    response = client.post("/api/v1/pack", json=payload)
 
     assert response.status_code == 200
     assert captured["hint"] == {"sku_order": ["a"], "orientations": {}}
     assert len(response.json()["solutions"]) == 3
+    assert response.json()["ai_strategy"] == {
+        "status": "considered",
+        "provider": "deepseek",
+        "model": "deepseek-v4-flash",
+        "message": "AI 策略建议已获取，最终布局仍以本地物理校验和评分为准",
+        "sku_order": ["a"],
+        "orientations": {},
+    }
+
+
+def test_pack_endpoint_reports_ai_fallback_when_the_hint_is_unavailable(monkeypatch):
+    from app.packing import pack_order
+
+    payload = {
+        "container": {
+            "id": "small", "name": "小型测试柜", "inner_length_mm": 2000,
+            "inner_width_mm": 1000, "inner_height_mm": 1000,
+            "door_width_mm": 1000, "door_height_mm": 1000,
+            "max_payload_g": 1000000, "clearance_mm": 0,
+        },
+        "cargo_items": [{
+            "id": "a", "sku": "A", "name": "标准箱", "kind": "carton",
+            "length_mm": 1000, "width_mm": 1000, "height_mm": 1000,
+            "weight_g": 100000, "quantity": 1, "allowed_orientations": ["LWH"],
+            "stackable": False, "max_layers": 1, "max_top_load_g": 0,
+        }],
+    }
+    monkeypatch.setattr(main, "load_ai_layout_hint", lambda _request, **_kwargs: None)
+    monkeypatch.setattr(main, "run_pack_calculation", lambda request: asyncio.sleep(0, result=pack_order(request)))
+
+    response = client.post("/api/v1/pack", json=payload, headers={"X-AI-API-Key": "sk-browser-test"})
+
+    assert response.status_code == 200
+    assert response.json()["ai_strategy"]["status"] == "fallback"
+    assert response.json()["ai_strategy"]["message"] == "AI 策略未生效，已自动使用本地安全算法"
+
+
+def test_pack_endpoint_falls_back_to_local_algorithm_when_ai_raises(monkeypatch):
+    from app.packing import pack_order
+
+    payload = {
+        "container": {
+            "id": "small", "name": "小型测试柜", "inner_length_mm": 2000,
+            "inner_width_mm": 1000, "inner_height_mm": 1000,
+            "door_width_mm": 1000, "door_height_mm": 1000,
+            "max_payload_g": 1000000, "clearance_mm": 0,
+        },
+        "cargo_items": [{
+            "id": "a", "sku": "A", "name": "标准箱", "kind": "carton",
+            "length_mm": 1000, "width_mm": 1000, "height_mm": 1000,
+            "weight_g": 100000, "quantity": 1, "allowed_orientations": ["LWH"],
+            "stackable": False, "max_layers": 1, "max_top_load_g": 0,
+        }],
+    }
+    monkeypatch.setattr(main, "load_ai_layout_hint", lambda _request, **_kwargs: (_ for _ in ()).throw(RuntimeError("AI unavailable")))
+    monkeypatch.setattr(main, "run_pack_calculation", lambda request: asyncio.sleep(0, result=pack_order(request)))
+
+    response = client.post("/api/v1/pack", json=payload, headers={"X-AI-API-Key": "sk-browser-test"})
+
+    assert response.status_code == 200
+    assert len(response.json()["solutions"]) == 3
+    assert response.json()["ai_strategy"]["status"] == "fallback"
 
 
 def test_pack_endpoint_passes_model_configuration_headers_to_ai_strategy(monkeypatch):

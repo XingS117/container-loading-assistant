@@ -159,6 +159,21 @@ class PackingSolution(BaseModel):
     identical_to: str | None = None
 
 
+class AIStrategyStatus(BaseModel):
+    status: Literal["disabled", "fallback", "considered"]
+    provider: str | None = None
+    model: str | None = None
+    message: str
+    sku_order: list[str] = Field(default_factory=list)
+    orientations: dict[str, str] = Field(default_factory=dict)
+
+
 class PackResponse(BaseModel):
     request_id: str
     solutions: list[PackingSolution]
+    ai_strategy: AIStrategyStatus = Field(
+        default_factory=lambda: AIStrategyStatus(
+            status="disabled",
+            message="未启用 AI 策略，当前使用本地装柜算法",
+        )
+    )

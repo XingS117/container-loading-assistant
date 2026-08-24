@@ -151,6 +151,14 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 .recalculate-control select { min-width: 112px; height: 38px; font-size: 12px; font-weight: 700; }
 .recalculate-button:disabled { cursor: not-allowed; opacity: .55; }
 .recalculate-error { width: min(1380px, calc(100% - 32px)); margin: 12px auto 0; padding: 10px 12px; color: #7f2f2a; background: #fff1ef; border: 1px solid #e7b6b2; border-radius: 5px; font-size: 12px; }
+.ai-strategy-status { width: min(1380px, calc(100% - 32px)); margin: 12px auto 0; padding: 10px 13px; display: flex; align-items: flex-start; gap: 9px; border: 1px solid; border-left-width: 4px; border-radius: 6px; }
+.ai-strategy-status > div { min-width: 0; }
+.ai-strategy-status h2 { margin: 0; font-size: 12px; }
+.ai-strategy-status p { margin: 3px 0 0; font-size: 12px; line-height: 1.45; }
+.ai-strategy-status small { display: block; margin-top: 4px; font-size: 11px; overflow-wrap: anywhere; }
+.ai-strategy-status--considered { color: #176052; background: #edf8f4; border-color: #b7dfd3; border-left-color: #24947c; }
+.ai-strategy-status--fallback { color: #79500e; background: #fff6e7; border-color: #ead09b; border-left-color: #d88a19; }
+.ai-strategy-status--disabled { color: #526058; background: #f0f3f0; border-color: #d5ddd6; border-left-color: #87948b; }
 .solution-tabs { width: min(1380px, calc(100% - 32px)); margin: 22px auto 0; display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 7px; overflow: hidden; }
 .solution-tab { min-height: 94px; padding: 13px 18px; display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; text-align: left; color: var(--ink); background: white; border: 0; border-right: 1px solid var(--line); }
 .solution-tab:last-child { border-right: 0; }
@@ -264,6 +272,7 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
   .result-actions { width: 100%; display: grid; grid-area: actions; grid-template-columns: minmax(0, 1fr) 38px; gap: 6px; }
   .recalculate-control { display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 6px; }
   .recalculate-control select { width: 100%; min-width: 0; }
+  .ai-strategy-status { width: calc(100% - 24px); }
   .solution-tabs { width: calc(100% - 24px); margin-top: 12px; }
   .solution-tab { min-height: 78px; padding: 10px; display: flex; flex-direction: column; }
   .solution-tab strong { font-size: 18px; }

@@ -1,4 +1,4 @@
-import { AlertTriangle, ArrowLeft, CheckCircle2, CircleX, Info, Printer, RefreshCw } from "lucide-react";
+import { AlertTriangle, ArrowLeft, CheckCircle2, CircleX, Info, Printer, RefreshCw, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { LoadVisualizer, StaticLayout } from "./LoadVisualizer";
@@ -63,6 +63,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
   const selected = response.solutions.find((solution) => solution.profile === selectedProfile) ?? response.solutions[0];
   const cargoById = Object.fromEntries(cargoItems.map((item) => [item.id, item]));
   const recommended = recommendProfile(response);
+  const aiStrategy = response.ai_strategy;
   const warningGroups = useMemo(() => (
     (["critical", "caution", "info"] as const).map((severity) => ({
       severity,
@@ -102,6 +103,14 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
         </div>
       </header>
       {recalculateError && <p className="recalculate-error" role="alert">{recalculateError}</p>}
+      {aiStrategy && <section className={`ai-strategy-status ai-strategy-status--${aiStrategy.status} no-print`} aria-label="AI 策略状态" role="status" aria-live="polite">
+        <Sparkles size={18} aria-hidden="true" />
+        <div>
+          <h2>AI 策略</h2>
+          <p>{aiStrategy.message}</p>
+          {aiStrategy.provider && aiStrategy.model && <small>{aiStrategy.provider} / {aiStrategy.model}</small>}
+        </div>
+      </section>}
 
       <section className="solution-tabs" aria-label="装柜方案">
         {response.solutions.map((solution) => {

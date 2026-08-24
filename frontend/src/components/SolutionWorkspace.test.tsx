@@ -101,3 +101,35 @@ test("shows balance warning and the recommended stable tab", async () => {
   expect(screen.getByText("前后偏差")).toBeInTheDocument();
   expect(screen.getByText("左右偏差")).toBeInTheDocument();
 });
+
+
+test("shows the AI strategy status separately from safety notices", () => {
+  const response = {
+    ...makeResponse(8, 3),
+    ai_strategy: {
+      status: "considered",
+      provider: "DeepSeek",
+      model: "deepseek-v4-flash",
+      message: "AI 策略建议已获取，最终布局仍以本地物理校验和评分为准",
+      sku_order: ["a"],
+      orientations: {},
+    },
+  } as PackResponse & { ai_strategy: Record<string, unknown> };
+
+  render(
+    <SolutionWorkspace
+      response={response}
+      container={container}
+      presets={presets}
+      cargoItems={cargoItems}
+      onBack={() => undefined}
+      onRecalculate={async () => undefined}
+      recalculating={false}
+    />,
+  );
+
+  expect(screen.getByLabelText("AI 策略状态")).toHaveTextContent("AI 策略建议已获取");
+  expect(screen.getByLabelText("AI 策略状态")).toHaveTextContent("DeepSeek / deepseek-v4-flash");
+  expect(screen.getByRole("status", { name: "AI 策略状态" })).toBeInTheDocument();
+  expect(screen.queryByLabelText("方案提示")).not.toBeInTheDocument();
+});

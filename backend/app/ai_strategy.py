@@ -31,6 +31,10 @@ class LayoutHint:
         }
 
 
+def resolve_ai_api_key(api_key: str | None) -> str:
+    return (api_key or os.getenv("DEEPSEEK_API_KEY") or "").strip()
+
+
 def _content_json(content: Any) -> dict[str, Any] | None:
     if isinstance(content, dict):
         return content
@@ -77,7 +81,7 @@ def _resolve_connection(
     model: str | None,
     base_url: str | None,
 ) -> tuple[str, str, str, str] | None:
-    key = (api_key or os.getenv("DEEPSEEK_API_KEY") or "").strip()
+    key = resolve_ai_api_key(api_key)
     if not key:
         return None
     provider_id = (provider or "deepseek").strip().lower()

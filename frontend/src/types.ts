@@ -104,7 +104,17 @@ export interface PackingSolution {
   identical_to: SolutionProfile | null;
 }
 
+export interface AIStrategyStatus {
+  status: "disabled" | "fallback" | "considered";
+  provider: string | null;
+  model: string | null;
+  message: string;
+  sku_order: string[];
+  orientations: Record<string, string>;
+}
+
 export interface PackResponse {
   request_id: string;
   solutions: PackingSolution[];
+  ai_strategy?: AIStrategyStatus;
 }

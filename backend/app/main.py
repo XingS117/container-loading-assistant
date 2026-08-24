@@ -15,8 +15,8 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .models import ContainerSpec, PackRequest, PackResponse
-from .ai_strategy import load_ai_layout_hint, verify_ai_connection
+from .models import AIStrategyStatus, ContainerSpec, PackRequest, PackResponse
+from .ai_strategy import PROVIDER_DEFAULTS, load_ai_layout_hint, resolve_ai_api_key, verify_ai_connection
 from .packing import PackingFailure, pack_order
 
 
@@ -160,6 +160,39 @@ async def run_pack_calculation(request: PackRequest) -> PackResponse:
     )
 
 
+def ai_strategy_status(
+    api_key: str | None,
+    provider: str | None,
+    model: str | None,
+    hint: object | None,
+) -> AIStrategyStatus:
+    if not (api_key or "").strip():
+        return AIStrategyStatus(
+            status="disabled",
+            message="未启用 AI 策略，当前使用本地装柜算法",
+        )
+    provider_id = (provider or "deepseek").strip().lower()
+    defaults = PROVIDER_DEFAULTS.get(provider_id, {})
+    selected_model = (model or defaults.get("model") or "").strip() or None
+    if hint is None:
+        return AIStrategyStatus(
+            status="fallback",
+            provider=provider_id,
+            model=selected_model,
+            message="AI 策略未生效，已自动使用本地安全算法",
+        )
+    sku_order = getattr(hint, "sku_order", ())
+    orientations = getattr(hint, "orientations", None) or {}
+    return AIStrategyStatus(
+        status="considered",
+        provider=provider_id,
+        model=selected_model,
+        message="AI 策略建议已获取，最终布局仍以本地物理校验和评分为准",
+        sku_order=list(sku_order),
+        orientations=orientations,
+    )
+
+
 @app.post("/api/v1/pack", response_model=PackResponse)
 async def pack(request: PackRequest, http_request: Request) -> PackResponse | JSONResponse:
     if not pack_slots.acquire(blocking=False):
@@ -169,25 +202,32 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
         )
     try:
         ai_key = http_request.headers.get("X-AI-API-Key")
+        effective_ai_key = resolve_ai_api_key(ai_key)
         provider = http_request.headers.get("X-AI-Provider")
         model = http_request.headers.get("X-AI-Model")
         base_url = http_request.headers.get("X-AI-Base-URL")
         # AI is advisory only; timeout/errors leave the deterministic path unchanged.
-        hint = await anyio.to_thread.run_sync(
-            lambda: load_ai_layout_hint(
-                request,
-                api_key=ai_key,
-                provider=provider,
-                model=model,
-                base_url=base_url,
-            ),
-        )
+        try:
+            hint = await anyio.to_thread.run_sync(
+                lambda: load_ai_layout_hint(
+                    request,
+                    api_key=ai_key,
+                    provider=provider,
+                    model=model,
+                    base_url=base_url,
+                ),
+            )
+        except Exception as exc:
+            logger.warning("AI layout hint failed; using local algorithm: %s", type(exc).__name__)
+            hint = None
+        strategy_status = ai_strategy_status(effective_ai_key, provider, model, hint)
         if hint is not None:
             request = request.model_copy(update={"ai_layout_hint": hint.as_dict()})
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             run_pack_calculation(request),
             timeout=PACK_TIMEOUT_SECONDS,
         )
+        return result.model_copy(update={"ai_strategy": strategy_status})
     except asyncio.TimeoutError:
         return JSONResponse(
             status_code=504,
