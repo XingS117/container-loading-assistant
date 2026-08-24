@@ -92,7 +92,27 @@ def test_parses_openai_compatible_deepseek_hint(monkeypatch):
     assert hint.sku_order == ("cargo-b", "cargo-a")
     assert hint.orientations == {"cargo-a": "WLH"}
     assert calls[0][1]["headers"]["Authorization"] == "Bearer server-key"
-    assert calls[0][1]["json"]["model"] == "deepseek-chat"
+    assert calls[0][1]["json"]["model"] == "deepseek-v4-flash"
+
+
+def test_uses_deepseek_v4_flash_as_the_default_model(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    assert verify_ai_connection("deepseek-key", "deepseek", None, None)
+    assert calls[0][1]["json"]["model"] == "deepseek-v4-flash"
 
 
 def test_uses_qwen_compatible_url_for_qwen_configuration(monkeypatch):

@@ -167,6 +167,23 @@ test("lists official model identifiers without marketing labels", async () => {
 });
 
 
+test("lists the three configured DeepSeek models", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify([preset, secondPreset]), { status: 200 }),
+  );
+
+  render(<App />);
+  await screen.findByRole("button", { name: /20GP/ });
+  await userEvent.click(screen.getByRole("button", { name: "模型配置" }));
+  await userEvent.selectOptions(screen.getByLabelText("模型提供商"), "deepseek");
+
+  expect(screen.getByRole("option", { name: "deepseek-v4-flash" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "deepseek-v4-pro" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "deepseek-v4-flash-vision-exp" })).toBeInTheDocument();
+  expect(screen.getByLabelText("模型名称")).toHaveValue("deepseek-v4-flash");
+});
+
+
 test("loads a common preset and blocks calculation until weights are filled", async () => {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response(JSON.stringify([preset, secondPreset]), { status: 200 }),

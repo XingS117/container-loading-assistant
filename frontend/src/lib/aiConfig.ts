@@ -13,8 +13,9 @@ export const AI_PROVIDERS: Array<{
     name: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1",
     models: [
-      { id: "deepseek-chat", label: "deepseek-chat" },
-      { id: "deepseek-reasoner", label: "deepseek-reasoner" },
+      { id: "deepseek-v4-flash", label: "deepseek-v4-flash" },
+      { id: "deepseek-v4-pro", label: "deepseek-v4-pro" },
+      { id: "deepseek-v4-flash-vision-exp", label: "deepseek-v4-flash-vision-exp" },
     ],
   },
   {
