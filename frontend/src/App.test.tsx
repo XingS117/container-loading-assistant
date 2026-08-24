@@ -151,6 +151,22 @@ test("opens model configuration and keeps the selected provider settings in sess
 });
 
 
+test("lists official model identifiers without marketing labels", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify([preset, secondPreset]), { status: 200 }),
+  );
+
+  render(<App />);
+  await screen.findByRole("button", { name: /20GP/ });
+  await userEvent.click(screen.getByRole("button", { name: "模型配置" }));
+  await userEvent.selectOptions(screen.getByLabelText("模型提供商"), "zhipu");
+
+  expect(screen.getByRole("option", { name: "glm-5.2" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "glm-5.3" })).toBeInTheDocument();
+  expect(screen.queryByText(/旗舰版|快速版|均衡版|深蓝科技/)).not.toBeInTheDocument();
+});
+
+
 test("loads a common preset and blocks calculation until weights are filled", async () => {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response(JSON.stringify([preset, secondPreset]), { status: 200 }),

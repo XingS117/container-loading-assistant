@@ -10,11 +10,11 @@ export const AI_PROVIDERS: Array<{
 }> = [
   {
     id: "deepseek",
-    name: "DeepSeek 深蓝科技",
+    name: "DeepSeek",
     baseUrl: "https://api.deepseek.com/v1",
     models: [
-      { id: "deepseek-v4", label: "DeepSeek V4 旗舰版" },
-      { id: "deepseek-v4-flash", label: "DeepSeek V4 Flash 快速版" },
+      { id: "deepseek-chat", label: "deepseek-chat" },
+      { id: "deepseek-reasoner", label: "deepseek-reasoner" },
     ],
   },
   {
@@ -22,17 +22,17 @@ export const AI_PROVIDERS: Array<{
     name: "通义千问",
     baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
     models: [
-      { id: "qwen3-max", label: "Qwen3 Max 旗舰版" },
-      { id: "qwen3-plus", label: "Qwen3 Plus 均衡版" },
+      { id: "qwen3-max", label: "qwen3-max" },
+      { id: "qwen3-plus", label: "qwen3-plus" },
     ],
   },
   {
     id: "zhipu",
-    name: "智谱 AI",
+    name: "智谱",
     baseUrl: "https://open.bigmodel.cn/api/paas/v4",
     models: [
-      { id: "glm-4.5", label: "GLM-4.5 旗舰版" },
-      { id: "glm-4.5-air", label: "GLM-4.5 Air 快速版" },
+      { id: "glm-5.2", label: "glm-5.2" },
+      { id: "glm-5.3", label: "glm-5.3" },
     ],
   },
 ];

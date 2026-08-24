@@ -92,7 +92,7 @@ def test_parses_openai_compatible_deepseek_hint(monkeypatch):
     assert hint.sku_order == ("cargo-b", "cargo-a")
     assert hint.orientations == {"cargo-a": "WLH"}
     assert calls[0][1]["headers"]["Authorization"] == "Bearer server-key"
-    assert calls[0][1]["json"]["model"] == "deepseek-v4"
+    assert calls[0][1]["json"]["model"] == "deepseek-chat"
 
 
 def test_uses_qwen_compatible_url_for_qwen_configuration(monkeypatch):
@@ -129,6 +129,26 @@ def test_rejects_non_official_provider_address_without_network_call(monkeypatch)
     assert verify_ai_connection(
         api_key="test-key",
         provider="zhipu",
-        model="glm-4.5",
+        model="glm-5.3",
         base_url="https://example.com/v1",
     ) is None
+
+
+def test_uses_glm_53_as_the_default_zhipu_model(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    assert verify_ai_connection("zhipu-key", "zhipu", None, None)
+    assert calls[0][1]["json"]["model"] == "glm-5.3"

@@ -182,7 +182,7 @@ def test_ai_connection_endpoint_passes_config_headers(monkeypatch):
         headers={
             "X-AI-API-Key": "sk-browser-test",
             "X-AI-Provider": "zhipu",
-            "X-AI-Model": "glm-4.5",
+            "X-AI-Model": "glm-5.3",
             "X-AI-Base-URL": "https://open.bigmodel.cn/api/paas/v4",
         },
     )
@@ -192,7 +192,7 @@ def test_ai_connection_endpoint_passes_config_headers(monkeypatch):
     assert captured == {
         "api_key": "sk-browser-test",
         "provider": "zhipu",
-        "model": "glm-4.5",
+        "model": "glm-5.3",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
     }
 

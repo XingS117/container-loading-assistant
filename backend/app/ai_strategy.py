@@ -13,9 +13,9 @@ from .models import PackRequest
 
 logger = logging.getLogger("container_loading_assistant.ai")
 PROVIDER_DEFAULTS = {
-    "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": os.getenv("DEEPSEEK_MODEL", "deepseek-v4"), "host": "api.deepseek.com"},
+    "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": os.getenv("DEEPSEEK_MODEL", "deepseek-chat"), "host": "api.deepseek.com"},
     "qwen": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen3-max", "host": "dashscope.aliyuncs.com"},
-    "zhipu": {"base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-4.5", "host": "open.bigmodel.cn"},
+    "zhipu": {"base_url": "https://open.bigmodel.cn/api/paas/v4", "model": "glm-5.3", "host": "open.bigmodel.cn"},
 }
 
 
