@@ -1,19 +1,20 @@
-import { Box, Calculator, FileSpreadsheet, LoaderCircle, ShieldCheck, Trash2 } from "lucide-react";
+import { Box, Calculator, FileSpreadsheet, LoaderCircle, Settings2, ShieldCheck, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { CargoTable } from "./components/CargoTable";
 import { ContainerPicker } from "./components/ContainerPicker";
 import { SolutionWorkspace } from "./components/SolutionWorkspace";
+import { ModelSettings } from "./components/ModelSettings";
 import voyageBanner from "./assets/voyage-banner.jpg";
-import { getContainerPresets, packOrder } from "./lib/api";
+import { getContainerPresets, packOrder, testAIConnection } from "./lib/api";
+import { loadAIConfig, saveAIConfig } from "./lib/aiConfig";
 import { createCargo, validateCargo } from "./lib/cargo";
 import { cloneCargoPreset } from "./lib/cargoPresets";
 import { downloadCargoTemplate, readCargoExcel } from "./lib/excel";
 import { trackAnalyticsEvent } from "./lib/analytics";
-import type { CargoInput, CargoPreset, ContainerSpec, PackResponse } from "./types";
+import type { AIModelConfig, CargoInput, CargoPreset, ContainerSpec, PackResponse } from "./types";
 
 const STORAGE_KEY = "container-loading-assistant-draft-v1";
-const AI_KEY_STORAGE_KEY = "container-loading-assistant-deepseek-key-v1";
 
 interface Draft {
   containerId: string;
@@ -38,9 +39,8 @@ export default function App() {
   const [cargoItems, setCargoItems] = useState<CargoInput[]>(draft.cargoItems?.length ? draft.cargoItems : [createCargo("SKU-001")]);
   const [itemGapCm, setItemGapCm] = useState(draft.itemGapCm ?? 0);
   const [clearanceCm, setClearanceCm] = useState(draft.clearanceCm ?? 0);
-  const [deepseekApiKey, setDeepseekApiKey] = useState(
-    () => sessionStorage.getItem(AI_KEY_STORAGE_KEY) ?? "",
-  );
+  const [aiConfig, setAIConfig] = useState<AIModelConfig>(loadAIConfig);
+  const [showModelSettings, setShowModelSettings] = useState(false);
   const [result, setResult] = useState<PackResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -71,7 +71,7 @@ export default function App() {
     setError(null);
     try {
       const requestContainer = { ...nextContainer, clearance_mm: Math.round(clearanceCm * 10) };
-      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, deepseekApiKey);
+      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig);
       setContainer(nextContainer);
       setResult(nextResult);
       trackAnalyticsEvent("pack_solutions_generated");
@@ -89,10 +89,10 @@ export default function App() {
     }
   };
 
-  const updateDeepseekApiKey = (value: string) => {
-    setDeepseekApiKey(value);
-    if (value.trim()) sessionStorage.setItem(AI_KEY_STORAGE_KEY, value);
-    else sessionStorage.removeItem(AI_KEY_STORAGE_KEY);
+  const saveModelConfig = (nextConfig: AIModelConfig) => {
+    setAIConfig(nextConfig);
+    saveAIConfig(nextConfig);
+    setShowModelSettings(false);
   };
 
   const loadPreset = (preset: CargoPreset) => {
@@ -123,12 +123,16 @@ export default function App() {
     return <SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} onBack={() => setResult(null)} onRecalculate={calculateFor} recalculating={loading} />;
   }
 
+  if (showModelSettings) {
+    return <ModelSettings config={aiConfig} onBack={() => setShowModelSettings(false)} onSave={saveModelConfig} onTest={testAIConnection} />;
+  }
+
   return (
     <main className="app-shell">
       <header className="app-header">
         <div className="brand-mark brand-mark--cube"><Box size={28} strokeWidth={2.2} /></div>
         <div><span className="eyebrow">LOAD PLANNING</span><h1>装柜方案助手</h1></div>
-        <div className="header-status"><ShieldCheck size={16} /><span>草稿仅存本机</span><button type="button" className="icon-button" aria-label="清除本地草稿" title="清除本地草稿" onClick={clearDraft}><Trash2 size={15} /></button></div>
+        <div className="header-status"><ShieldCheck size={16} /><span>草稿仅存本机</span><button type="button" className="header-action" onClick={() => setShowModelSettings(true)}><Settings2 size={16} />模型配置</button><button type="button" className="icon-button" aria-label="清除本地草稿" title="清除本地草稿" onClick={clearDraft}><Trash2 size={15} /></button></div>
       </header>
 
       <div className="input-workspace">
@@ -160,8 +164,7 @@ export default function App() {
           <div className="settings-grid">
             <label><span>货物间隙</span><span className="unit-input"><input type="number" min="0" step="0.1" value={itemGapCm} onChange={(event) => setItemGapCm(Number(event.target.value))} /><i>cm</i></span></label>
             <label><span>柜体安全边距</span><span className="unit-input"><input type="number" min="0" step="0.1" value={clearanceCm} onChange={(event) => setClearanceCm(Number(event.target.value))} /><i>cm</i></span></label>
-            <label className="ai-key-field"><span>DeepSeek V4 API Key（可选）</span><input type="password" value={deepseekApiKey} onChange={(event) => updateDeepseekApiKey(event.target.value)} placeholder="不填写也可正常使用" autoComplete="off" /></label>
-            <div className="setting-summary"><FileSpreadsheet size={18} /><span>尺寸按厘米录入，计算时使用整数毫米<br />API Key 仅存当前会话，不填写也可使用本地算法</span></div>
+            <div className="setting-summary"><FileSpreadsheet size={18} /><span>尺寸按厘米录入，计算时使用整数毫米<br />{aiConfig.apiKey.trim() ? `AI 策略：${aiConfig.model}` : "未配置 AI 时使用本地算法"}</span></div>
           </div>
         </section>
 

@@ -96,7 +96,7 @@ def test_pack_endpoint_passes_optional_ai_hint_without_changing_response_contrac
     monkeypatch.setattr(
         main,
         "load_ai_layout_hint",
-        lambda _request, api_key: LayoutHint(("a",), {}),
+        lambda _request, **_kwargs: LayoutHint(("a",), {}),
     )
 
     async def calculation(request):
@@ -114,6 +114,87 @@ def test_pack_endpoint_passes_optional_ai_hint_without_changing_response_contrac
     assert response.status_code == 200
     assert captured["hint"] == {"sku_order": ["a"], "orientations": {}}
     assert len(response.json()["solutions"]) == 3
+
+
+def test_pack_endpoint_passes_model_configuration_headers_to_ai_strategy(monkeypatch):
+    from app.packing import pack_order
+
+    payload = {
+        "container": {
+            "id": "small",
+            "name": "小型测试柜",
+            "inner_length_mm": 2000,
+            "inner_width_mm": 1000,
+            "inner_height_mm": 1000,
+            "door_width_mm": 1000,
+            "door_height_mm": 1000,
+            "max_payload_g": 1000000,
+            "clearance_mm": 0,
+        },
+        "cargo_items": [{
+            "id": "a", "sku": "A", "name": "标准箱", "kind": "carton",
+            "length_mm": 1000, "width_mm": 1000, "height_mm": 1000,
+            "weight_g": 100000, "quantity": 1, "allowed_orientations": ["LWH"],
+            "stackable": False, "max_layers": 1, "max_top_load_g": 0,
+        }],
+    }
+    captured = {}
+
+    def capture_hint(*args, **kwargs):
+        captured["args"] = args
+        captured["kwargs"] = kwargs
+        return None
+
+    monkeypatch.setattr(main, "load_ai_layout_hint", capture_hint)
+    monkeypatch.setattr(main, "run_pack_calculation", lambda request: asyncio.sleep(0, result=pack_order(request)))
+
+    response = client.post(
+        "/api/v1/pack",
+        json=payload,
+        headers={
+            "X-AI-API-Key": "sk-browser-test",
+            "X-AI-Provider": "qwen",
+            "X-AI-Model": "qwen3-max",
+            "X-AI-Base-URL": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["kwargs"] == {
+        "api_key": "sk-browser-test",
+        "provider": "qwen",
+        "model": "qwen3-max",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    }
+
+
+def test_ai_connection_endpoint_passes_config_headers(monkeypatch):
+    captured = {}
+
+    def test_connection(**kwargs):
+        captured.update(kwargs)
+        return "连接成功，模型可用于策略建议"
+
+    monkeypatch.setattr(main, "verify_ai_connection", test_connection)
+
+    response = client.post(
+        "/api/v1/ai/test",
+        headers={
+            "X-AI-API-Key": "sk-browser-test",
+            "X-AI-Provider": "zhipu",
+            "X-AI-Model": "glm-4.5",
+            "X-AI-Base-URL": "https://open.bigmodel.cn/api/paas/v4",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.json()["message"] == "连接成功，模型可用于策略建议"
+    assert captured == {
+        "api_key": "sk-browser-test",
+        "provider": "zhipu",
+        "model": "glm-4.5",
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    }
 
 
 def test_pack_endpoint_returns_structured_must_load_error():

@@ -1,5 +1,5 @@
 import { orientationsFor, validateCargo } from "./cargo";
-import type { CargoInput, ContainerSpec, PackResponse } from "../types";
+import type { AIModelConfig, CargoInput, ContainerSpec, PackResponse } from "../types";
 
 export async function getContainerPresets(): Promise<ContainerSpec[]> {
   const response = await fetch("/api/v1/container-presets");
@@ -11,7 +11,7 @@ export async function packOrder(
   container: ContainerSpec,
   cargoItems: CargoInput[],
   itemGapCm: number,
-  aiApiKey?: string,
+  aiConfig?: AIModelConfig,
 ): Promise<PackResponse> {
   const validationError = validateCargo(cargoItems);
   if (validationError) throw new Error(validationError);
@@ -22,7 +22,12 @@ export async function packOrder(
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      ...(aiApiKey?.trim() ? { "X-AI-API-Key": aiApiKey.trim() } : {}),
+      ...(aiConfig?.apiKey?.trim() ? {
+        "X-AI-API-Key": aiConfig.apiKey.trim(),
+        "X-AI-Provider": aiConfig.provider,
+        "X-AI-Model": aiConfig.model,
+        "X-AI-Base-URL": aiConfig.baseUrl,
+      } : {}),
     },
     body: JSON.stringify({
       container,
@@ -57,5 +62,20 @@ export async function packOrder(
     throw new Error(hint ? `${message}\n${hint}` : message);
   }
   return payload;
+}
+
+export async function testAIConnection(config: AIModelConfig): Promise<string> {
+  const response = await fetch("/api/v1/ai/test", {
+    method: "POST",
+    headers: {
+      "X-AI-API-Key": config.apiKey.trim(),
+      "X-AI-Provider": config.provider,
+      "X-AI-Model": config.model,
+      "X-AI-Base-URL": config.baseUrl,
+    },
+  });
+  const payload = await response.json();
+  if (!response.ok) throw new Error(payload?.error?.message ?? "连接测试失败，请检查配置");
+  return payload.message as string;
 }
 

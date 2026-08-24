@@ -24,15 +24,22 @@ test("does not send an order when a cargo weight is missing", async () => {
   expect(fetchSpy).not.toHaveBeenCalled();
 });
 
-test("sends an optional AI key only as a request header", async () => {
+test("sends AI provider settings only as request headers", async () => {
   const response = { request_id: "ai", solutions: [] };
   const fetchSpy = vi
     .spyOn(globalThis, "fetch")
     .mockResolvedValue(new Response(JSON.stringify(response), { status: 200 }));
 
-  await packOrder(container, [createCargo("AI-KEY")], 0, "sk-test");
+  await packOrder(container, [createCargo("AI-KEY")], 0, {
+    provider: "qwen",
+    model: "qwen3-max",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    apiKey: "sk-test",
+  });
 
   const request = fetchSpy.mock.calls[0][1] as RequestInit;
   expect(new Headers(request.headers).get("X-AI-API-Key")).toBe("sk-test");
+  expect(new Headers(request.headers).get("X-AI-Provider")).toBe("qwen");
+  expect(new Headers(request.headers).get("X-AI-Model")).toBe("qwen3-max");
   expect(request.body).not.toContain("sk-test");
 });

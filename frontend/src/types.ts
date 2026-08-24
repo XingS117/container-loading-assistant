@@ -2,6 +2,14 @@ export type Orientation = "LWH" | "LHW" | "WLH" | "WHL" | "HLW" | "HWL";
 export type CargoKind = "carton" | "pallet";
 export type OrientationMode = "upright" | "side" | "any";
 export type SolutionProfile = "high_fill" | "stable" | "easy";
+export type AIProvider = "deepseek" | "qwen" | "zhipu";
+
+export interface AIModelConfig {
+  provider: AIProvider;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+}
 
 export interface ContainerSpec {
   id: string;

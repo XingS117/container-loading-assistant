@@ -110,7 +110,7 @@ test("selecting pallet kind keeps the selection and applies pallet defaults", as
 });
 
 
-test("keeps the optional DeepSeek key in session storage only", async () => {
+test("keeps model API settings in session storage only", async () => {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response(JSON.stringify([preset, secondPreset]), { status: 200 }),
   );
@@ -118,11 +118,36 @@ test("keeps the optional DeepSeek key in session storage only", async () => {
   render(<App />);
   await screen.findByRole("button", { name: /20GP/ });
 
-  const keyInput = screen.getByLabelText("DeepSeek V4 API Key（可选）");
+  await userEvent.click(screen.getByRole("button", { name: "模型配置" }));
+  const keyInput = screen.getByLabelText("API Key");
   await userEvent.type(keyInput, "sk-session-test");
+  await userEvent.click(screen.getByRole("button", { name: "保存配置" }));
 
-  expect(sessionStorage.getItem("container-loading-assistant-deepseek-key-v1")).toBe("sk-session-test");
-  expect(localStorage.getItem("container-loading-assistant-deepseek-key-v1")).toBeNull();
+  expect(sessionStorage.getItem("container-loading-assistant-ai-config-v1")).toContain("sk-session-test");
+  expect(localStorage.getItem("container-loading-assistant-ai-config-v1")).toBeNull();
+});
+
+
+test("opens model configuration and keeps the selected provider settings in session storage", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response(JSON.stringify([preset, secondPreset]), { status: 200 }),
+  );
+
+  render(<App />);
+  await screen.findByRole("button", { name: /20GP/ });
+
+  await userEvent.click(screen.getByRole("button", { name: "模型配置" }));
+  expect(screen.getByRole("heading", { name: "模型配置" })).toBeInTheDocument();
+  expect(screen.getByLabelText("模型提供商")).toHaveValue("deepseek");
+
+  await userEvent.selectOptions(screen.getByLabelText("模型提供商"), "qwen");
+  await userEvent.click(screen.getByRole("button", { name: "保存配置" }));
+
+  expect(JSON.parse(sessionStorage.getItem("container-loading-assistant-ai-config-v1") ?? "{}")).toMatchObject({
+    provider: "qwen",
+    model: "qwen3-max",
+    baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+  });
 });
 
 

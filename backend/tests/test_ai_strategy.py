@@ -1,6 +1,6 @@
 import httpx
 
-from app.ai_strategy import load_ai_layout_hint
+from app.ai_strategy import load_ai_layout_hint, verify_ai_connection
 from app.models import CargoSpec, ContainerSpec, PackRequest
 
 
@@ -93,3 +93,42 @@ def test_parses_openai_compatible_deepseek_hint(monkeypatch):
     assert hint.orientations == {"cargo-a": "WLH"}
     assert calls[0][1]["headers"]["Authorization"] == "Bearer server-key"
     assert calls[0][1]["json"]["model"] == "deepseek-v4"
+
+
+def test_uses_qwen_compatible_url_for_qwen_configuration(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": "OK"}}]}
+
+    def fake_post(url, **kwargs):
+        calls.append((url, kwargs))
+        return FakeResponse()
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    assert verify_ai_connection(
+        api_key="qwen-key",
+        provider="qwen",
+        model="qwen3-max",
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+    ) == "连接成功，模型可用于策略建议"
+    assert calls[0][0] == "https://dashscope.aliyuncs.com/compatible-mode/v1/chat/completions"
+
+
+def test_rejects_non_official_provider_address_without_network_call(monkeypatch):
+    def fail_if_called(*args, **kwargs):
+        raise AssertionError("untrusted address must not be called")
+
+    monkeypatch.setattr(httpx, "post", fail_if_called)
+
+    assert verify_ai_connection(
+        api_key="test-key",
+        provider="zhipu",
+        model="glm-4.5",
+        base_url="https://example.com/v1",
+    ) is None

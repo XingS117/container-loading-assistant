@@ -16,7 +16,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .models import ContainerSpec, PackRequest, PackResponse
-from .ai_strategy import load_ai_layout_hint
+from .ai_strategy import load_ai_layout_hint, verify_ai_connection
 from .packing import PackingFailure, pack_order
 
 
@@ -31,7 +31,7 @@ pack_slots = threading.BoundedSemaphore(2)
 
 @app.middleware("http")
 async def request_guard(request: Request, call_next):
-    if request.url.path == "/api/v1/pack":
+    if request.url.path in {"/api/v1/pack", "/api/v1/ai/test"}:
         content_length = request.headers.get("content-length")
         try:
             declared_length = int(content_length) if content_length else 0
@@ -169,8 +169,19 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
         )
     try:
         ai_key = http_request.headers.get("X-AI-API-Key")
+        provider = http_request.headers.get("X-AI-Provider")
+        model = http_request.headers.get("X-AI-Model")
+        base_url = http_request.headers.get("X-AI-Base-URL")
         # AI is advisory only; timeout/errors leave the deterministic path unchanged.
-        hint = await anyio.to_thread.run_sync(load_ai_layout_hint, request, ai_key)
+        hint = await anyio.to_thread.run_sync(
+            lambda: load_ai_layout_hint(
+                request,
+                api_key=ai_key,
+                provider=provider,
+                model=model,
+                base_url=base_url,
+            ),
+        )
         if hint is not None:
             request = request.model_copy(update={"ai_layout_hint": hint.as_dict()})
         return await asyncio.wait_for(
@@ -184,6 +195,24 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
         )
     finally:
         pack_slots.release()
+
+
+@app.post("/api/v1/ai/test")
+async def ai_connection_test(http_request: Request) -> JSONResponse:
+    api_key = http_request.headers.get("X-AI-API-Key")
+    if not api_key or not api_key.strip():
+        return JSONResponse(status_code=422, content={"error": {"message": "请先填写 API Key"}})
+    message = await anyio.to_thread.run_sync(
+        lambda: verify_ai_connection(
+            api_key=api_key,
+            provider=http_request.headers.get("X-AI-Provider"),
+            model=http_request.headers.get("X-AI-Model"),
+            base_url=http_request.headers.get("X-AI-Base-URL"),
+        ),
+    )
+    if message is None:
+        return JSONResponse(status_code=422, content={"error": {"message": "连接失败，请检查 API Key、模型和地址"}})
+    return JSONResponse(content={"message": message})
 
 
 DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"
