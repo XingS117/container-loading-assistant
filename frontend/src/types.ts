@@ -106,11 +106,13 @@ export interface PackingSolution {
 
 export interface AIStrategyStatus {
   status: "disabled" | "fallback" | "considered";
+  applied: boolean;
   provider: string | null;
   model: string | null;
   message: string;
   sku_order: string[];
   orientations: Record<string, string>;
+  row_groups: string[][];
 }
 
 export interface PackResponse {

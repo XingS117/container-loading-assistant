@@ -15,7 +15,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .models import AIStrategyStatus, ContainerSpec, PackRequest, PackResponse
+from .models import AIStrategyStatus, ContainerSpec, PackRequest, PackResponse, PackingSolution
 from .ai_strategy import (
     PROVIDER_DEFAULTS,
     LayoutHintResult,
@@ -201,10 +201,88 @@ def ai_strategy_status(
         status="considered",
         provider=provider_id,
         model=selected_model,
-        message="AI 策略建议已获取，并已参与候选布局排序；最终布局仍以本地物理校验和评分为准",
+        message="AI 策略建议已获取，正在由本地物理校验决定是否采纳",
         sku_order=list(sku_order),
         orientations=orientations,
     )
+
+
+def _applied_ai_row_groups(request: PackRequest, solution: PackingSolution) -> list[list[str]]:
+    hint = request.ai_layout_hint or {}
+    raw_groups = hint.get("row_groups")
+    if not isinstance(raw_groups, list):
+        return []
+    placements = solution.placements
+    applied: list[list[str]] = []
+    for raw_group in raw_groups:
+        if not isinstance(raw_group, list) or not 1 <= len(raw_group) <= 2:
+            continue
+        group = [cargo_id for cargo_id in raw_group if isinstance(cargo_id, str)]
+        if len(group) != len(raw_group):
+            continue
+        if len(group) == 1:
+            if any(item.cargo_id == group[0] for item in placements):
+                applied.append(group)
+            continue
+        left_items = [item for item in placements if item.cargo_id == group[0]]
+        right_items = [item for item in placements if item.cargo_id == group[1]]
+        if any(
+            left.z_mm == right.z_mm
+            and left.y_mm == right.y_mm
+            and left.x_mm <= right.x_mm + right.length_mm + request.item_gap_mm
+            and right.x_mm <= left.x_mm + left.length_mm + request.item_gap_mm
+            for left in left_items
+            for right in right_items
+        ):
+            applied.append(group)
+    return applied
+
+
+def _ai_hint_applied(request: PackRequest, solutions: list[PackingSolution]) -> tuple[bool, list[list[str]]]:
+    hint = request.ai_layout_hint or {}
+    raw_order = hint.get("sku_order")
+    raw_orientations = hint.get("orientations")
+    has_order = isinstance(raw_order, list) and bool(raw_order)
+    has_orientations = isinstance(raw_orientations, dict) and bool(raw_orientations)
+    has_row_groups = isinstance(hint.get("row_groups"), list) and bool(hint.get("row_groups"))
+    if not (has_order or has_orientations or has_row_groups):
+        return False, []
+
+    for solution in solutions:
+        placements = solution.placements
+        floor = [
+            item
+            for item in placements
+            if item.z_mm == request.container.clearance_mm
+        ]
+        first_x: dict[str, int] = {}
+        for item in floor:
+            first_x[item.cargo_id] = min(first_x.get(item.cargo_id, item.x_mm), item.x_mm)
+        order_ok = True
+        if has_order:
+            ordered_ids = [
+                cargo_id
+                for cargo_id in raw_order
+                if isinstance(cargo_id, str) and cargo_id in first_x
+            ]
+            order_ok = len(ordered_ids) == len(raw_order) and all(
+                first_x[left] <= first_x[right]
+                for index, left in enumerate(ordered_ids)
+                for right in ordered_ids[index + 1:]
+            )
+        orientation_ok = True
+        if has_orientations:
+            for cargo_id, expected in raw_orientations.items():
+                if not isinstance(cargo_id, str) or not isinstance(expected, str):
+                    continue
+                matching = [item for item in placements if item.cargo_id == cargo_id]
+                if not matching or any(item.rotation.value != expected for item in matching):
+                    orientation_ok = False
+        applied_groups = _applied_ai_row_groups(request, solution)
+        row_groups_ok = not has_row_groups or len(applied_groups) == len(hint["row_groups"])
+        if order_ok and orientation_ok and row_groups_ok:
+            return True, applied_groups
+    return False, []
 
 
 @app.post("/api/v1/pack", response_model=PackResponse)
@@ -244,6 +322,19 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
             run_pack_calculation(request),
             timeout=PACK_TIMEOUT_SECONDS,
         )
+        if hint is not None:
+            applied, applied_groups = _ai_hint_applied(request, result.solutions)
+            strategy_status = strategy_status.model_copy(
+                update={
+                    "applied": applied,
+                    "message": (
+                        "AI 策略建议已采纳，并已参与候选布局生成；最终布局仍以本地物理校验和评分为准"
+                        if applied
+                        else "AI 策略建议已获取，但未形成完整的安全引导候选，已使用本地安全算法"
+                    ),
+                    "row_groups": applied_groups,
+                },
+            )
         return result.model_copy(update={"ai_strategy": strategy_status})
     except asyncio.TimeoutError:
         return JSONResponse(

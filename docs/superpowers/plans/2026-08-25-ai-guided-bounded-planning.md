@@ -16,7 +16,7 @@
 - 修改：`backend/app/ai_strategy.py`
 - 修改：`backend/tests/test_ai_strategy.py`
 
-- [ ] **步骤 1：编写失败的策略行组解析测试**
+- [x] **步骤 1：编写失败的策略行组解析测试**
 
 ```python
 def test_parses_legal_ai_row_groups(monkeypatch):
@@ -24,13 +24,13 @@ def test_parses_legal_ai_row_groups(monkeypatch):
     assert hint.row_groups == (("cargo-a", "cargo-b"),)
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`.venv\\Scripts\\python.exe -m pytest backend\\tests\\test_ai_strategy.py::test_parses_legal_ai_row_groups -q`
 
 预期：失败，`LayoutHint` 尚无 `row_groups`。
 
-- [ ] **步骤 3：实现最少解析与紧凑提示字段**
+- [x] **步骤 3：实现最少解析与紧凑提示字段**
 
 ```python
 @dataclass(frozen=True)
@@ -42,7 +42,7 @@ class LayoutHint:
 
 只接受 1-2 个不重复、存在于请求中的 SKU；在系统提示和请求 JSON 中要求 `row_groups`。
 
-- [ ] **步骤 4：运行策略测试验证通过**
+- [x] **步骤 4：运行策略测试验证通过**
 
 运行：`.venv\\Scripts\\python.exe -m pytest backend\\tests\\test_ai_strategy.py -q --basetemp .pytest-tmp-ai-contract`
 
@@ -54,7 +54,7 @@ class LayoutHint:
 - 修改：`backend/app/packing.py`
 - 修改：`backend/tests/test_packing.py`
 
-- [ ] **步骤 1：编写失败的引导候选测试**
+- [x] **步骤 1：编写失败的引导候选测试**
 
 ```python
 def test_ai_guided_floor_layout_uses_requested_order_and_orientation():
@@ -63,13 +63,13 @@ def test_ai_guided_floor_layout_uses_requested_order_and_orientation():
     assert all(item.rotation == Orientation.WLH for item in cargo_a_placements(solution))
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`.venv\\Scripts\\python.exe -m pytest backend\\tests\\test_packing.py::test_ai_guided_floor_layout_uses_requested_order_and_orientation -q`
 
 预期：失败，当前建栈阶段忽略 AI 朝向，候选生成不以 AI 顺序为优先。
 
-- [ ] **步骤 3：实现首选合法朝向和引导行组候选**
+- [x] **步骤 3：实现首选合法朝向和引导行组候选**
 
 ```python
 def _hinted_orientation(request: PackRequest, cargo: CargoSpec) -> Orientation | None:
@@ -79,7 +79,7 @@ def _hinted_orientation(request: PackRequest, cargo: CargoSpec) -> Orientation |
 
 将合法首选朝向传入建栈和行布局；先生成 AI 引导候选并通过 `_validated_candidate()`，失败才回退既有布局链。
 
-- [ ] **步骤 4：运行引导候选测试验证通过**
+- [x] **步骤 4：运行引导候选测试验证通过**
 
 运行：`.venv\\Scripts\\python.exe -m pytest backend\\tests\\test_packing.py::test_ai_guided_floor_layout_uses_requested_order_and_orientation -q`
 
@@ -91,7 +91,7 @@ def _hinted_orientation(request: PackRequest, cargo: CargoSpec) -> Orientation |
 - 修改：`backend/app/packing.py`
 - 修改：`backend/tests/test_packing.py`
 
-- [ ] **步骤 1：编写失败的候选预算测试**
+- [x] **步骤 1：编写失败的候选预算测试**
 
 ```python
 def test_generic_floor_search_returns_best_safe_candidate_when_budget_is_reached():
@@ -99,13 +99,13 @@ def test_generic_floor_search_returns_best_safe_candidate_when_budget_is_reached
     assert validate_solution(request.container, request.cargo_items, _expand_stacks(request, layout, "high_fill")).valid
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`.venv\\Scripts\\python.exe -m pytest backend\\tests\\test_packing.py::test_generic_floor_search_returns_best_safe_candidate_when_budget_is_reached -q`
 
 预期：失败，函数尚无 `candidate_limit` 参数。
 
-- [ ] **步骤 3：实现候选上限和当前最佳候选返回**
+- [x] **步骤 3：实现候选上限和当前最佳候选返回**
 
 ```python
 if examined_candidates >= candidate_limit:
@@ -114,7 +114,7 @@ if examined_candidates >= candidate_limit:
 
 对 AI 有效请求使用较小上限，对本地回退使用固定上限；每个候选仍经 `_validated_candidate()` 和 `validate_solution()`。
 
-- [ ] **步骤 4：运行预算测试验证通过**
+- [x] **步骤 4：运行预算测试验证通过**
 
 运行：`.venv\\Scripts\\python.exe -m pytest backend\\tests\\test_packing.py::test_generic_floor_search_returns_best_safe_candidate_when_budget_is_reached -q`
 
@@ -130,7 +130,7 @@ if examined_candidates >= candidate_limit:
 - 修改：`frontend/src/components/SolutionWorkspace.tsx`
 - 修改：`frontend/src/components/SolutionWorkspace.test.tsx`
 
-- [ ] **步骤 1：编写失败的 API/前端采纳状态测试**
+- [x] **步骤 1：编写失败的 API/前端采纳状态测试**
 
 ```python
 assert response.json()["ai_strategy"]["applied"] is True
@@ -141,7 +141,7 @@ assert response.json()["ai_strategy"]["row_groups"] == [["a", "b"]]
 expect(screen.getByLabelText("AI 策略状态")).toHaveTextContent("已采纳 2 个行组建议")
 ```
 
-- [ ] **步骤 2：运行测试验证失败**
+- [x] **步骤 2：运行测试验证失败**
 
 运行：`.venv\\Scripts\\python.exe -m pytest backend\\tests\\test_api.py -q --basetemp .pytest-tmp-ai-status`
 
@@ -149,7 +149,7 @@ expect(screen.getByLabelText("AI 策略状态")).toHaveTextContent("已采纳 2 
 
 预期：失败，响应和界面没有 `applied` / `row_groups`。
 
-- [ ] **步骤 3：实现状态字段和前端展示**
+- [x] **步骤 3：实现状态字段和前端展示**
 
 ```python
 class AIStrategyStatus(BaseModel):
@@ -159,7 +159,7 @@ class AIStrategyStatus(BaseModel):
 
 仅在引导候选通过本地校验时设置 `applied=True`；前端继续显示已有安全提示，并增加一行非阻塞的采纳摘要。
 
-- [ ] **步骤 4：运行 API 与前端状态测试验证通过**
+- [x] **步骤 4：运行 API 与前端状态测试验证通过**
 
 运行：`.venv\\Scripts\\python.exe -m pytest backend\\tests\\test_api.py -q --basetemp .pytest-tmp-ai-status`
 
@@ -172,13 +172,13 @@ class AIStrategyStatus(BaseModel):
 **文件：**
 - 修改：`docs/HANDOFF.md`
 
-- [ ] **步骤 1：运行后端全量回归**
+- [x] **步骤 1：运行后端全量回归**
 
 运行：`.venv\\Scripts\\python.exe -m pytest backend\\tests -q --basetemp .pytest-tmp-ai-guided-full`
 
 预期：所有后端测试通过。
 
-- [ ] **步骤 2：运行前端全量测试和生产构建**
+- [x] **步骤 2：运行前端全量测试和生产构建**
 
 运行：`npm.cmd test -- --run`
 

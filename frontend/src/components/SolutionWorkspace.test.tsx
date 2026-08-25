@@ -108,11 +108,13 @@ test("shows the AI strategy status separately from safety notices", () => {
     ...makeResponse(8, 3),
     ai_strategy: {
       status: "considered",
+      applied: true,
       provider: "DeepSeek",
       model: "deepseek-v4-flash",
-      message: "AI 策略建议已获取，并已参与候选布局排序；最终布局仍以本地物理校验和评分为准",
+      message: "AI 策略建议已采纳，并已参与候选布局生成；最终布局仍以本地物理校验和评分为准",
       sku_order: ["a"],
       orientations: {},
+      row_groups: [["a", "b"], ["c", "d"]],
     },
   } as PackResponse & { ai_strategy: Record<string, unknown> };
 
@@ -128,8 +130,9 @@ test("shows the AI strategy status separately from safety notices", () => {
     />,
   );
 
-  expect(screen.getByLabelText("AI 策略状态")).toHaveTextContent("AI 策略建议已获取");
+  expect(screen.getByLabelText("AI 策略状态")).toHaveTextContent("AI 策略建议已采纳");
   expect(screen.getByLabelText("AI 策略状态")).toHaveTextContent("DeepSeek / deepseek-v4-flash");
+  expect(screen.getByLabelText("AI 策略状态")).toHaveTextContent("已采纳 2 个行组建议");
   expect(screen.getByRole("status", { name: "AI 策略状态" })).toBeInTheDocument();
   expect(screen.queryByLabelText("方案提示")).not.toBeInTheDocument();
 });

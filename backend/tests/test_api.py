@@ -61,11 +61,13 @@ def test_pack_endpoint_returns_four_core_solutions(monkeypatch):
     assert len(response.json()["solutions"]) == 3
     assert response.json()["ai_strategy"] == {
         "status": "disabled",
+        "applied": False,
         "provider": None,
         "model": None,
         "message": "未启用 AI 策略，当前使用本地装柜算法",
         "sku_order": [],
         "orientations": {},
+        "row_groups": [],
     }
 
 
@@ -106,7 +108,7 @@ def test_pack_endpoint_passes_optional_ai_hint_without_changing_response_contrac
     monkeypatch.setattr(
         main,
         "load_ai_layout_hint_diagnostic",
-        lambda _request, **_kwargs: main.LayoutHintResult(LayoutHint(("a",), {})),
+        lambda _request, **_kwargs: main.LayoutHintResult(LayoutHint(("a",), {}, (("a",),))),
     )
     monkeypatch.setenv("DEEPSEEK_API_KEY", "server-key")
 
@@ -119,15 +121,17 @@ def test_pack_endpoint_passes_optional_ai_hint_without_changing_response_contrac
     response = client.post("/api/v1/pack", json=payload)
 
     assert response.status_code == 200
-    assert captured["hint"] == {"sku_order": ["a"], "orientations": {}}
+    assert captured["hint"] == {"sku_order": ["a"], "orientations": {}, "row_groups": [["a"]]}
     assert len(response.json()["solutions"]) == 3
     assert response.json()["ai_strategy"] == {
         "status": "considered",
+        "applied": True,
         "provider": "deepseek",
         "model": "deepseek-v4-flash",
-        "message": "AI 策略建议已获取，并已参与候选布局排序；最终布局仍以本地物理校验和评分为准",
+        "message": "AI 策略建议已采纳，并已参与候选布局生成；最终布局仍以本地物理校验和评分为准",
         "sku_order": ["a"],
         "orientations": {},
+        "row_groups": [["a"]],
     }
 
 

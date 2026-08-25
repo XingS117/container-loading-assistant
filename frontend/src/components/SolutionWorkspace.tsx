@@ -108,6 +108,11 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
         <div>
           <h2>AI 策略</h2>
           <p>{aiStrategy.message}</p>
+          {aiStrategy.applied && <small>
+            {aiStrategy.row_groups.length > 0
+              ? `已采纳 ${aiStrategy.row_groups.length} 个行组建议`
+              : "已采纳 AI 引导候选"}
+          </small>}
           {aiStrategy.provider && aiStrategy.model && <small>{aiStrategy.provider} / {aiStrategy.model}</small>}
         </div>
       </section>}

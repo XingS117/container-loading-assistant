@@ -123,6 +123,31 @@ def test_ai_strategy_score_rewards_requested_floor_order_and_orientation():
     assert _ai_strategy_score(request, matching) > _ai_strategy_score(request, reversed_layout)
 
 
+def test_ai_hint_sets_a_legal_stack_unit_orientation_before_layout_search():
+    request = PackRequest(
+        container=ContainerSpec(
+            id="ai-orientation", name="AI 朝向柜", inner_length_mm=3000,
+            inner_width_mm=2000, inner_height_mm=1500, door_width_mm=2000,
+            door_height_mm=1400, max_payload_g=1_000_000,
+        ),
+        cargo_items=[
+            boxes(
+                id="cargo-a", quantity=1, kind="pallet", length_mm=1000,
+                width_mm=600, height_mm=500, allowed_orientations=["LWH", "WLH"],
+            ),
+        ],
+        ai_layout_hint={
+            "sku_order": ["cargo-a"],
+            "orientations": {"cargo-a": "WLH"},
+            "row_groups": [],
+        },
+    )
+
+    units = _build_stack_units(request)
+
+    assert [unit.orientation for unit in units] == [Orientation.WLH]
+
+
 def test_reports_unloaded_quantity_when_order_exceeds_container():
     request = PackRequest(container=small_container(), cargo_items=[boxes(quantity=3)])
 
@@ -276,6 +301,22 @@ def test_generic_floor_band_search_handles_non_preset_four_sku_mix():
         stack.unit.cargo.id in {"custom-a", "custom-b"}
         for stack in upper_items
     )
+
+    bounded_floor = _generic_floor_band_layout(
+        request,
+        by_cargo,
+        quantity_by_cargo,
+        capacity_by_cargo,
+        "fill",
+        candidate_limit=200,
+    )
+
+    assert bounded_floor is not None
+    assert validate_solution(
+        request.container,
+        request.cargo_items,
+        _expand_stacks(request, bounded_floor, "high_fill"),
+    ).valid
 
     response = pack_order(request)
     assert len(response.solutions) == 3

@@ -196,6 +196,8 @@ SWAP_ORIENTATIONS = {
 
 
 PACK_ALGOS = (MaxRectsBssf, MaxRectsBaf, GuillotineBssfSas)
+GENERIC_CANDIDATE_LIMIT = 2_500
+AI_GUIDED_CANDIDATE_LIMIT = 1_200
 
 
 def _stack_capacity(
@@ -254,6 +256,39 @@ def _best_orientation(
     return choices[0][-1]
 
 
+def _hinted_orientation(
+    request: PackRequest,
+    cargo: CargoSpec,
+) -> Orientation | None:
+    hint = request.ai_layout_hint or {}
+    orientations = hint.get("orientations")
+    value = orientations.get(cargo.id) if isinstance(orientations, dict) else None
+    if not isinstance(value, str):
+        return None
+    try:
+        orientation = Orientation(value)
+    except ValueError:
+        return None
+    if orientation not in cargo.allowed_orientations:
+        return None
+    c = request.container.clearance_mm
+    length, width, height = cargo.dimensions_for(orientation)
+    if (
+        _stack_capacity(
+            cargo,
+            orientation,
+            request.container.inner_height_mm - 2 * c,
+            request.item_gap_mm,
+        ) < 1
+        or length > request.container.inner_length_mm - 2 * c
+        or width > request.container.inner_width_mm - 2 * c
+        or width > request.container.door_width_mm - 2 * c
+        or height > request.container.door_height_mm - 2 * c
+    ):
+        return None
+    return orientation
+
+
 def _build_stack_units(
     request: PackRequest,
     quantity_limits: dict[str, int] | None = None,
@@ -263,7 +298,12 @@ def _build_stack_units(
     units: list[StackUnit] = []
     for cargo in request.cargo_items:
         target_quantity = quantity_limits.get(cargo.id, cargo.quantity) if quantity_limits else cargo.quantity
-        orientation = _best_orientation(request, cargo, target_quantity, profile)
+        orientation = _hinted_orientation(request, cargo) or _best_orientation(
+            request,
+            cargo,
+            target_quantity,
+            profile,
+        )
         if orientation is None:
             if cargo.must_load:
                 raise PackingFailure(
@@ -453,16 +493,32 @@ def _sku_block_layout(
         for b in blocks:
             if b.block_length_mm > usable_length - door_buffer:
                 return None
+    hint = request.ai_layout_hint or {}
+    hinted_order = hint.get("sku_order")
+    ai_order = (
+        {cargo_id: index for index, cargo_id in enumerate(hinted_order)}
+        if isinstance(hinted_order, list)
+        else {}
+    )
     if strategy == "fill":
         ordered = sorted(
             blocks,
-            key=lambda b: (-b.cargo.unload_order, -b.block_length_mm * b.block_width_mm, b.sku_id),
+            key=lambda b: (
+                -b.cargo.unload_order,
+                ai_order.get(b.sku_id, len(ai_order)),
+                -b.block_length_mm * b.block_width_mm,
+                b.sku_id,
+            ),
         )
     elif strategy == "easy":
         order_map = {item.id: i for i, item in enumerate(request.cargo_items)}
         ordered = sorted(
             blocks,
-            key=lambda b: (-b.cargo.unload_order, order_map.get(b.sku_id, 10**9), b.sku_id),
+            key=lambda b: (
+                -b.cargo.unload_order,
+                ai_order.get(b.sku_id, order_map.get(b.sku_id, 10**9)),
+                b.sku_id,
+            ),
         )
     else:  # balance
         if any(b.cargo.unload_order for b in blocks):
@@ -2562,6 +2618,7 @@ def _generic_floor_band_layout(
     quantity_by_cargo: Counter[str],
     capacity_by_cargo: dict[str, int],
     strategy: Literal["fill", "stable", "easy", "strict"],
+    candidate_limit: int = GENERIC_CANDIDATE_LIMIT,
 ) -> list[PackedStack] | None:
     """Search finite customer-style rows for non-template pallet mixes."""
     if not by_cargo or len(by_cargo) > 8:
@@ -2595,6 +2652,15 @@ def _generic_floor_band_layout(
         })
 
     cargo_ids = list(by_cargo)
+    ai_hint = request.ai_layout_hint or {}
+    ai_guided = bool(ai_hint)
+    candidate_limit = max(
+        1,
+        min(
+            candidate_limit,
+            AI_GUIDED_CANDIDATE_LIMIT if ai_guided else GENERIC_CANDIDATE_LIMIT,
+        ),
+    )
     order_variants: list[list[str]] = []
     preferred_orders = [
         cargo_ids,
@@ -2619,7 +2685,6 @@ def _generic_floor_band_layout(
         preferred_orders.reverse()
     elif strategy == "easy":
         preferred_orders = [preferred_orders[0], preferred_orders[1]]
-    ai_hint = request.ai_layout_hint or {}
     hinted_order = ai_hint.get("sku_order")
     if isinstance(hinted_order, list):
         hinted_ids = [
@@ -2629,25 +2694,35 @@ def _generic_floor_band_layout(
         hinted_ids.extend(cargo_id for cargo_id in cargo_ids if cargo_id not in hinted_ids)
         if set(hinted_ids) == set(cargo_ids):
             preferred_orders.insert(0, hinted_ids)
+    if ai_guided and isinstance(hinted_order, list):
+        preferred_orders = [preferred_orders[0]]
     for order in preferred_orders:
         if order not in order_variants:
             order_variants.append(order)
 
-    option_variants = [
-        (
-            sorted(
-                options_by_cargo[cargo_id][:3],
+    hinted_orientations = ai_hint.get("orientations")
+    option_variants = []
+    for cargo_id in cargo_ids:
+        options = options_by_cargo[cargo_id][:3]
+        if isinstance(hinted_orientations, dict):
+            options = sorted(
+                options,
                 key=lambda option: (
-                    option[0].value != ai_hint.get("orientations", {}).get(cargo_id),
+                    option[0].value != hinted_orientations.get(cargo_id),
                     option[0].value,
                 ),
             )
-            if isinstance(ai_hint.get("orientations"), dict)
-            else options_by_cargo[cargo_id][:3]
-        )
-        for cargo_id in cargo_ids
-    ]
+        option_variants.append(options[:1] if ai_guided else options)
+
+    preferred_row_groups = {
+        frozenset(group)
+        for group in ai_hint.get("row_groups", [])
+        if isinstance(group, list)
+        and len(group) == 2
+        and all(isinstance(cargo_id, str) and cargo_id in by_cargo for cargo_id in group)
+    }
     candidates: list[tuple[tuple[float, ...], list[PackedStack]]] = []
+    examined_candidates = 0
     for chosen_options in itertools.product(*option_variants):
         option_by_cargo = dict(zip(cargo_ids, chosen_options))
         columns_by_cargo = {
@@ -2664,6 +2739,9 @@ def _generic_floor_band_layout(
             ):
                 continue
             for cargo_order in order_variants:
+                examined_candidates += 1
+                if examined_candidates > candidate_limit:
+                    return max(candidates, key=lambda candidate: candidate[0])[1] if candidates else None
                 full_rows: list[tuple[tuple[str, int], ...]] = []
                 partial_rows: list[tuple[str, int]] = []
                 for cargo_id in cargo_order:
@@ -2682,7 +2760,7 @@ def _generic_floor_band_layout(
                     cargo_id, count = pending.pop(0)
                     option = option_by_cargo[cargo_id]
                     best_index: int | None = None
-                    best_slack: int | None = None
+                    best_key: tuple[int, int, int] | None = None
                     for index, (other_id, other_count) in enumerate(pending):
                         other_option = option_by_cargo[other_id]
                         width = (
@@ -2691,9 +2769,13 @@ def _generic_floor_band_layout(
                             + gap
                         )
                         if width <= usable_width:
-                            slack = usable_width - width
-                            if best_slack is None or slack < best_slack:
-                                best_index, best_slack = index, slack
+                            key = (
+                                int(frozenset((cargo_id, other_id)) not in preferred_row_groups),
+                                usable_width - width,
+                                index,
+                            )
+                            if best_key is None or key < best_key:
+                                best_index, best_key = index, key
                     if best_index is None:
                         mixed_rows.append(((cargo_id, count),))
                     else:
@@ -2852,14 +2934,10 @@ def _pure_pallet_floor_first_layout(
         capacity_by_cargo,
         strategy,
     )
+    if band_layout is not None and not request.ai_layout_hint:
+        return band_layout
+
     mixed_band_layout = _mixed_floor_band_layout(
-        request,
-        by_cargo,
-        quantity_by_cargo,
-        capacity_by_cargo,
-        strategy,
-    )
-    generic_band_layout = _generic_floor_band_layout(
         request,
         by_cargo,
         quantity_by_cargo,
@@ -2869,7 +2947,7 @@ def _pure_pallet_floor_first_layout(
     if request.ai_layout_hint:
         guided_candidates = [
             candidate
-            for candidate in (band_layout, mixed_band_layout, generic_band_layout)
+            for candidate in (band_layout, mixed_band_layout)
             if candidate is not None
         ]
         if guided_candidates:
@@ -2881,11 +2959,17 @@ def _pure_pallet_floor_first_layout(
                     {"fill": "high_fill", "stable": "stable", "easy": "easy", "strict": "easy"}[strategy],
                 ),
             )
-    elif band_layout is not None:
-        return band_layout
     elif mixed_band_layout is not None:
         return mixed_band_layout
-    elif generic_band_layout is not None:
+
+    generic_band_layout = _generic_floor_band_layout(
+        request,
+        by_cargo,
+        quantity_by_cargo,
+        capacity_by_cargo,
+        strategy,
+    )
+    if generic_band_layout is not None:
         return generic_band_layout
 
     def one_piece_units(counts: dict[str, int]) -> list[StackUnit]:

@@ -161,11 +161,13 @@ class PackingSolution(BaseModel):
 
 class AIStrategyStatus(BaseModel):
     status: Literal["disabled", "fallback", "considered"]
+    applied: bool = False
     provider: str | None = None
     model: str | None = None
     message: str
     sku_order: list[str] = Field(default_factory=list)
     orientations: dict[str, str] = Field(default_factory=dict)
+    row_groups: list[list[str]] = Field(default_factory=list)
 
 
 class PackResponse(BaseModel):
