@@ -75,7 +75,7 @@ def test_reports_read_timeout_from_ai_provider(monkeypatch):
 
     assert result.hint is None
     assert result.error == "timeout"
-    assert captured["timeout"] == 10.0
+    assert captured["timeout"] == 18.0
 
 
 def test_parses_openai_compatible_deepseek_hint(monkeypatch):
@@ -109,6 +109,7 @@ def test_parses_openai_compatible_deepseek_hint(monkeypatch):
     assert hint.orientations == {"cargo-a": "WLH"}
     assert calls[0][1]["headers"]["Authorization"] == "Bearer server-key"
     assert calls[0][1]["json"]["model"] == "deepseek-v4-flash"
+    assert calls[0][1]["json"]["max_tokens"] == 160
 
 
 def test_uses_deepseek_v4_flash_as_the_default_model(monkeypatch):

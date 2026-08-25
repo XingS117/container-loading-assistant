@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 from urllib.parse import urlparse
 from dataclasses import dataclass
 from typing import Any
@@ -12,7 +13,8 @@ import httpx
 from .models import PackRequest
 
 logger = logging.getLogger("container_loading_assistant.ai")
-AI_REQUEST_TIMEOUT_SECONDS = 10.0
+AI_REQUEST_TIMEOUT_SECONDS = 18.0
+AI_STRATEGY_MAX_TOKENS = 160
 PROVIDER_DEFAULTS = {
     "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"), "host": "api.deepseek.com"},
     "qwen": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen3-max", "host": "dashscope.aliyuncs.com"},
@@ -123,9 +125,15 @@ def _post_chat_completion(
     if connection is None:
         return CompletionResult(None, "invalid_config")
     key, selected_model, url, provider_id = connection
-    body: dict[str, Any] = {"model": selected_model, "temperature": 0.1, "messages": messages}
+    body: dict[str, Any] = {
+        "model": selected_model,
+        "temperature": 0.1,
+        "max_tokens": AI_STRATEGY_MAX_TOKENS,
+        "messages": messages,
+    }
     if response_format is not None:
         body["response_format"] = response_format
+    started_at = time.monotonic()
     try:
         response = httpx.post(
             url,
@@ -137,15 +145,38 @@ def _post_chat_completion(
         payload = response.json()
         if not isinstance(payload, dict):
             return CompletionResult(None, "invalid_response")
+        logger.info(
+            "%s AI response received model=%s duration_ms=%d",
+            provider_id,
+            selected_model,
+            (time.monotonic() - started_at) * 1000,
+        )
         return CompletionResult(payload)
     except httpx.ReadTimeout as exc:
-        logger.warning("%s AI connection unavailable: ReadTimeout", provider_id)
+        logger.warning(
+            "%s AI response timed out model=%s after_ms=%d",
+            provider_id,
+            selected_model,
+            (time.monotonic() - started_at) * 1000,
+        )
         return CompletionResult(None, "timeout")
     except httpx.HTTPStatusError as exc:
-        logger.warning("%s AI connection unavailable: HTTPStatusError", provider_id)
+        logger.warning(
+            "%s AI response failed model=%s status=%s after_ms=%d",
+            provider_id,
+            selected_model,
+            exc.response.status_code,
+            (time.monotonic() - started_at) * 1000,
+        )
         return CompletionResult(None, "http_error")
     except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-        logger.warning("%s AI connection unavailable: %s", provider_id, type(exc).__name__)
+        logger.warning(
+            "%s AI request failed model=%s error=%s after_ms=%d",
+            provider_id,
+            selected_model,
+            type(exc).__name__,
+            (time.monotonic() - started_at) * 1000,
+        )
         return CompletionResult(None, "request_error")
 
 
@@ -173,8 +204,24 @@ def load_ai_layout_hint_diagnostic(
     base_url: str | None = None,
 ) -> LayoutHintResult:
     prompt = {
-        "container": request.container.model_dump(mode="json"),
-        "cargo_items": [item.model_dump(mode="json") for item in request.cargo_items],
+        "container": {
+            "length_mm": request.container.inner_length_mm,
+            "width_mm": request.container.inner_width_mm,
+            "height_mm": request.container.inner_height_mm,
+            "payload_g": request.container.max_payload_g,
+            "door_buffer_mm": request.door_buffer_mm,
+        },
+        "cargo_items": [{
+            "id": item.id,
+            "dimensions_mm": [item.length_mm, item.width_mm, item.height_mm],
+            "weight_g": item.weight_g,
+            "quantity": item.quantity,
+            "allowed_orientations": [orientation.value for orientation in item.allowed_orientations],
+            "stackable": item.stackable,
+            "max_layers": item.max_layers,
+            "fragile": item.fragile,
+            "unload_order": item.unload_order,
+        } for item in request.cargo_items],
         "rules": [
             "只返回排组策略，不返回坐标",
             "同规格才能叠放",
@@ -187,8 +234,8 @@ def load_ai_layout_hint_diagnostic(
             {
                 "role": "system",
                 "content": (
-                    "你是装柜排组策略助手。只输出 JSON，字段为 sku_order（货物 id 数组）"
-                    "和 orientations（货物 id 到允许朝向的映射）。不要输出坐标、重量结论或解释。"
+                    "你是装柜排组策略助手。只输出紧凑 JSON，字段为 sku_order（货物 id 数组）"
+                    "和 orientations（货物 id 到允许朝向的映射）。禁止输出坐标、重量结论、Markdown 或解释。"
                 ),
             },
             {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
