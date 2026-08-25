@@ -1,4 +1,4 @@
-import { packOrder } from "./api";
+import { getContainerPresets, packOrder, testAIConnection } from "./api";
 import { createCargo } from "./cargo";
 
 const container = {
@@ -42,4 +42,50 @@ test("sends AI provider settings only as request headers", async () => {
   expect(new Headers(request.headers).get("X-AI-Provider")).toBe("qwen");
   expect(new Headers(request.headers).get("X-AI-Model")).toBe("qwen3-max");
   expect(request.body).not.toContain("sk-test");
+});
+
+test("explains an HTML gateway response instead of exposing a JSON parse error", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response("<html><h1>502 Bad Gateway</h1></html>", {
+      status: 502,
+      headers: { "Content-Type": "text/html" },
+    }),
+  );
+
+  await expect(getContainerPresets()).rejects.toThrow(
+    "读取标准柜型失败（HTTP 502）：服务器返回了网页而不是接口数据",
+  );
+});
+
+test("explains an HTML response from the packing endpoint", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response("<html><h1>Service Unavailable</h1></html>", {
+      status: 503,
+      headers: { "Content-Type": "text/html" },
+    }),
+  );
+
+  await expect(packOrder(container, [createCargo("HTML-RESPONSE")], 0)).rejects.toThrow(
+    "装柜服务返回了无效响应（HTTP 503）：服务器返回了网页而不是接口数据",
+  );
+});
+
+test("explains an HTML response from the AI connection endpoint", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(
+    new Response("<html><h1>Bad Gateway</h1></html>", {
+      status: 502,
+      headers: { "Content-Type": "text/html" },
+    }),
+  );
+
+  await expect(
+    testAIConnection({
+      provider: "deepseek",
+      model: "deepseek-v4-flash",
+      baseUrl: "https://api.deepseek.com/v1",
+      apiKey: "sk-test",
+    }),
+  ).rejects.toThrow(
+    "AI 连接接口返回了无效响应（HTTP 502）：服务器返回了网页而不是接口数据",
+  );
 });
