@@ -112,6 +112,33 @@ def test_parses_openai_compatible_deepseek_hint(monkeypatch):
     assert calls[0][1]["json"]["max_tokens"] == 160
 
 
+def test_parses_legal_ai_row_groups(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {
+                        "content": (
+                            '{"sku_order":["cargo-a","cargo-b"],'
+                            '"orientations":{},'
+                            '"row_groups":[["cargo-a","cargo-b"],["cargo-a"],'
+                            '["unknown","cargo-b"],["cargo-a","cargo-a","cargo-b"]]}'
+                        )
+                    }
+                }]
+            }
+
+    monkeypatch.setattr(httpx, "post", lambda *_args, **_kwargs: FakeResponse())
+
+    hint = load_ai_layout_hint(ai_request(), api_key="test-key")
+
+    assert hint is not None
+    assert hint.row_groups == (("cargo-a", "cargo-b"), ("cargo-a",))
+
+
 def test_uses_deepseek_v4_flash_as_the_default_model(monkeypatch):
     calls = []
 

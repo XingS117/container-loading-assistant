@@ -26,11 +26,13 @@ PROVIDER_DEFAULTS = {
 class LayoutHint:
     sku_order: tuple[str, ...] = ()
     orientations: dict[str, str] | None = None
+    row_groups: tuple[tuple[str, ...], ...] = ()
 
     def as_dict(self) -> dict[str, object]:
         return {
             "sku_order": list(self.sku_order),
             "orientations": self.orientations or {},
+            "row_groups": [list(group) for group in self.row_groups],
         }
 
 
@@ -87,7 +89,21 @@ def _parse_hint(payload: dict[str, Any], request: PackRequest) -> LayoutHint | N
             cargo = next(item for item in request.cargo_items if item.id == item_id)
             if orientation in {value.value for value in cargo.allowed_orientations}:
                 orientations[item_id] = orientation
-    return LayoutHint(clean_order, orientations)
+    raw_row_groups = payload.get("row_groups", [])
+    row_groups: list[tuple[str, ...]] = []
+    if isinstance(raw_row_groups, list):
+        for raw_group in raw_row_groups:
+            if not isinstance(raw_group, list) or not 1 <= len(raw_group) <= 2:
+                continue
+            if (
+                not all(isinstance(item_id, str) and item_id in allowed_ids for item_id in raw_group)
+                or len(set(raw_group)) != len(raw_group)
+            ):
+                continue
+            group = tuple(raw_group)
+            if group not in row_groups:
+                row_groups.append(group)
+    return LayoutHint(clean_order, orientations, tuple(row_groups))
 
 
 def _resolve_connection(
@@ -235,7 +251,8 @@ def load_ai_layout_hint_diagnostic(
                 "role": "system",
                 "content": (
                     "你是装柜排组策略助手。只输出紧凑 JSON，字段为 sku_order（货物 id 数组）"
-                    "和 orientations（货物 id 到允许朝向的映射）。禁止输出坐标、重量结论、Markdown 或解释。"
+                    "、orientations（货物 id 到允许朝向的映射）和 row_groups（每项最多两个同排货物 id）。"
+                    "禁止输出坐标、重量结论、Markdown 或解释。"
                 ),
             },
             {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
