@@ -198,6 +198,7 @@ SWAP_ORIENTATIONS = {
 PACK_ALGOS = (MaxRectsBssf, MaxRectsBaf, GuillotineBssfSas)
 GENERIC_CANDIDATE_LIMIT = 2_500
 AI_GUIDED_CANDIDATE_LIMIT = 1_200
+FLOOR_COMBINATION_LIMIT = 128
 
 
 def _stack_capacity(
@@ -3015,7 +3016,7 @@ def _pure_pallet_floor_first_layout(
     total_combinations = 1
     for options in option_lists:
         total_combinations *= len(options)
-    if total_combinations <= 6000:
+    if total_combinations <= FLOOR_COMBINATION_LIMIT:
         combinations = [
             dict(zip(cargo_ids, values))
             for values in itertools.product(*option_lists)
