@@ -3,10 +3,15 @@ import asyncio
 from fastapi.testclient import TestClient
 
 from app import main
+from app.ai_strategy import AI_REQUEST_TIMEOUT_SECONDS
 from app.main import app, resolve_frontend_path
 
 
 client = TestClient(app)
+
+
+def test_pack_timeout_covers_ai_request_timeout():
+    assert main.PACK_TIMEOUT_SECONDS > AI_REQUEST_TIMEOUT_SECONDS
 
 
 def test_health_and_container_presets():

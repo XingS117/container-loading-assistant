@@ -30,7 +30,8 @@ app = FastAPI(title="装柜方案助手", version="0.1.0")
 logger = logging.getLogger("container_loading_assistant")
 MAX_REQUEST_BYTES = 1024 * 1024
 RATE_LIMIT_PER_MINUTE = 60
-PACK_TIMEOUT_SECONDS = 15
+# Leave room for the advisory AI request before local layout calculation.
+PACK_TIMEOUT_SECONDS = 45
 request_windows: dict[str, deque[float]] = defaultdict(deque)
 pack_slots = threading.BoundedSemaphore(2)
 
@@ -369,7 +370,12 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
     except asyncio.TimeoutError:
         return JSONResponse(
             status_code=504,
-            content={"error": {"code": "CALCULATION_TIMEOUT", "message": "订单较复杂，15 秒内未完成计算"}},
+            content={
+                "error": {
+                    "code": "CALCULATION_TIMEOUT",
+                    "message": f"订单较复杂，{PACK_TIMEOUT_SECONDS} 秒内未完成计算",
+                }
+            },
         )
     finally:
         pack_slots.release()
