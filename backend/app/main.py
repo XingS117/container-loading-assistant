@@ -197,6 +197,7 @@ def ai_strategy_status(
         )
     sku_order = getattr(hint, "sku_order", ())
     orientations = getattr(hint, "orientations", None) or {}
+    serialized_hint = hint.as_dict() if hasattr(hint, "as_dict") else {}
     return AIStrategyStatus(
         status="considered",
         provider=provider_id,
@@ -204,12 +205,18 @@ def ai_strategy_status(
         message="AI 策略建议已获取，正在由本地物理校验决定是否采纳",
         sku_order=list(sku_order),
         orientations=orientations,
+        profiles=serialized_hint.get("profiles", {}),
     )
 
 
-def _applied_ai_row_groups(request: PackRequest, solution: PackingSolution) -> list[list[str]]:
-    hint = request.ai_layout_hint or {}
-    raw_groups = hint.get("row_groups")
+def _applied_ai_row_groups(
+    request: PackRequest,
+    solution: PackingSolution,
+    raw_groups: object | None = None,
+) -> list[list[str]]:
+    if raw_groups is None:
+        hint = request.ai_layout_hint or {}
+        raw_groups = hint.get("row_groups")
     if not isinstance(raw_groups, list):
         return []
     placements = solution.placements
@@ -240,15 +247,31 @@ def _applied_ai_row_groups(request: PackRequest, solution: PackingSolution) -> l
 
 def _ai_hint_applied(request: PackRequest, solutions: list[PackingSolution]) -> tuple[bool, list[list[str]]]:
     hint = request.ai_layout_hint or {}
-    raw_order = hint.get("sku_order")
-    raw_orientations = hint.get("orientations")
-    has_order = isinstance(raw_order, list) and bool(raw_order)
-    has_orientations = isinstance(raw_orientations, dict) and bool(raw_orientations)
-    has_row_groups = isinstance(hint.get("row_groups"), list) and bool(hint.get("row_groups"))
-    if not (has_order or has_orientations or has_row_groups):
-        return False, []
+    profiles = hint.get("profiles") if isinstance(hint, dict) else None
+    common_order = hint.get("sku_order")
+    common_orientations = hint.get("orientations")
+    common_row_groups = hint.get("row_groups")
+    applied_groups: list[list[str]] = []
 
     for solution in solutions:
+        profile_hint = profiles.get(solution.profile) if isinstance(profiles, dict) else None
+        profile_hint = profile_hint if isinstance(profile_hint, dict) else {}
+        raw_order = profile_hint.get("sku_order", common_order)
+        if not isinstance(raw_order, list) or not raw_order:
+            raw_order = profile_hint.get("zone_order", [])
+        raw_orientations = {}
+        if isinstance(common_orientations, dict):
+            raw_orientations.update(common_orientations)
+        if isinstance(profile_hint.get("orientations"), dict):
+            raw_orientations.update(profile_hint["orientations"])
+        raw_row_groups = profile_hint.get("row_groups", common_row_groups)
+        has_order = isinstance(raw_order, list) and bool(raw_order)
+        has_orientations = bool(raw_orientations)
+        has_row_groups = isinstance(raw_row_groups, list) and bool(raw_row_groups)
+        max_zones = profile_hint.get("max_zones")
+        has_zone_limit = isinstance(max_zones, int) and not isinstance(max_zones, bool) and max_zones > 0
+        if not (has_order or has_orientations or has_row_groups or has_zone_limit):
+            continue
         placements = solution.placements
         floor = [
             item
@@ -278,9 +301,14 @@ def _ai_hint_applied(request: PackRequest, solutions: list[PackingSolution]) -> 
                 matching = [item for item in placements if item.cargo_id == cargo_id]
                 if not matching or any(item.rotation.value != expected for item in matching):
                     orientation_ok = False
-        applied_groups = _applied_ai_row_groups(request, solution)
-        row_groups_ok = not has_row_groups or len(applied_groups) == len(hint["row_groups"])
-        if order_ok and orientation_ok and row_groups_ok:
+        profile_groups = _applied_ai_row_groups(request, solution, raw_row_groups)
+        row_groups_ok = not has_row_groups or len(profile_groups) == len(raw_row_groups)
+        zones_ok = (
+            not has_zone_limit
+            or len({(item.cargo_id, item.step) for item in placements}) <= max_zones
+        )
+        if order_ok and orientation_ok and row_groups_ok and zones_ok:
+            applied_groups.extend(profile_groups)
             return True, applied_groups
     return False, []
 
@@ -328,7 +356,9 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
                 update={
                     "applied": applied,
                     "message": (
-                        "AI 策略建议已采纳，并已参与候选布局生成；最终布局仍以本地物理校验和评分为准"
+                        "AI 已按三种目标参与候选布局生成；最终布局仍以本地物理校验和评分为准"
+                        if applied and strategy_status.profiles
+                        else "AI 策略建议已采纳，并已参与候选布局生成；最终布局仍以本地物理校验和评分为准"
                         if applied
                         else "AI 策略建议已获取，但未形成完整的安全引导候选，已使用本地安全算法"
                     ),

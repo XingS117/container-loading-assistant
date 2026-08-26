@@ -135,6 +135,57 @@ def test_pack_endpoint_passes_optional_ai_hint_without_changing_response_contrac
     }
 
 
+def test_pack_endpoint_reports_profile_specific_ai_strategy(monkeypatch):
+    from app.ai_strategy import LayoutHint, ProfileHint
+    from app.packing import pack_order
+
+    payload = {
+        "container": {
+            "id": "small",
+            "name": "小型测试柜",
+            "inner_length_mm": 2000,
+            "inner_width_mm": 1000,
+            "inner_height_mm": 1000,
+            "door_width_mm": 1000,
+            "door_height_mm": 1000,
+            "max_payload_g": 1000000,
+            "clearance_mm": 0,
+        },
+        "cargo_items": [{
+            "id": "a",
+            "sku": "A",
+            "name": "标准箱",
+            "kind": "carton",
+            "length_mm": 1000,
+            "width_mm": 1000,
+            "height_mm": 1000,
+            "weight_g": 100000,
+            "quantity": 1,
+            "allowed_orientations": ["LWH"],
+            "stackable": False,
+            "max_layers": 1,
+            "max_top_load_g": 0,
+        }],
+    }
+    hint = LayoutHint(
+        profiles={
+            "easy": ProfileHint(zone_order=("a",), max_zones=1),
+        },
+    )
+    monkeypatch.setattr(main, "load_ai_layout_hint_diagnostic", lambda _request, **_kwargs: main.LayoutHintResult(hint))
+    monkeypatch.setattr(main, "run_pack_calculation", lambda request: asyncio.sleep(0, result=pack_order(request)))
+
+    response = client.post(
+        "/api/v1/pack",
+        json=payload,
+        headers={"X-AI-API-Key": "sk-browser-test"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["ai_strategy"]["applied"] is True
+    assert response.json()["ai_strategy"]["profiles"]["easy"]["max_zones"] == 1
+
+
 def test_pack_endpoint_reports_ai_fallback_when_the_hint_is_unavailable(monkeypatch):
     from app.packing import pack_order
 

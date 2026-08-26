@@ -139,6 +139,71 @@ def test_parses_legal_ai_row_groups(monkeypatch):
     assert hint.row_groups == (("cargo-a", "cargo-b"), ("cargo-a",))
 
 
+def test_parses_structured_and_profile_ai_hint(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {
+                        "content": [{
+                            "type": "text",
+                            "text": (
+                                '{"sku_order":["cargo-b","cargo-a"],'
+                                '"profiles":{"easy":{"zone_order":["cargo-a","cargo-b"],'
+                                '"max_zones":2}}}'
+                            ),
+                        }],
+                    }
+                }]
+            }
+
+    monkeypatch.setattr(httpx, "post", lambda *_args, **_kwargs: FakeResponse())
+
+    hint = load_ai_layout_hint(ai_request(), api_key="test-key")
+
+    assert hint is not None
+    assert hint.sku_order == ("cargo-b", "cargo-a")
+    assert hint.profiles["easy"].zone_order == ("cargo-a", "cargo-b")
+    assert hint.profiles["easy"].max_zones == 2
+
+
+def test_retries_without_response_format_when_provider_rejects_it(monkeypatch):
+    calls = []
+
+    class FakeResponse:
+        def __init__(self, status):
+            self.status_code = status
+
+        def raise_for_status(self):
+            if self.status_code == 400:
+                request = httpx.Request("POST", "https://api.deepseek.com/v1/chat/completions")
+                response = httpx.Response(400, request=request)
+                raise httpx.HTTPStatusError(
+                    "unsupported response format",
+                    request=request,
+                    response=response,
+                )
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"sku_order":["cargo-a","cargo-b"]}'}}]}
+
+    def fake_post(_url, **kwargs):
+        calls.append(kwargs["json"])
+        return FakeResponse(400 if len(calls) == 1 else 200)
+
+    monkeypatch.setattr(httpx, "post", fake_post)
+
+    hint = load_ai_layout_hint(ai_request(), api_key="test-key")
+
+    assert hint is not None
+    assert len(calls) == 2
+    assert "response_format" in calls[0]
+    assert "response_format" not in calls[1]
+
+
 def test_uses_deepseek_v4_flash_as_the_default_model(monkeypatch):
     calls = []
 

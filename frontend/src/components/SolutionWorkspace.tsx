@@ -64,6 +64,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
   const cargoById = Object.fromEntries(cargoItems.map((item) => [item.id, item]));
   const recommended = recommendProfile(response);
   const aiStrategy = response.ai_strategy;
+  const hasProfileHints = Boolean(aiStrategy?.profiles && Object.keys(aiStrategy.profiles).length > 0);
   const warningGroups = useMemo(() => (
     (["critical", "caution", "info"] as const).map((severity) => ({
       severity,
@@ -108,6 +109,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
         <div>
           <h2>AI 策略</h2>
           <p>{aiStrategy.message}</p>
+          {hasProfileHints && <small>三种方案按目标分别优化</small>}
           {aiStrategy.applied && <small>
             {aiStrategy.row_groups.length > 0
               ? `已采纳 ${aiStrategy.row_groups.length} 个行组建议`
@@ -149,6 +151,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
             <div><span>重量利用率</span><strong>{selected.metrics.weight_utilization_pct}%</strong></div>
             <div><span>前后偏差</span><strong>{selected.metrics.length_imbalance_pct}%</strong></div>
             <div><span>左右偏差</span><strong>{selected.metrics.width_imbalance_pct}%</strong></div>
+            {selected.metrics.floor_largest_gap_mm !== undefined && <div><span>底层最大空隙</span><strong>{selected.metrics.floor_largest_gap_mm} mm</strong></div>}
           </div>
           <div className="pros-cons-grid">
             <div className="pros"><h2><CheckCircle2 size={17} /> 优点</h2>{selected.pros.map((item) => <p key={item}>{item}</p>)}</div>

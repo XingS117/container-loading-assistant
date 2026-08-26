@@ -133,6 +133,9 @@ class SolutionMetrics(BaseModel):
     weight_imbalance_pct: float
     loading_steps: int
     cargo_zones: int
+    floor_internal_gap_mm: int = 0
+    floor_largest_gap_mm: int = 0
+    floor_bbox_void_pct: float = 0.0
 
 
 class Zone(BaseModel):
@@ -168,6 +171,10 @@ class AIStrategyStatus(BaseModel):
     sku_order: list[str] = Field(default_factory=list)
     orientations: dict[str, str] = Field(default_factory=dict)
     row_groups: list[list[str]] = Field(default_factory=list)
+    profiles: dict[str, object] = Field(
+        default_factory=dict,
+        exclude_if=lambda value: not value,
+    )
 
 
 class PackResponse(BaseModel):

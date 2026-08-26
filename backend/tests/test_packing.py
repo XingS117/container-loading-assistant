@@ -9,9 +9,11 @@ from app.packing import (
     PackingFailure,
     _build_solution,
     _build_stack_units,
+    _compact_floor_candidate,
     _expand_stacks,
     _generic_floor_band_layout,
     _ai_strategy_score,
+    _layout_quality_score,
     _high_fill_candidate,
     pack_order,
 )
@@ -146,6 +148,121 @@ def test_ai_hint_sets_a_legal_stack_unit_orientation_before_layout_search():
     units = _build_stack_units(request)
 
     assert [unit.orientation for unit in units] == [Orientation.WLH]
+
+
+def test_profile_ai_hints_are_used_without_reducing_required_high_fill_count():
+    request = PackRequest(
+        container=ContainerSpec(
+            id="profile-ai",
+            name="profile AI 测试柜",
+            inner_length_mm=4000,
+            inner_width_mm=2000,
+            inner_height_mm=1000,
+            door_width_mm=2000,
+            door_height_mm=1000,
+            max_payload_g=1_000_000,
+        ),
+        cargo_items=[
+            boxes(
+                id="cargo-a",
+                quantity=2,
+                length_mm=1000,
+                width_mm=500,
+                height_mm=500,
+                allowed_orientations=["LWH"],
+                stackable=False,
+            ),
+            boxes(
+                id="cargo-b",
+                quantity=2,
+                length_mm=1000,
+                width_mm=500,
+                height_mm=500,
+                allowed_orientations=["LWH"],
+                stackable=False,
+            ),
+        ],
+        ai_layout_hint={
+            "sku_order": ["cargo-a", "cargo-b"],
+            "orientations": {},
+            "row_groups": [],
+            "profiles": {
+                "high_fill": {"sku_order": ["cargo-a", "cargo-b"]},
+                "stable": {"sku_order": ["cargo-b", "cargo-a"]},
+                "easy": {"zone_order": ["cargo-b", "cargo-a"], "max_zones": 2},
+            },
+        },
+    )
+
+    response = pack_order(request)
+    high_fill, stable, easy = response.solutions
+
+    def first_floor_cargo(solution):
+        floor = [item for item in solution.placements if item.z_mm == 0]
+        return min(floor, key=lambda item: item.x_mm).cargo_id
+
+    assert first_floor_cargo(high_fill) == "cargo-a"
+    assert first_floor_cargo(stable) == "cargo-b"
+    assert stable.metrics.loaded_pieces == high_fill.metrics.loaded_pieces
+    assert easy.metrics.loaded_pieces <= high_fill.metrics.loaded_pieces
+    assert all(
+        validate_solution(request.container, request.cargo_items, solution.placements).valid
+        for solution in response.solutions
+    )
+    assert easy.metrics.loading_steps <= high_fill.metrics.loading_steps
+
+
+def test_compact_score_prefers_fewer_internal_floor_gaps():
+    request = PackRequest(container=small_container(), cargo_items=[boxes(quantity=3)])
+
+    def floor_piece(instance_index, x_mm):
+        return Placement(
+            id=f"piece-{instance_index}",
+            cargo_id="box-a",
+            instance_index=instance_index,
+            x_mm=x_mm,
+            y_mm=0,
+            z_mm=0,
+            length_mm=200,
+            width_mm=200,
+            height_mm=200,
+            rotation=Orientation.LWH,
+            weight_g=100_000,
+            step=1,
+        )
+
+    compact = [floor_piece(0, 0), floor_piece(1, 400), floor_piece(2, 800)]
+    gapped = [floor_piece(0, 0), floor_piece(1, 300), floor_piece(2, 800)]
+
+    assert _layout_quality_score(request, compact, "high_fill") > _layout_quality_score(
+        request, gapped, "high_fill"
+    )
+
+
+def test_compact_floor_candidate_keeps_validator_safe():
+    request = PackRequest(
+        container=small_container(),
+        cargo_items=[
+            boxes(
+                quantity=2,
+                length_mm=200,
+                width_mm=200,
+                height_mm=200,
+            )
+        ],
+    )
+    units = _build_stack_units(request)
+    stacks = [
+        PackedStack(unit=units[0], x_mm=400, y_mm=0),
+        PackedStack(unit=units[1], x_mm=1000, y_mm=0),
+    ]
+
+    compact = _compact_floor_candidate(request, stacks, "high_fill")
+
+    assert compact is not None
+    placements = _expand_stacks(request, compact, "high_fill")
+    assert min(item.x_mm for item in placements) == 0
+    assert validate_solution(request.container, request.cargo_items, placements).valid
 
 
 def test_reports_unloaded_quantity_when_order_exceeds_container():
@@ -1074,6 +1191,63 @@ def test_easy_fallback_keeps_must_load_counts():
         request.cargo_items,
         easy.placements,
     ).valid
+
+
+def test_easy_may_drop_optional_cargo_for_compact_regions():
+    request = PackRequest(
+        container=ContainerSpec(
+            id="easy-compaction",
+            name="易操作测试柜",
+            inner_length_mm=3000,
+            inner_width_mm=1000,
+            inner_height_mm=1000,
+            door_width_mm=1000,
+            door_height_mm=1000,
+            max_payload_g=1_000_000,
+            clearance_mm=0,
+        ),
+        cargo_items=[
+            boxes(
+                id="must-load",
+                quantity=2,
+                length_mm=1000,
+                width_mm=500,
+                height_mm=500,
+                must_load=True,
+            ),
+            boxes(
+                id="optional-a",
+                quantity=3,
+                length_mm=600,
+                width_mm=500,
+                height_mm=500,
+            ),
+            boxes(
+                id="optional-b",
+                quantity=1,
+                length_mm=400,
+                width_mm=500,
+                height_mm=500,
+            ),
+        ],
+        ai_layout_hint={
+            "profiles": {
+                "easy": {"max_zones": 2},
+            },
+        },
+    )
+
+    response = pack_order(request)
+    high_fill, _, easy = response.solutions
+
+    assert easy.metrics.loaded_pieces <= high_fill.metrics.loaded_pieces
+    assert high_fill.metrics.loaded_pieces - easy.metrics.loaded_pieces <= max(
+        1,
+        round(high_fill.metrics.loaded_pieces * 0.05),
+    )
+    assert easy.loaded_counts["must-load"] == 2
+    assert any("易操作方案少装" in warning for warning in easy.warnings)
+    assert validate_solution(request.container, request.cargo_items, easy.placements).valid
 
 
 def test_raise_for_invalid_layout_known_codes_gives_chinese_advice():

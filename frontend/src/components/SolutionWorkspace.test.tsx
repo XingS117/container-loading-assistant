@@ -136,3 +136,42 @@ test("shows the AI strategy status separately from safety notices", () => {
   expect(screen.getByRole("status", { name: "AI 策略状态" })).toBeInTheDocument();
   expect(screen.queryByLabelText("方案提示")).not.toBeInTheDocument();
 });
+
+
+test("shows profile-specific AI adoption and easy-layout disclosure", async () => {
+  const response = {
+    ...makeResponse(8, 3),
+    ai_strategy: {
+      status: "considered",
+      applied: true,
+      provider: "DeepSeek",
+      model: "deepseek-v4-flash",
+      message: "AI 策略建议已获取，正在由本地物理校验决定是否采纳",
+      sku_order: ["a"],
+      orientations: {},
+      row_groups: [],
+      profiles: {
+        high_fill: { sku_order: ["a"] },
+        stable: { sku_order: ["a"] },
+        easy: { zone_order: ["a"], max_zones: 2 },
+      },
+    },
+  } as PackResponse;
+  response.solutions[2].warnings = ["易操作方案少装 2 件换取连续分区"];
+
+  render(
+    <SolutionWorkspace
+      response={response}
+      container={container}
+      presets={presets}
+      cargoItems={cargoItems}
+      onBack={() => undefined}
+      onRecalculate={async () => undefined}
+      recalculating={false}
+    />,
+  );
+
+  expect(screen.getByLabelText("AI 策略状态")).toHaveTextContent("三种方案按目标分别优化");
+  await userEvent.click(screen.getByRole("button", { name: /易操作/ }));
+  expect(screen.getByText(/少装 2 件换取连续分区/)).toBeInTheDocument();
+});

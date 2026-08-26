@@ -23,17 +23,43 @@ PROVIDER_DEFAULTS = {
 
 
 @dataclass(frozen=True)
+class ProfileHint:
+    sku_order: tuple[str, ...] = ()
+    orientations: dict[str, str] | None = None
+    row_groups: tuple[tuple[str, ...], ...] = ()
+    zone_order: tuple[str, ...] = ()
+    max_zones: int | None = None
+
+
+@dataclass(frozen=True)
 class LayoutHint:
     sku_order: tuple[str, ...] = ()
     orientations: dict[str, str] | None = None
     row_groups: tuple[tuple[str, ...], ...] = ()
+    profiles: dict[str, ProfileHint] | None = None
 
     def as_dict(self) -> dict[str, object]:
-        return {
+        result: dict[str, object] = {
             "sku_order": list(self.sku_order),
             "orientations": self.orientations or {},
             "row_groups": [list(group) for group in self.row_groups],
         }
+        if self.profiles:
+            result["profiles"] = {
+                profile: {
+                    "sku_order": list(profile_hint.sku_order),
+                    "orientations": profile_hint.orientations or {},
+                    "row_groups": [list(group) for group in profile_hint.row_groups],
+                    "zone_order": list(profile_hint.zone_order),
+                    **(
+                        {"max_zones": profile_hint.max_zones}
+                        if profile_hint.max_zones is not None
+                        else {}
+                    ),
+                }
+                for profile, profile_hint in self.profiles.items()
+            }
+        return result
 
 
 @dataclass(frozen=True)
@@ -52,31 +78,71 @@ def resolve_ai_api_key(api_key: str | None) -> str:
     return (api_key or os.getenv("DEEPSEEK_API_KEY") or "").strip()
 
 
-def _content_json(content: Any) -> dict[str, Any] | None:
+def _content_candidates(content: Any) -> list[dict[str, Any]]:
+    """Extract JSON objects from string, structured, and explanatory content."""
     if isinstance(content, dict):
-        return content
+        return [content]
+    if isinstance(content, list):
+        candidates: list[dict[str, Any]] = []
+        for part in content:
+            if isinstance(part, dict):
+                for key in ("text", "content", "value", "arguments", "input"):
+                    if key in part:
+                        candidates.extend(_content_candidates(part[key]))
+                if not any(key in part for key in ("text", "content", "value", "arguments", "input")):
+                    candidates.extend(_content_candidates(part))
+            else:
+                candidates.extend(_content_candidates(part))
+        return candidates
     if not isinstance(content, str):
-        return None
+        return []
     text = content.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-    try:
-        value = json.loads(text)
-    except (TypeError, ValueError):
+    candidates: list[dict[str, Any]] = []
+    decoder = json.JSONDecoder()
+    for start in range(len(text)):
+        if text[start] != "{":
+            continue
+        try:
+            value, _ = decoder.raw_decode(text[start:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            candidates.append(value)
+            break
+    return candidates
+
+
+def _message_payload(message: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for key in ("content", "parsed", "reasoning_content"):
+        candidates.extend(_content_candidates(message.get(key)))
+    for tool_call in message.get("tool_calls", []) if isinstance(message.get("tool_calls"), list) else []:
+        if not isinstance(tool_call, dict):
+            continue
+        function = tool_call.get("function")
+        if isinstance(function, dict):
+            candidates.extend(_content_candidates(function.get("arguments")))
+        candidates.extend(_content_candidates(tool_call.get("input")))
+    return candidates
+
+
+def _content_json(content: Any) -> dict[str, Any] | None:
+    return next(iter(_content_candidates(content)), None)
+
+
+def _parse_profile_hint(
+    payload: Any,
+    request: PackRequest,
+) -> ProfileHint | None:
+    if not isinstance(payload, dict):
         return None
-    return value if isinstance(value, dict) else None
-
-
-def _parse_hint(payload: dict[str, Any], request: PackRequest) -> LayoutHint | None:
     allowed_ids = {item.id for item in request.cargo_items}
-    order = payload.get("sku_order")
-    if not isinstance(order, list):
-        return None
+    raw_order = payload.get("sku_order")
     clean_order = tuple(
-        item_id for item_id in order
+        item_id for item_id in raw_order
         if isinstance(item_id, str) and item_id in allowed_ids
-    )
-    if not clean_order or len(set(clean_order)) != len(clean_order):
+    ) if isinstance(raw_order, list) else ()
+    if len(set(clean_order)) != len(clean_order):
         return None
     raw_orientations = payload.get("orientations", {})
     orientations: dict[str, str] = {}
@@ -103,7 +169,44 @@ def _parse_hint(payload: dict[str, Any], request: PackRequest) -> LayoutHint | N
             group = tuple(raw_group)
             if group not in row_groups:
                 row_groups.append(group)
-    return LayoutHint(clean_order, orientations, tuple(row_groups))
+    raw_zone_order = payload.get("zone_order", [])
+    zone_order = tuple(
+        item_id for item_id in raw_zone_order
+        if isinstance(item_id, str) and item_id in allowed_ids
+    ) if isinstance(raw_zone_order, list) else ()
+    if len(set(zone_order)) != len(zone_order):
+        return None
+    max_zones = payload.get("max_zones")
+    if not isinstance(max_zones, int) or isinstance(max_zones, bool) or max_zones < 1:
+        max_zones = None
+    return ProfileHint(
+        sku_order=clean_order,
+        orientations=orientations,
+        row_groups=tuple(row_groups),
+        zone_order=zone_order,
+        max_zones=max_zones,
+    )
+
+
+def _parse_hint(payload: dict[str, Any], request: PackRequest) -> LayoutHint | None:
+    common = _parse_profile_hint(payload, request)
+    if common is None:
+        return None
+    raw_profiles = payload.get("profiles", {})
+    profiles: dict[str, ProfileHint] = {}
+    if isinstance(raw_profiles, dict):
+        for profile in ("high_fill", "stable", "easy"):
+            profile_hint = _parse_profile_hint(raw_profiles.get(profile), request)
+            if profile_hint is not None:
+                profiles[profile] = profile_hint
+    if not common.sku_order and not profiles:
+        return None
+    return LayoutHint(
+        common.sku_order,
+        common.orientations,
+        common.row_groups,
+        profiles or None,
+    )
 
 
 def _resolve_connection(
@@ -147,53 +250,68 @@ def _post_chat_completion(
         "max_tokens": AI_STRATEGY_MAX_TOKENS,
         "messages": messages,
     }
+    started_at = time.monotonic()
     if response_format is not None:
         body["response_format"] = response_format
-    started_at = time.monotonic()
-    try:
-        response = httpx.post(
-            url,
-            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
-            json=body,
-            timeout=AI_REQUEST_TIMEOUT_SECONDS,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        if not isinstance(payload, dict):
-            return CompletionResult(None, "invalid_response")
-        logger.info(
-            "%s AI response received model=%s duration_ms=%d",
-            provider_id,
-            selected_model,
-            (time.monotonic() - started_at) * 1000,
-        )
-        return CompletionResult(payload)
-    except httpx.ReadTimeout as exc:
-        logger.warning(
-            "%s AI response timed out model=%s after_ms=%d",
-            provider_id,
-            selected_model,
-            (time.monotonic() - started_at) * 1000,
-        )
-        return CompletionResult(None, "timeout")
-    except httpx.HTTPStatusError as exc:
-        logger.warning(
-            "%s AI response failed model=%s status=%s after_ms=%d",
-            provider_id,
-            selected_model,
-            exc.response.status_code,
-            (time.monotonic() - started_at) * 1000,
-        )
-        return CompletionResult(None, "http_error")
-    except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
-        logger.warning(
-            "%s AI request failed model=%s error=%s after_ms=%d",
-            provider_id,
-            selected_model,
-            type(exc).__name__,
-            (time.monotonic() - started_at) * 1000,
-        )
-        return CompletionResult(None, "request_error")
+    attempted_format_fallback = False
+    while True:
+        try:
+            response = httpx.post(
+                url,
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json=dict(body),
+                timeout=AI_REQUEST_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            if not isinstance(payload, dict):
+                return CompletionResult(None, "invalid_response")
+            logger.info(
+                "%s AI response received model=%s duration_ms=%d",
+                provider_id,
+                selected_model,
+                (time.monotonic() - started_at) * 1000,
+            )
+            return CompletionResult(payload)
+        except httpx.ReadTimeout:
+            logger.warning(
+                "%s AI response timed out model=%s after_ms=%d",
+                provider_id,
+                selected_model,
+                (time.monotonic() - started_at) * 1000,
+            )
+            return CompletionResult(None, "timeout")
+        except httpx.HTTPStatusError as exc:
+            if (
+                response_format is not None
+                and not attempted_format_fallback
+                and exc.response.status_code == 400
+            ):
+                attempted_format_fallback = True
+                body.pop("response_format", None)
+                logger.info(
+                    "%s provider rejected response_format; retrying without it model=%s",
+                    provider_id,
+                    selected_model,
+                )
+                continue
+            logger.warning(
+                "%s AI response failed model=%s status=%s after_ms=%d",
+                provider_id,
+                selected_model,
+                exc.response.status_code,
+                (time.monotonic() - started_at) * 1000,
+            )
+            return CompletionResult(None, "http_error")
+        except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
+            logger.warning(
+                "%s AI request failed model=%s error=%s after_ms=%d",
+                provider_id,
+                selected_model,
+                type(exc).__name__,
+                (time.monotonic() - started_at) * 1000,
+            )
+            return CompletionResult(None, "request_error")
 
 
 def load_ai_layout_hint(
@@ -250,8 +368,10 @@ def load_ai_layout_hint_diagnostic(
             {
                 "role": "system",
                 "content": (
-                    "你是装柜排组策略助手。只输出紧凑 JSON，字段为 sku_order（货物 id 数组）"
-                    "、orientations（货物 id 到允许朝向的映射）和 row_groups（每项最多两个同排货物 id）。"
+                    "你是装柜排组策略助手。只输出紧凑 JSON，字段为 sku_order（货物 id 数组）、"
+                    "orientations（货物 id 到允许朝向的映射）、row_groups（每项最多两个同排货物 id），"
+                    "以及 profiles.high_fill、profiles.stable、profiles.easy 三种目标策略；"
+                    "easy 可给出 zone_order 和 max_zones。"
                     "禁止输出坐标、重量结论、Markdown 或解释。"
                 ),
             },
@@ -265,8 +385,20 @@ def load_ai_layout_hint_diagnostic(
         if completion.payload is None:
             return LayoutHintResult(None, completion.error)
         payload = completion.payload
-        content = payload.get("choices", [{}])[0].get("message", {}).get("content")
-        hint = _parse_hint(_content_json(content) or {}, request)
+        choices = payload.get("choices")
+        if not isinstance(choices, list) or not choices:
+            return LayoutHintResult(None, "invalid_response")
+        message = choices[0].get("message") if isinstance(choices[0], dict) else None
+        if not isinstance(message, dict):
+            return LayoutHintResult(None, "invalid_response")
+        hint = next(
+            (
+                parsed
+                for candidate in _message_payload(message)
+                if (parsed := _parse_hint(candidate, request)) is not None
+            ),
+            None,
+        )
         return LayoutHintResult(hint, None if hint is not None else "invalid_response")
     except (ValueError, KeyError, IndexError, TypeError) as exc:
         logger.warning("AI layout hint unavailable: %s", type(exc).__name__)

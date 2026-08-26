@@ -78,6 +78,9 @@ export interface SolutionMetrics {
   weight_imbalance_pct: number;
   loading_steps: number;
   cargo_zones: number;
+  floor_internal_gap_mm?: number;
+  floor_largest_gap_mm?: number;
+  floor_bbox_void_pct?: number;
 }
 
 export interface Zone {
@@ -113,6 +116,13 @@ export interface AIStrategyStatus {
   sku_order: string[];
   orientations: Record<string, string>;
   row_groups: string[][];
+  profiles?: Partial<Record<SolutionProfile, {
+    sku_order?: string[];
+    orientations?: Record<string, string>;
+    row_groups?: string[][];
+    zone_order?: string[];
+    max_zones?: number;
+  }>>;
 }
 
 export interface PackResponse {
