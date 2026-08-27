@@ -109,7 +109,7 @@ def test_parses_openai_compatible_deepseek_hint(monkeypatch):
     assert hint.orientations == {"cargo-a": "WLH"}
     assert calls[0][1]["headers"]["Authorization"] == "Bearer server-key"
     assert calls[0][1]["json"]["model"] == "deepseek-v4-flash"
-    assert calls[0][1]["json"]["max_tokens"] == 160
+    assert calls[0][1]["json"]["max_tokens"] == 512
 
 
 def test_parses_legal_ai_row_groups(monkeypatch):
