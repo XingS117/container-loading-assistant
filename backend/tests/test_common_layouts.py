@@ -75,6 +75,18 @@ def five_sku_request() -> PackRequest:
     )
 
 
+def screenshot_order_request() -> PackRequest:
+    return pallet_request(
+        [
+            pallet("zt3", "ZT3", 1080, 800, 1050, 300, 25, stackable=True),
+            pallet("sku-001", "SKU-001", 750, 750, 1000, 150, 20, stackable=True),
+            pallet("sku-002", "SKU-002", 900, 1000, 800, 160, 16, stackable=True),
+            pallet("sku-001-1200", "SKU-001", 1200, 600, 1000, 450, 4, stackable=True),
+            pallet("sku-003", "SKU-003", 1250, 1000, 1050, 400, 2, stackable=True),
+        ]
+    )
+
+
 def overlaps_xy(left, right) -> bool:
     return (
         left.x_mm < right.x_mm + right.length_mm
@@ -447,6 +459,29 @@ def test_four_and_five_sku_floor_starts_at_container_head_and_is_contiguous():
                 ],
                 request.item_gap_mm + 1,
             ) == 1, (solution.profile, solution.warnings)
+
+
+def test_five_sku_layout_limits_transverse_floor_holes():
+    response = pack_order(five_sku_request())
+
+    for solution in response.solutions:
+        assert solution.metrics.floor_largest_transverse_gap_mm <= 400, (
+            solution.profile,
+            solution.metrics.floor_largest_transverse_gap_mm,
+        )
+
+
+def test_screenshot_order_keeps_each_profile_transverse_floor_hole_small():
+    request = screenshot_order_request()
+    response = pack_order(request)
+
+    assert [solution.metrics.loaded_pieces for solution in response.solutions] == [63] * 3
+    for solution in response.solutions:
+        assert solution.metrics.floor_largest_transverse_gap_mm == 0, (
+            solution.profile,
+            solution.metrics.floor_largest_transverse_gap_mm,
+            solution.loaded_counts,
+        )
 
 
 def test_four_and_five_sku_profiles_have_three_distinct_layouts():

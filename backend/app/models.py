@@ -136,6 +136,7 @@ class SolutionMetrics(BaseModel):
     floor_internal_gap_mm: int = 0
     floor_largest_gap_mm: int = 0
     floor_bbox_void_pct: float = 0.0
+    floor_largest_transverse_gap_mm: int = 0
 
 
 class Zone(BaseModel):

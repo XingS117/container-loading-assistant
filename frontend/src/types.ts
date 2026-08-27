@@ -81,6 +81,7 @@ export interface SolutionMetrics {
   floor_internal_gap_mm?: number;
   floor_largest_gap_mm?: number;
   floor_bbox_void_pct?: number;
+  floor_largest_transverse_gap_mm?: number;
 }
 
 export interface Zone {

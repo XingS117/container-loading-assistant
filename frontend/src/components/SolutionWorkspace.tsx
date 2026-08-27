@@ -152,6 +152,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
             <div><span>前后偏差</span><strong>{selected.metrics.length_imbalance_pct}%</strong></div>
             <div><span>左右偏差</span><strong>{selected.metrics.width_imbalance_pct}%</strong></div>
             {selected.metrics.floor_largest_gap_mm !== undefined && <div><span>底层最大空隙</span><strong>{selected.metrics.floor_largest_gap_mm} mm</strong></div>}
+            {selected.metrics.floor_largest_transverse_gap_mm !== undefined && <div><span>底层横向断层</span><strong>{selected.metrics.floor_largest_transverse_gap_mm} mm</strong></div>}
           </div>
           <div className="pros-cons-grid">
             <div className="pros"><h2><CheckCircle2 size={17} /> 优点</h2>{selected.pros.map((item) => <p key={item}>{item}</p>)}</div>
