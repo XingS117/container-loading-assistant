@@ -250,6 +250,8 @@ def _post_chat_completion(
         "max_tokens": AI_STRATEGY_MAX_TOKENS,
         "messages": messages,
     }
+    if provider_id == "deepseek":
+        body["thinking"] = {"type": "disabled"}
     started_at = time.monotonic()
     if response_format is not None:
         body["response_format"] = response_format
