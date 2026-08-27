@@ -15,6 +15,8 @@ from app.packing import (
     _ai_strategy_score,
     _layout_quality_score,
     _high_fill_candidate,
+    MaxRectsBssf,
+    _pack_units,
     pack_order,
 )
 from app.validator import validate_solution
@@ -123,6 +125,28 @@ def test_ai_strategy_score_rewards_requested_floor_order_and_orientation():
     reversed_layout[1] = matching[0].model_copy(update={"x_mm": 1000})
 
     assert _ai_strategy_score(request, matching) > _ai_strategy_score(request, reversed_layout)
+
+
+def test_ai_order_controls_a_real_candidate_generation_pass():
+    request = PackRequest(
+        container=ContainerSpec(
+            id="ai-order", name="AI 顺序柜", inner_length_mm=3000,
+            inner_width_mm=2000, inner_height_mm=1500, door_width_mm=2000,
+            door_height_mm=1400, max_payload_g=1_000_000,
+        ),
+        cargo_items=[
+            boxes(id="cargo-a", quantity=1, length_mm=700, width_mm=600),
+            boxes(id="cargo-b", quantity=1, length_mm=900, width_mm=700),
+        ],
+        ai_layout_hint={"sku_order": ["cargo-b", "cargo-a"]},
+    )
+    units = _build_stack_units(request)
+
+    candidate = _pack_units(request, units, MaxRectsBssf, "ai")
+
+    assert min(item.x_mm for item in candidate if item.unit.cargo.id == "cargo-b") <= min(
+        item.x_mm for item in candidate if item.unit.cargo.id == "cargo-a"
+    )
 
 
 def test_ai_hint_sets_a_legal_stack_unit_orientation_before_layout_search():

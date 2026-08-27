@@ -883,7 +883,11 @@ def _merge_pallet_cartons(
     return renumbered
 
 
-def _ordered_units(units: list[StackUnit], strategy: str) -> list[StackUnit]:
+def _ordered_units(
+    units: list[StackUnit],
+    strategy: str,
+    ai_order: list[str] | None = None,
+) -> list[StackUnit]:
     required = [unit for unit in units if unit.required]
     optional = [unit for unit in units if not unit.required]
     key_map = {
@@ -899,6 +903,18 @@ def _ordered_units(units: list[StackUnit], strategy: str) -> list[StackUnit]:
             unit.id,
         ),
     }
+    if strategy == "ai":
+        # The AI chooses SKU precedence; local geometry still chooses coordinates.
+        ai_ranks = {
+            cargo_id: index
+            for index, cargo_id in enumerate(ai_order or [])
+            if isinstance(cargo_id, str)
+        }
+        key_map["ai"] = lambda unit: (
+            ai_ranks.get(unit.cargo.id, len(ai_ranks)),
+            -unit.volume_mm3,
+            unit.id,
+        )
     key = key_map[strategy]
     return sorted(required, key=key) + sorted(optional, key=key)
 
@@ -915,7 +931,8 @@ def _pack_units(
     bin_width = request.container.inner_width_mm - 2 * c + gap
     packing_bin = pack_algo(bin_length, bin_width, rot=False)
     packed: list[PackedStack] = []
-    for unit in _ordered_units(units, order):
+    ai_order = (request.ai_layout_hint or {}).get("sku_order")
+    for unit in _ordered_units(units, order, ai_order if isinstance(ai_order, list) else None):
         swapped_orientation = PackedStack(
             unit=unit,
             x_mm=0,
@@ -1033,7 +1050,7 @@ def _bounded_pallet_layout_candidate(
         units = _build_stack_units(candidate_request)
         merged = _merge_pallet_cartons(candidate_request, units)
         for pack_algo in PACK_ALGOS:
-            for order in ("volume", "footprint", "weight", "lightweight", "sku"):
+            for order in ("volume", "footprint", "weight", "lightweight", "sku", "ai"):
                 stacks = _pack_units(candidate_request, merged, pack_algo, order)
                 placements = _expand_stacks(candidate_request, stacks, profile)
                 if len(placements) != target_pieces:
