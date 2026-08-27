@@ -1316,6 +1316,29 @@ def _prefer_compact_candidate(
     return compact if compact_score >= current_score else stacks
 
 
+def _preserves_upper_quality(
+    request: PackRequest,
+    current: list[PackedStack],
+    candidate: list[PackedStack],
+) -> bool:
+    """Reject a compact/easy candidate that breaks an existing upper core."""
+    current_quality = _layout_quality(
+        request,
+        _expand_stacks(request, current, "easy"),
+    )
+    candidate_quality = _layout_quality(
+        request,
+        _expand_stacks(request, candidate, "easy"),
+    )
+    if not current_quality.upper_count:
+        return True
+    return (
+        candidate_quality.upper_components <= current_quality.upper_components
+        and candidate_quality.upper_isolated_count <= current_quality.upper_isolated_count
+        and candidate_quality.upper_center_deviation_mm <= current_quality.upper_center_deviation_mm
+    )
+
+
 def _swap_balance(
     request: PackRequest,
     stacks: list[PackedStack],
@@ -1925,6 +1948,25 @@ def _layout_quality_score(
             for item in placements
         )),
     ) + common + ai_score
+
+
+def _candidate_selection_score(
+    request: PackRequest,
+    placements: list[Placement],
+    profile: str,
+) -> tuple[float, ...]:
+    score = _layout_quality_score(request, placements, profile)
+    if len(request.cargo_items) < 6:
+        return score
+    quality = _layout_quality(request, placements)
+    return (
+        score[0],
+        int(quality.upper_count == 0 or quality.upper_components == 1),
+        int(quality.upper_count == 0 or quality.upper_isolated_count == 0),
+        -float(quality.upper_components),
+        -float(quality.upper_isolated_count),
+        -quality.upper_center_deviation_mm,
+    ) + score[1:]
 
 
 def _ai_strategy_score(
@@ -3392,6 +3434,7 @@ def _optimized_shelf_mixed_floor_layout(
     quantity_by_cargo: Counter[str],
     capacity_by_cargo: dict[str, int],
     strategy: Literal["fill", "stable", "easy", "strict"],
+    floor_target_override: dict[str, int] | None = None,
 ) -> list[PackedStack] | None:
     """Find compact mixed rows with an exact finite row-composition search."""
     if not 4 <= len(by_cargo) <= 6:
@@ -3408,6 +3451,11 @@ def _optimized_shelf_mixed_floor_layout(
         for cargo_id in by_cargo
         if capacity_by_cargo[cargo_id] > 0
     }
+    if floor_target_override is not None:
+        floor_required = {
+            cargo_id: floor_target_override.get(cargo_id, floor_required[cargo_id])
+            for cargo_id in floor_required
+        }
     if len(floor_required) != len(by_cargo):
         return None
 
@@ -3471,12 +3519,41 @@ def _optimized_shelf_mixed_floor_layout(
             )
             row_patterns.append((pattern, row_length))
 
+        pattern_solution_limit = 1
+
+        upper_ids = {
+            cargo_id
+            for cargo_id in cargo_ids
+            if quantity_by_cargo[cargo_id] > floor_required[cargo_id]
+        }
+
+        def continuity_key(
+            candidate: tuple[int, int, tuple[tuple[int, ...], ...]],
+        ) -> tuple[int, int, int]:
+            unsafe_rows = 0
+            for pattern in candidate[2]:
+                active_upper_lengths = [
+                    option_by_cargo[cargo_id][1]
+                    for cargo_id in upper_ids
+                    if pattern[cargo_ids.index(cargo_id)]
+                ]
+                if active_upper_lengths:
+                    row_length = max(
+                        option_by_cargo[cargo_id][1]
+                        for cargo_id in cargo_ids
+                        if pattern[cargo_ids.index(cargo_id)]
+                    )
+                    unsafe_rows += row_length > max(active_upper_lengths)
+            return unsafe_rows, candidate[0], candidate[1]
+
         @lru_cache(maxsize=None)
-        def solve(remaining: tuple[int, ...]) -> tuple[int, int, tuple[tuple[int, ...], ...]] | None:
+        def solve(
+            remaining: tuple[int, ...],
+        ) -> tuple[tuple[int, int, tuple[tuple[int, ...], ...]], ...]:
             if not any(remaining):
-                return 0, 0, ()
+                return ((0, 0, ()),)
             first = next(index for index, count in enumerate(remaining) if count)
-            best: tuple[int, int, tuple[tuple[int, ...], ...]] | None = None
+            candidates: list[tuple[int, int, tuple[tuple[int, ...], ...]]] = []
             for pattern, row_length in row_patterns:
                 if not pattern[first] or any(
                     count > available
@@ -3488,27 +3565,68 @@ def _optimized_shelf_mixed_floor_layout(
                     for available, count in zip(remaining, pattern)
                 )
                 child = solve(next_remaining)
-                if child is None:
+                if not child:
                     continue
-                child_length, child_rows, child_patterns = child
-                total_length = row_length + child_length
-                if child_rows:
-                    total_length += gap
-                candidate = (
-                    total_length,
-                    child_rows + 1,
-                    (pattern,) + child_patterns,
-                )
-                if best is None or candidate[:2] < best[:2]:
-                    best = candidate
-            return best
+                for child_length, child_rows, child_patterns in child:
+                    total_length = row_length + child_length
+                    if child_rows:
+                        total_length += gap
+                    candidates.append(
+                        (
+                            total_length,
+                            child_rows + 1,
+                            (pattern,) + child_patterns,
+                        )
+                    )
+            unique_candidates = {
+                candidate[2]: candidate
+                for candidate in candidates
+            }
+            shortest = sorted(
+                unique_candidates.values(),
+                key=lambda item: item[:2],
+            )[:pattern_solution_limit]
+            if len(cargo_ids) < 6:
+                return tuple(shortest)
+            continuous = sorted(
+                unique_candidates.values(),
+                key=continuity_key,
+            )[:pattern_solution_limit]
+            selected = {
+                candidate[2]: candidate
+                for candidate in (*shortest, *continuous)
+            }
+            return tuple(sorted(selected.values(), key=lambda item: item[:2]))
 
-        solved = solve(tuple(floor_required[cargo_id] for cargo_id in cargo_ids))
-        if solved is None or c + solved[0] > door_limit:
+        solved_candidates = solve(tuple(floor_required[cargo_id] for cargo_id in cargo_ids))
+        if not solved_candidates or c + solved_candidates[0][0] > door_limit:
             continue
 
+        solved = solved_candidates[0]
         _, row_count, patterns = solved
-        pattern_variants = [patterns]
+        pattern_variants = [candidate[2] for candidate in solved_candidates]
+        def bridge_key(pattern: tuple[int, ...]) -> tuple[int, int, int]:
+            upper_lengths = [
+                option_by_cargo[cargo_id][1]
+                for cargo_id in cargo_ids
+                if pattern[cargo_ids.index(cargo_id)] and cargo_id in upper_ids
+            ]
+            upper_count = sum(
+                pattern[cargo_ids.index(cargo_id)]
+                for cargo_id in upper_ids
+            )
+            edge_count = sum(
+                pattern[cargo_ids.index(cargo_id)]
+                for cargo_id in cargo_ids
+                if cargo_id not in upper_ids
+            )
+            return (-max(upper_lengths, default=0), -upper_count, edge_count)
+
+        for candidate_patterns in tuple(pattern_variants):
+            bridge_patterns = tuple(sorted(candidate_patterns, key=bridge_key))
+            if bridge_patterns not in pattern_variants:
+                pattern_variants.append(bridge_patterns)
+
         if len(cargo_ids) >= 6:
             # Keep single-layer SKUs at the two ends so stackable cargo can form
             # one contiguous upper core instead of several isolated islands.
@@ -3518,23 +3636,29 @@ def _optimized_shelf_mixed_floor_layout(
                 if capacity_by_cargo[cargo_id] <= 1
                 or quantity_by_cargo[cargo_id] <= floor_required[cargo_id]
             }
-            edge_rows = [
-                pattern
-                for pattern in patterns
-                if any(
-                    pattern[cargo_ids.index(cargo_id)]
-                    for cargo_id in edge_ids
-                )
-            ]
-            core_rows = [pattern for pattern in patterns if pattern not in edge_rows]
-            if edge_rows and core_rows:
+            for candidate_patterns in tuple(pattern_variants):
+                edge_rows = [
+                    pattern
+                    for pattern in candidate_patterns
+                    if any(
+                        pattern[cargo_ids.index(cargo_id)]
+                        for cargo_id in edge_ids
+                    )
+                ]
+                core_rows = [
+                    pattern
+                    for pattern in candidate_patterns
+                    if pattern not in edge_rows
+                ]
+                if not edge_rows or not core_rows:
+                    continue
                 left_edge_count = (len(edge_rows) + 1) // 2
                 edge_grouped = tuple(
                     edge_rows[:left_edge_count]
                     + core_rows
                     + list(reversed(edge_rows[left_edge_count:]))
                 )
-                if edge_grouped != patterns:
+                if edge_grouped not in pattern_variants:
                     pattern_variants.append(edge_grouped)
 
         for ordered_patterns in pattern_variants:
@@ -3615,7 +3739,7 @@ def _optimized_shelf_mixed_floor_layout(
                 "strict": "easy",
             }[strategy]
             quality = _layout_quality(request, placements)
-            score = _layout_quality_score(request, placements, profile_name) + (
+            score = _candidate_selection_score(request, placements, profile_name) + (
                 -float(row_count),
                 -float(solved[0]),
                 -float(quality.floor_bbox_void_pct),
@@ -3698,33 +3822,62 @@ def _pure_pallet_floor_first_layout(
         capacity_by_cargo,
         strategy,
     )
+    guided_candidates: list[list[PackedStack]] = []
     if request.ai_layout_hint:
         guided_candidates = [
             candidate
             for candidate in (band_layout, mixed_band_layout)
             if candidate is not None
         ]
-        if guided_candidates:
-            return max(
-                guided_candidates,
-                key=lambda candidate: _layout_quality_score(
-                    request,
-                    _expand_stacks(request, candidate, "high_fill"),
-                    {"fill": "high_fill", "stable": "stable", "easy": "easy", "strict": "easy"}[strategy],
-                ),
-            )
     elif mixed_band_layout is not None:
         return mixed_band_layout
 
-    optimized_shelf_layout = _optimized_shelf_mixed_floor_layout(
-        request,
-        by_cargo,
-        quantity_by_cargo,
-        capacity_by_cargo,
-        strategy,
-    )
-    if optimized_shelf_layout is not None:
-        return optimized_shelf_layout
+    optimized_candidates = [
+        candidate
+        for candidate in (
+            *guided_candidates,
+            _optimized_shelf_mixed_floor_layout(
+                request,
+                by_cargo,
+                quantity_by_cargo,
+                capacity_by_cargo,
+                strategy,
+            ),
+            *(
+                _optimized_shelf_mixed_floor_layout(
+                    request,
+                    by_cargo,
+                    quantity_by_cargo,
+                    capacity_by_cargo,
+                    strategy,
+                    {
+                        **minimum_floor,
+                        cargo_id: minimum_floor[cargo_id] + 1,
+                    },
+                )
+                for cargo_id in by_cargo
+                if len(by_cargo) >= 6
+                and capacity_by_cargo[cargo_id] > 1
+                and quantity_by_cargo[cargo_id] > minimum_floor[cargo_id]
+            ),
+        )
+        if candidate is not None
+    ]
+    if optimized_candidates:
+        profile_name = {
+            "fill": "high_fill",
+            "stable": "stable",
+            "easy": "easy",
+            "strict": "easy",
+        }[strategy]
+        return max(
+            optimized_candidates,
+            key=lambda candidate: _candidate_selection_score(
+                request,
+                _expand_stacks(request, candidate, profile_name),
+                profile_name,
+            ),
+        )
 
     shelf_layout = _shelf_mixed_floor_layout(
         request,
@@ -5387,8 +5540,11 @@ def pack_order(request: PackRequest) -> PackResponse:
         )
     if easy_region is not None and (
         easy_stacks is None
-        or _easy_compact_score(easy_request, easy_region)
-        > _easy_compact_score(easy_request, easy_stacks)
+        or (
+            _preserves_upper_quality(easy_request, easy_stacks, easy_region)
+            and _easy_compact_score(easy_request, easy_region)
+            > _easy_compact_score(easy_request, easy_stacks)
+        )
     ):
         easy_stacks = easy_region
     if easy_stacks is None:
@@ -5418,7 +5574,11 @@ def pack_order(request: PackRequest) -> PackResponse:
         selected_counts,
         "easy",
     )
-    if bounded_easy is not None:
+    if bounded_easy is not None and _preserves_upper_quality(
+        easy_request,
+        easy_stacks,
+        bounded_easy,
+    ):
         easy_stacks = bounded_easy
 
     solutions = [

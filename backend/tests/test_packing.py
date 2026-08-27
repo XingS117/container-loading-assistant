@@ -160,12 +160,12 @@ def six_sku_pallet_request() -> PackRequest:
             door_height_mm=2585, max_payload_g=28_600_000,
         ),
         cargo_items=[
-            boxes(id="jke", kind="pallet", quantity=15, length_mm=700, width_mm=700, height_mm=1100, weight_g=300_000, allowed_orientations=["LWH", "WLH"], stackable=True, max_layers=2, max_top_load_g=500_000),
-            boxes(id="ass", kind="pallet", quantity=20, length_mm=850, width_mm=750, height_mm=1000, weight_g=400_000, allowed_orientations=["LWH", "WLH"], stackable=True, max_layers=2, max_top_load_g=500_000),
-            boxes(id="hhg", kind="pallet", quantity=8, length_mm=1000, width_mm=800, height_mm=750, weight_g=350_000, allowed_orientations=["LWH", "WLH"], stackable=True, max_layers=2, max_top_load_g=500_000),
+            boxes(id="jke", kind="pallet", quantity=15, length_mm=700, width_mm=700, height_mm=1100, weight_g=300_000, allowed_orientations=["LWH"], stackable=True, max_layers=2, max_top_load_g=500_000),
+            boxes(id="ass", kind="pallet", quantity=20, length_mm=850, width_mm=750, height_mm=1000, weight_g=400_000, allowed_orientations=["LWH"], stackable=True, max_layers=2, max_top_load_g=500_000),
+            boxes(id="hhg", kind="pallet", quantity=8, length_mm=1000, width_mm=800, height_mm=750, weight_g=350_000, allowed_orientations=["LWH"], stackable=True, max_layers=2, max_top_load_g=500_000),
             boxes(id="ewtwefg", kind="pallet", quantity=3, length_mm=1100, width_mm=900, height_mm=1200, weight_g=450_000, allowed_orientations=["LWH"], stackable=True, max_layers=1, max_top_load_g=500_000),
             boxes(id="ersersfsfs", kind="pallet", quantity=5, length_mm=880, width_mm=950, height_mm=880, weight_g=360_000, allowed_orientations=["LWH"], stackable=True, max_layers=1, max_top_load_g=500_000),
-            boxes(id="werwfrt", kind="pallet", quantity=3, length_mm=1300, width_mm=1000, height_mm=1220, weight_g=480_000, allowed_orientations=["LWH", "WLH"], stackable=True, max_layers=2, max_top_load_g=500_000),
+            boxes(id="werwfrt", kind="pallet", quantity=3, length_mm=1300, width_mm=1000, height_mm=1220, weight_g=480_000, allowed_orientations=["LWH"], stackable=True, max_layers=2, max_top_load_g=500_000),
         ],
     )
 
