@@ -113,6 +113,59 @@ def test_parses_openai_compatible_deepseek_hint(monkeypatch):
     assert calls[0][1]["json"]["thinking"] == {"type": "disabled"}
 
 
+def test_normalizes_repeated_sku_order_and_orientation_arrays(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {
+                        "content": (
+                            '{"sku_order":["cargo-b","cargo-b","cargo-a"],'
+                            '"orientations":{"cargo-a":["WLH","LWH"],'
+                            '"cargo-b":["invalid","LWH"]}}'
+                        )
+                    }
+                }]
+            }
+
+    monkeypatch.setattr(httpx, "post", lambda *_args, **_kwargs: FakeResponse())
+
+    hint = load_ai_layout_hint(ai_request(), api_key="test-key")
+
+    assert hint is not None
+    assert hint.sku_order == ("cargo-b", "cargo-a")
+    assert hint.orientations == {"cargo-a": "WLH", "cargo-b": "LWH"}
+
+
+def test_parses_direct_orientation_mapping_from_provider(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {
+                        "content": (
+                            '{"cargo-b":["LWH","WLH"],'
+                            '"cargo-a":["WLH","LWH"]}'
+                        )
+                    }
+                }]
+            }
+
+    monkeypatch.setattr(httpx, "post", lambda *_args, **_kwargs: FakeResponse())
+
+    hint = load_ai_layout_hint(ai_request(), api_key="test-key")
+
+    assert hint is not None
+    assert hint.sku_order == ("cargo-b", "cargo-a")
+    assert hint.orientations == {"cargo-b": "LWH", "cargo-a": "WLH"}
+
+
 def test_parses_legal_ai_row_groups(monkeypatch):
     class FakeResponse:
         def raise_for_status(self):

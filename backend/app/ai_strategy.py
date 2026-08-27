@@ -138,23 +138,29 @@ def _parse_profile_hint(
         return None
     allowed_ids = {item.id for item in request.cargo_items}
     raw_order = payload.get("sku_order")
-    clean_order = tuple(
-        item_id for item_id in raw_order
-        if isinstance(item_id, str) and item_id in allowed_ids
-    ) if isinstance(raw_order, list) else ()
-    if len(set(clean_order)) != len(clean_order):
-        return None
+    clean_order_items: list[str] = []
+    if isinstance(raw_order, list):
+        for item_id in raw_order:
+            if (
+                isinstance(item_id, str)
+                and item_id in allowed_ids
+                and item_id not in clean_order_items
+            ):
+                clean_order_items.append(item_id)
+    clean_order = tuple(clean_order_items)
     raw_orientations = payload.get("orientations", {})
     orientations: dict[str, str] = {}
     if isinstance(raw_orientations, dict):
         for item_id, orientation in raw_orientations.items():
             if not isinstance(item_id, str) or item_id not in allowed_ids:
                 continue
-            if not isinstance(orientation, str):
-                continue
             cargo = next(item for item in request.cargo_items if item.id == item_id)
-            if orientation in {value.value for value in cargo.allowed_orientations}:
-                orientations[item_id] = orientation
+            allowed_orientations = {value.value for value in cargo.allowed_orientations}
+            candidates = orientation if isinstance(orientation, list) else [orientation]
+            for candidate in candidates:
+                if isinstance(candidate, str) and candidate in allowed_orientations:
+                    orientations[item_id] = candidate
+                    break
     raw_row_groups = payload.get("row_groups", [])
     row_groups: list[tuple[str, ...]] = []
     if isinstance(raw_row_groups, list):
@@ -189,6 +195,17 @@ def _parse_profile_hint(
 
 
 def _parse_hint(payload: dict[str, Any], request: PackRequest) -> LayoutHint | None:
+    # Some providers return the orientation map directly instead of wrapping
+    # it in the documented ``orientations`` field.
+    allowed_ids = {item.id for item in request.cargo_items}
+    direct_ids = [item_id for item_id in payload if item_id in allowed_ids]
+    if direct_ids and not any(
+        key in payload for key in ("sku_order", "orientations", "row_groups", "profiles")
+    ):
+        payload = {
+            "sku_order": direct_ids,
+            "orientations": {item_id: payload[item_id] for item_id in direct_ids},
+        }
     common = _parse_profile_hint(payload, request)
     if common is None:
         return None
