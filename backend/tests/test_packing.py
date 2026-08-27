@@ -2,6 +2,7 @@ from collections import Counter
 from dataclasses import replace
 
 import pytest
+import app.packing as packing
 
 from app.models import CargoSpec, ContainerSpec, Orientation, PackRequest, Placement
 from app.packing import (
@@ -14,9 +15,11 @@ from app.packing import (
     _generic_floor_band_layout,
     _ai_strategy_score,
     _layout_quality_score,
+    _layout_quality,
     _high_fill_candidate,
     MaxRectsBssf,
     _pack_units,
+    _pure_pallet_floor_first_layout,
     pack_order,
 )
 from app.validator import validate_solution
@@ -147,6 +150,81 @@ def test_ai_order_controls_a_real_candidate_generation_pass():
     assert min(item.x_mm for item in candidate if item.unit.cargo.id == "cargo-b") <= min(
         item.x_mm for item in candidate if item.unit.cargo.id == "cargo-a"
     )
+
+
+def six_sku_pallet_request() -> PackRequest:
+    return PackRequest(
+        container=ContainerSpec(
+            id="six-sku", name="六 SKU 测试柜", inner_length_mm=12032,
+            inner_width_mm=2352, inner_height_mm=2698, door_width_mm=2340,
+            door_height_mm=2585, max_payload_g=28_600_000,
+        ),
+        cargo_items=[
+            boxes(id="jke", kind="pallet", quantity=15, length_mm=700, width_mm=700, height_mm=1100, weight_g=300_000, allowed_orientations=["LWH", "WLH"], stackable=True, max_layers=2, max_top_load_g=500_000),
+            boxes(id="ass", kind="pallet", quantity=20, length_mm=850, width_mm=750, height_mm=1000, weight_g=400_000, allowed_orientations=["LWH", "WLH"], stackable=True, max_layers=2, max_top_load_g=500_000),
+            boxes(id="hhg", kind="pallet", quantity=8, length_mm=1000, width_mm=800, height_mm=750, weight_g=350_000, allowed_orientations=["LWH", "WLH"], stackable=True, max_layers=2, max_top_load_g=500_000),
+            boxes(id="ewtwefg", kind="pallet", quantity=3, length_mm=1100, width_mm=900, height_mm=1200, weight_g=450_000, allowed_orientations=["LWH"], stackable=True, max_layers=1, max_top_load_g=500_000),
+            boxes(id="ersersfsfs", kind="pallet", quantity=5, length_mm=880, width_mm=950, height_mm=880, weight_g=360_000, allowed_orientations=["LWH"], stackable=True, max_layers=1, max_top_load_g=500_000),
+            boxes(id="werwfrt", kind="pallet", quantity=3, length_mm=1300, width_mm=1000, height_mm=1220, weight_g=480_000, allowed_orientations=["LWH", "WLH"], stackable=True, max_layers=2, max_top_load_g=500_000),
+        ],
+    )
+
+
+def test_six_sku_pallet_case_keeps_upper_cargo_as_one_supported_core():
+    request = six_sku_pallet_request()
+    units = _build_stack_units(request)
+
+    for strategy, profile in (("fill", "high_fill"), ("stable", "stable"), ("easy", "easy")):
+        stacks = _pure_pallet_floor_first_layout(request, units, strategy)
+        assert stacks is not None
+        placements = _expand_stacks(request, stacks, profile)
+        quality = _layout_quality(request, placements)
+        assert quality.upper_components <= 1, (strategy, quality, placements)
+        assert quality.upper_isolated_count == 0, (strategy, quality, placements)
+
+
+def test_six_sku_pallet_case_preserves_core_through_pack_order():
+    requests = [six_sku_pallet_request()]
+    requests.append(requests[0].model_copy(update={
+        "ai_layout_hint": {
+            "sku_order": ["jke", "ass", "hhg", "ewtwefg", "ersersfsfs", "werwfrt"],
+            "orientations": {cargo_id: "LWH" for cargo_id in (
+                "jke", "ass", "hhg", "ewtwefg", "ersersfsfs", "werwfrt"
+            )},
+            "row_groups": [["ewtwefg"], ["ersersfsfs"]],
+        }
+    }))
+
+    for request in requests:
+        response = pack_order(request)
+        assert [solution.metrics.loaded_pieces for solution in response.solutions] == [54, 54, 54]
+        for solution in response.solutions:
+            quality = _layout_quality(request, solution.placements)
+            assert quality.upper_components <= 1, (solution.profile, quality)
+            assert quality.upper_isolated_count == 0, (solution.profile, quality)
+            assert quality.upper_center_deviation_mm <= 1800, (solution.profile, quality)
+            assert quality.floor_largest_transverse_gap_mm == 0, (solution.profile, quality)
+        assert response.solutions[2].metrics.loading_steps <= response.solutions[0].metrics.loading_steps
+        assert response.solutions[2].metrics.cargo_zones <= response.solutions[0].metrics.cargo_zones
+
+
+def test_ai_compaction_does_not_break_a_continuous_upper_core(monkeypatch):
+    request = six_sku_pallet_request().model_copy(update={
+        "ai_layout_hint": {"sku_order": ["jke", "ass", "hhg", "ewtwefg", "ersersfsfs", "werwfrt"]}
+    })
+    good = _pure_pallet_floor_first_layout(
+        request,
+        _build_stack_units(request),
+        "fill",
+    )
+    assert good is not None
+    upper_index = next(index for index, stack in enumerate(good) if stack.z_mm > 0)
+    degraded = list(good)
+    degraded[upper_index] = replace(degraded[upper_index], x_mm=degraded[upper_index].x_mm + 5000)
+    monkeypatch.setattr(packing, "_compact_floor_candidate", lambda *_args: degraded)
+    monkeypatch.setattr(packing, "_layout_quality_score", lambda *_args: (1.0,))
+
+    assert packing._prefer_compact_candidate(request, good, "high_fill") == good
 
 
 def test_ai_hint_sets_a_legal_stack_unit_orientation_before_layout_search():
