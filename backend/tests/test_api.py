@@ -1,4 +1,6 @@
 import asyncio
+import re
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -12,6 +14,14 @@ client = TestClient(app)
 
 def test_pack_timeout_covers_ai_request_timeout():
     assert main.PACK_TIMEOUT_SECONDS > AI_REQUEST_TIMEOUT_SECONDS
+
+
+def test_production_proxy_timeout_covers_ai_and_packing_budget():
+    config_path = Path(__file__).parents[2] / "deploy" / "nginx" / "packing.xingshuwen.com.conf"
+    config = config_path.read_text(encoding="utf-8")
+    match = re.search(r"proxy_read_timeout\s+(\d+)s", config)
+    assert match is not None
+    assert int(match.group(1)) >= AI_REQUEST_TIMEOUT_SECONDS + main.PACK_TIMEOUT_SECONDS + 5
 
 
 def test_health_and_container_presets():

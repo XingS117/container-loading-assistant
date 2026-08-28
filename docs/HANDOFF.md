@@ -368,6 +368,10 @@ npm.cmd run build
 - `backend/app`
 - `frontend/dist`
 
+装柜接口会先等待 AI 策略请求（最长 18 秒），再执行本地布局计算（最长 45 秒）。
+因此 Nginx 代理必须使用至少 68 秒的响应等待时间，当前标准配置为 75 秒，
+配置参考见 `deploy/nginx/packing.xingshuwen.com.conf`。
+
 服务器解包并重启：
 
 ```bash
