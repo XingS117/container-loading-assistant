@@ -3838,6 +3838,23 @@ def _pure_pallet_floor_first_layout(
     elif mixed_band_layout is not None:
         return mixed_band_layout
 
+    extra_floor_targets: list[str] = []
+    if len(by_cargo) >= 6:
+        # One extra floor row is a useful upper-core alternative, but trying it
+        # for every SKU repeats the same expensive search with little benefit.
+        extra_floor_targets = sorted(
+            (
+                cargo_id
+                for cargo_id in by_cargo
+                if capacity_by_cargo[cargo_id] > 1
+                and quantity_by_cargo[cargo_id] > minimum_floor[cargo_id]
+            ),
+            key=lambda cargo_id: (
+                -(quantity_by_cargo[cargo_id] - minimum_floor[cargo_id]),
+                -by_cargo[cargo_id].length_mm * by_cargo[cargo_id].width_mm,
+                cargo_id,
+            ),
+        )[:2]
     optimized_candidates = [
         candidate
         for candidate in (
@@ -3861,10 +3878,7 @@ def _pure_pallet_floor_first_layout(
                         cargo_id: minimum_floor[cargo_id] + 1,
                     },
                 )
-                for cargo_id in by_cargo
-                if len(by_cargo) >= 6
-                and capacity_by_cargo[cargo_id] > 1
-                and quantity_by_cargo[cargo_id] > minimum_floor[cargo_id]
+                for cargo_id in extra_floor_targets
             ),
         )
         if candidate is not None

@@ -1,5 +1,6 @@
 from collections import Counter
 from dataclasses import replace
+from time import perf_counter
 
 import pytest
 import app.packing as packing
@@ -206,6 +207,15 @@ def test_six_sku_pallet_case_preserves_core_through_pack_order():
             assert quality.floor_largest_transverse_gap_mm == 0, (solution.profile, quality)
         assert response.solutions[2].metrics.loading_steps <= response.solutions[0].metrics.loading_steps
         assert response.solutions[2].metrics.cargo_zones <= response.solutions[0].metrics.cargo_zones
+
+
+def test_six_sku_pallet_case_finishes_within_interactive_budget():
+    started = perf_counter()
+
+    response = pack_order(six_sku_pallet_request())
+
+    assert perf_counter() - started < 8
+    assert [solution.metrics.loaded_pieces for solution in response.solutions] == [54, 54, 54]
 
 
 def test_ai_compaction_does_not_break_a_continuous_upper_core(monkeypatch):
