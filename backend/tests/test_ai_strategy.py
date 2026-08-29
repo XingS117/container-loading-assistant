@@ -1,6 +1,10 @@
 import httpx
 
 from app.ai_strategy import (
+    CoordinateCandidate,
+    CoordinatePlacementHint,
+    LayoutHint,
+    ProfileHint,
     load_ai_layout_hint,
     load_ai_layout_hint_diagnostic,
     verify_ai_connection,
@@ -227,6 +231,55 @@ def test_parses_structured_and_profile_ai_hint(monkeypatch):
     assert hint.sku_order == ("cargo-b", "cargo-a")
     assert hint.profiles["easy"].zone_order == ("cargo-a", "cargo-b")
     assert hint.profiles["easy"].max_zones == 2
+
+
+def test_parses_bounded_coordinate_candidate(monkeypatch):
+    class FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "choices": [{
+                    "message": {
+                        "content": (
+                            '{"profiles":{"high_fill":{"coordinate_candidate":{'
+                            '"placements":[{"cargo_id":"cargo-a","instance_index":0,'
+                            '"x_mm":0,"y_mm":0,"z_mm":0,"rotation":"LWH","step":1}]'
+                            '}}}}'
+                        ),
+                    }
+                }]
+            }
+
+    monkeypatch.setattr(httpx, "post", lambda *_args, **_kwargs: FakeResponse())
+
+    hint = load_ai_layout_hint(ai_request(), api_key="test-key")
+
+    assert hint is not None
+    candidate = hint.profiles["high_fill"].coordinate_candidate
+    assert candidate is not None
+    assert candidate.placements[0].cargo_id == "cargo-a"
+    assert candidate.placements[0].instance_index == 0
+    assert candidate.placements[0].rotation == "LWH"
+
+
+def test_coordinate_candidates_are_only_serialized_for_internal_packing():
+    hint = LayoutHint(
+        profiles={
+            "high_fill": ProfileHint(
+                coordinate_candidate=CoordinateCandidate((
+                    CoordinatePlacementHint("cargo-a", 0, 0, 0, 0, "LWH", 1),
+                )),
+            ),
+        },
+    )
+
+    public = hint.as_dict()
+    internal = hint.as_dict(include_coordinate_candidates=True)
+
+    assert "coordinate_candidate" not in public["profiles"]["high_fill"]
+    assert internal["profiles"]["high_fill"]["coordinate_candidate"]["placements"][0]["cargo_id"] == "cargo-a"
 
 
 def test_retries_without_response_format_when_provider_rejects_it(monkeypatch):

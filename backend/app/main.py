@@ -24,7 +24,7 @@ from .ai_strategy import (
     resolve_ai_api_key,
     verify_ai_connection_diagnostic,
 )
-from .packing import PackingFailure, pack_order
+from .packing import PackingFailure, ai_coordinate_profiles_applied, pack_order
 
 
 app = FastAPI(title="装柜方案助手", version="0.1.0")
@@ -180,6 +180,7 @@ def ai_strategy_status(
     model: str | None,
     hint: object | None,
     error: str | None = None,
+    coordinate_profiles: list[str] | None = None,
 ) -> AIStrategyStatus:
     if not (api_key or "").strip():
         return AIStrategyStatus(
@@ -214,6 +215,7 @@ def ai_strategy_status(
         sku_order=list(sku_order),
         orientations=orientations,
         profiles=serialized_hint.get("profiles", {}),
+        coordinate_candidates_applied=coordinate_profiles or [],
     )
 
 
@@ -364,17 +366,23 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
             hint_error = "request_error"
         strategy_status = ai_strategy_status(effective_ai_key, provider, model, hint, hint_error)
         if hint is not None:
-            request = request.model_copy(update={"ai_layout_hint": hint.as_dict()})
+            request = request.model_copy(
+                update={"ai_layout_hint": hint.as_dict(include_coordinate_candidates=True)}
+            )
         result = await asyncio.wait_for(
             run_pack_calculation(request),
             timeout=PACK_TIMEOUT_SECONDS,
         )
         if hint is not None:
+            coordinate_profiles = ai_coordinate_profiles_applied(request, result.solutions)
             applied, applied_groups = _ai_hint_applied(request, result.solutions)
             strategy_status = strategy_status.model_copy(
                 update={
-                    "applied": applied,
+                    "applied": applied or bool(coordinate_profiles),
                     "message": (
+                        "AI 坐标候选已通过本地物理校验并采纳；其余安全规则仍由本地算法裁决"
+                        if coordinate_profiles
+                        else
                         "AI 已按三种目标参与候选布局生成；最终布局仍以本地物理校验和评分为准"
                         if applied and strategy_status.profiles
                         else "AI 策略建议已采纳，并已参与候选布局生成；最终布局仍以本地物理校验和评分为准"
@@ -382,6 +390,7 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
                         else "AI 策略建议已获取，但未形成完整的安全引导候选，已使用本地安全算法"
                     ),
                     "row_groups": applied_groups,
+                    "coordinate_candidates_applied": coordinate_profiles,
                 },
             )
         return result.model_copy(update={"ai_strategy": strategy_status})

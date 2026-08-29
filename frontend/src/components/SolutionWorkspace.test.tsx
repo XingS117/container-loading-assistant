@@ -150,6 +150,7 @@ test("shows profile-specific AI adoption and easy-layout disclosure", async () =
       sku_order: ["a"],
       orientations: {},
       row_groups: [],
+      coordinate_candidates_applied: ["high_fill"],
       profiles: {
         high_fill: { sku_order: ["a"] },
         stable: { sku_order: ["a"] },
@@ -172,6 +173,7 @@ test("shows profile-specific AI adoption and easy-layout disclosure", async () =
   );
 
   expect(screen.getByLabelText("AI 策略状态")).toHaveTextContent("三种方案按目标分别优化");
+  expect(screen.getByLabelText("AI 策略状态")).toHaveTextContent("已采纳经校验的 AI 坐标候选：装载率优先");
   await userEvent.click(screen.getByRole("button", { name: /易操作/ }));
   expect(screen.getByText(/少装 2 件换取连续分区/)).toBeInTheDocument();
 });

@@ -10,11 +10,12 @@ from typing import Any
 
 import httpx
 
-from .models import PackRequest
+from .models import Orientation, PackRequest
 
 logger = logging.getLogger("container_loading_assistant.ai")
 AI_REQUEST_TIMEOUT_SECONDS = 8.0
 AI_STRATEGY_MAX_TOKENS = 512
+AI_COORDINATE_CANDIDATE_MAX_PIECES = 24
 PROVIDER_DEFAULTS = {
     "deepseek": {"base_url": "https://api.deepseek.com/v1", "model": os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash"), "host": "api.deepseek.com"},
     "qwen": {"base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "model": "qwen3-max", "host": "dashscope.aliyuncs.com"},
@@ -29,6 +30,23 @@ class ProfileHint:
     row_groups: tuple[tuple[str, ...], ...] = ()
     zone_order: tuple[str, ...] = ()
     max_zones: int | None = None
+    coordinate_candidate: "CoordinateCandidate | None" = None
+
+
+@dataclass(frozen=True)
+class CoordinatePlacementHint:
+    cargo_id: str
+    instance_index: int
+    x_mm: int
+    y_mm: int
+    z_mm: int
+    rotation: str
+    step: int
+
+
+@dataclass(frozen=True)
+class CoordinateCandidate:
+    placements: tuple[CoordinatePlacementHint, ...]
 
 
 @dataclass(frozen=True)
@@ -38,7 +56,7 @@ class LayoutHint:
     row_groups: tuple[tuple[str, ...], ...] = ()
     profiles: dict[str, ProfileHint] | None = None
 
-    def as_dict(self) -> dict[str, object]:
+    def as_dict(self, include_coordinate_candidates: bool = False) -> dict[str, object]:
         result: dict[str, object] = {
             "sku_order": list(self.sku_order),
             "orientations": self.orientations or {},
@@ -54,6 +72,26 @@ class LayoutHint:
                     **(
                         {"max_zones": profile_hint.max_zones}
                         if profile_hint.max_zones is not None
+                        else {}
+                    ),
+                    **(
+                        {
+                            "coordinate_candidate": {
+                                "placements": [
+                                    {
+                                        "cargo_id": placement.cargo_id,
+                                        "instance_index": placement.instance_index,
+                                        "x_mm": placement.x_mm,
+                                        "y_mm": placement.y_mm,
+                                        "z_mm": placement.z_mm,
+                                        "rotation": placement.rotation,
+                                        "step": placement.step,
+                                    }
+                                    for placement in profile_hint.coordinate_candidate.placements
+                                ],
+                            }
+                        }
+                        if include_coordinate_candidates and profile_hint.coordinate_candidate is not None
                         else {}
                     ),
                 }
@@ -193,13 +231,82 @@ def _parse_profile_hint(
     max_zones = payload.get("max_zones")
     if not isinstance(max_zones, int) or isinstance(max_zones, bool) or max_zones < 1:
         max_zones = None
+    coordinate_candidate = _parse_coordinate_candidate(payload, request)
+    if payload.get("coordinate_candidate") is not None and coordinate_candidate is None:
+        return None
     return ProfileHint(
         sku_order=clean_order,
         orientations=orientations,
         row_groups=tuple(row_groups),
         zone_order=zone_order,
         max_zones=max_zones,
+        coordinate_candidate=coordinate_candidate,
     )
+
+
+def _parse_coordinate_candidate(
+    payload: Any,
+    request: PackRequest,
+) -> CoordinateCandidate | None:
+    if not isinstance(payload, dict):
+        return None
+    raw_candidate = payload.get("coordinate_candidate")
+    if not isinstance(raw_candidate, dict):
+        return None
+    raw_placements = raw_candidate.get("placements")
+    if not isinstance(raw_placements, list) or not raw_placements:
+        return None
+    total_quantity = sum(item.quantity for item in request.cargo_items)
+    if len(raw_placements) > min(AI_COORDINATE_CANDIDATE_MAX_PIECES, total_quantity):
+        return None
+    cargo_by_id = {item.id: item for item in request.cargo_items}
+    placements: list[CoordinatePlacementHint] = []
+    seen: set[tuple[str, int]] = set()
+
+    def nonnegative_int(value: Any) -> bool:
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+    for raw in raw_placements:
+        if not isinstance(raw, dict):
+            return None
+        cargo_id = raw.get("cargo_id")
+        instance_index = raw.get("instance_index")
+        rotation_value = raw.get("rotation")
+        step = raw.get("step")
+        if (
+            not isinstance(cargo_id, str)
+            or cargo_id not in cargo_by_id
+            or not nonnegative_int(instance_index)
+            or instance_index >= cargo_by_id[cargo_id].quantity
+            or not all(nonnegative_int(raw.get(key)) for key in ("x_mm", "y_mm", "z_mm"))
+            or not isinstance(rotation_value, str)
+            or not isinstance(step, int)
+            or isinstance(step, bool)
+            or step < 1
+        ):
+            return None
+        try:
+            rotation = Orientation(rotation_value)
+        except ValueError:
+            return None
+        if rotation not in cargo_by_id[cargo_id].allowed_orientations:
+            return None
+        instance_key = (cargo_id, instance_index)
+        if instance_key in seen:
+            return None
+        seen.add(instance_key)
+        placements.append(
+            CoordinatePlacementHint(
+                cargo_id=cargo_id,
+                instance_index=instance_index,
+                x_mm=raw["x_mm"],
+                y_mm=raw["y_mm"],
+                z_mm=raw["z_mm"],
+                rotation=rotation.value,
+                step=step,
+            )
+        )
+    return CoordinateCandidate(tuple(placements))
 
 
 def _parse_hint(payload: dict[str, Any], request: PackRequest) -> LayoutHint | None:
@@ -364,6 +471,14 @@ def load_ai_layout_hint_diagnostic(
     model: str | None = None,
     base_url: str | None = None,
 ) -> LayoutHintResult:
+    total_quantity = sum(item.quantity for item in request.cargo_items)
+    coordinate_instruction = (
+        "订单不超过 24 件时，可在 profiles 中额外返回 coordinate_candidate，"
+        "其中 placements 只填写 cargo_id、instance_index、x_mm、y_mm、z_mm、rotation、step；"
+        "坐标必须是毫米且只作为候选，禁止声称安全或省略物理约束。"
+        if total_quantity <= AI_COORDINATE_CANDIDATE_MAX_PIECES
+        else "订单超过 24 件时不要返回 coordinate_candidate，只返回排组策略。"
+    )
     prompt = {
         "container": {
             "length_mm": request.container.inner_length_mm,
@@ -384,10 +499,11 @@ def load_ai_layout_hint_diagnostic(
             "unload_order": item.unload_order,
         } for item in request.cargo_items],
         "rules": [
-            "只返回排组策略，不返回坐标",
+            "返回排组策略；如满足规模限制，可额外返回受约束坐标候选",
             "同规格才能叠放",
             "底层优先铺满，上层从中间向两边展开",
             "不可叠货物只能放底层",
+            coordinate_instruction,
         ],
     }
     body = {
@@ -399,7 +515,7 @@ def load_ai_layout_hint_diagnostic(
                     "orientations（货物 id 到允许朝向的映射）、row_groups（每项最多两个同排货物 id），"
                     "以及 profiles.high_fill、profiles.stable、profiles.easy 三种目标策略；"
                     "easy 可给出 zone_order 和 max_zones。"
-                    "禁止输出坐标、重量结论、Markdown 或解释。"
+                    f"{coordinate_instruction}禁止输出重量结论、Markdown 或解释。"
                 ),
             },
             {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},

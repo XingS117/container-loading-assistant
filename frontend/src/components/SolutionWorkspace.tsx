@@ -26,6 +26,12 @@ const profileShortName: Record<SolutionProfile, string> = {
   easy: "装载步骤",
 };
 
+const coordinateProfileNames: Record<SolutionProfile, string> = {
+  high_fill: "装载率优先",
+  stable: "重心稳妥",
+  easy: "易操作",
+};
+
 type WarningSeverity = "critical" | "caution" | "info";
 
 const warningMeta: Record<WarningSeverity, { title: string; Icon: typeof AlertTriangle }> = {
@@ -115,6 +121,11 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
               ? `已采纳 ${aiStrategy.row_groups.length} 个行组建议`
               : "已采纳 AI 引导候选"}
           </small>}
+          {aiStrategy.coordinate_candidates_applied && aiStrategy.coordinate_candidates_applied.length > 0 && (
+            <small>
+              已采纳经校验的 AI 坐标候选：{aiStrategy.coordinate_candidates_applied.map((profile) => coordinateProfileNames[profile]).join("、")}
+            </small>
+          )}
           {aiStrategy.provider && aiStrategy.model && <small>{aiStrategy.provider} / {aiStrategy.model}</small>}
         </div>
       </section>}

@@ -117,6 +117,7 @@ export interface AIStrategyStatus {
   sku_order: string[];
   orientations: Record<string, string>;
   row_groups: string[][];
+  coordinate_candidates_applied?: SolutionProfile[];
   profiles?: Partial<Record<SolutionProfile, {
     sku_order?: string[];
     orientations?: Record<string, string>;

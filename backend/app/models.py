@@ -172,6 +172,10 @@ class AIStrategyStatus(BaseModel):
     sku_order: list[str] = Field(default_factory=list)
     orientations: dict[str, str] = Field(default_factory=dict)
     row_groups: list[list[str]] = Field(default_factory=list)
+    coordinate_candidates_applied: list[Literal["high_fill", "stable", "easy"]] = Field(
+        default_factory=list,
+        exclude_if=lambda value: not value,
+    )
     profiles: dict[str, object] = Field(
         default_factory=dict,
         exclude_if=lambda value: not value,

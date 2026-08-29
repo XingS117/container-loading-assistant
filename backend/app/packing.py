@@ -98,7 +98,14 @@ def _request_for_profile(
     if not isinstance(profile_hint, dict):
         return request
     merged = dict(hint)
-    for key in ("sku_order", "orientations", "row_groups", "zone_order", "max_zones"):
+    for key in (
+        "sku_order",
+        "orientations",
+        "row_groups",
+        "zone_order",
+        "max_zones",
+        "coordinate_candidate",
+    ):
         if key in profile_hint:
             merged[key] = profile_hint[key]
     return request.model_copy(update={"ai_layout_hint": merged})
@@ -5426,6 +5433,224 @@ def _validated_candidate(
     return stacks
 
 
+AI_COORDINATE_CANDIDATE_MAX_PIECES = 24
+
+
+def _select_ai_coordinate_candidate(
+    request: PackRequest,
+    baseline: list[Placement],
+    profile: str,
+) -> list[Placement] | None:
+    """Convert and validate one AI coordinate candidate against a baseline."""
+    if sum(item.quantity for item in request.cargo_items) > AI_COORDINATE_CANDIDATE_MAX_PIECES:
+        return None
+    profile_request = _request_for_profile(request, profile) if profile in PROFILE_NAMES else request
+    hint = profile_request.ai_layout_hint
+    candidate = hint.get("coordinate_candidate") if isinstance(hint, dict) else None
+    raw_placements = candidate.get("placements") if isinstance(candidate, dict) else None
+    if not isinstance(raw_placements, list) or not raw_placements:
+        return None
+    if len(raw_placements) > AI_COORDINATE_CANDIDATE_MAX_PIECES:
+        return None
+    cargo_by_id = {item.id: item for item in request.cargo_items}
+    seen: set[tuple[str, int]] = set()
+    placements: list[Placement] = []
+    for raw in raw_placements:
+        if not isinstance(raw, dict):
+            return None
+        cargo_id = raw.get("cargo_id")
+        instance_index = raw.get("instance_index")
+        rotation_value = raw.get("rotation")
+        coordinates = [raw.get(key) for key in ("x_mm", "y_mm", "z_mm")]
+        step = raw.get("step")
+        if (
+            not isinstance(cargo_id, str)
+            or cargo_id not in cargo_by_id
+            or not isinstance(instance_index, int)
+            or isinstance(instance_index, bool)
+            or instance_index < 0
+            or instance_index >= cargo_by_id[cargo_id].quantity
+            or not all(isinstance(value, int) and not isinstance(value, bool) and value >= 0 for value in coordinates)
+            or not isinstance(rotation_value, str)
+            or not isinstance(step, int)
+            or isinstance(step, bool)
+            or step < 1
+        ):
+            return None
+        cargo = cargo_by_id[cargo_id]
+        try:
+            rotation = Orientation(rotation_value)
+        except ValueError:
+            return None
+        if rotation not in cargo.allowed_orientations:
+            return None
+        x_mm, y_mm, z_mm = coordinates
+        length_mm, width_mm, height_mm = cargo.dimensions_for(rotation)
+        if (
+            x_mm > request.container.inner_length_mm
+            or y_mm > request.container.inner_width_mm
+            or z_mm > request.container.inner_height_mm
+        ):
+            return None
+        instance_key = (cargo_id, instance_index)
+        if instance_key in seen:
+            return None
+        seen.add(instance_key)
+        placements.append(
+            Placement(
+                id=f"{cargo_id}-{instance_index}",
+                cargo_id=cargo_id,
+                instance_index=instance_index,
+                x_mm=x_mm,
+                y_mm=y_mm,
+                z_mm=z_mm,
+                length_mm=length_mm,
+                width_mm=width_mm,
+                height_mm=height_mm,
+                rotation=rotation,
+                weight_g=cargo.weight_g,
+                step=step,
+            )
+        )
+    baseline_counts = Counter(item.cargo_id for item in baseline)
+    candidate_counts = Counter(item.cargo_id for item in placements)
+    if profile in {"high_fill", "stable"} and candidate_counts != baseline_counts:
+        return None
+    if profile == "easy":
+        drop_limit = max(1, round(len(baseline) * 0.05))
+        if len(placements) > len(baseline) or len(baseline) - len(placements) > drop_limit:
+            return None
+        for cargo in request.cargo_items:
+            if cargo.must_load and candidate_counts[cargo.id] < cargo.quantity:
+                return None
+    validation = validate_solution(
+        request.container,
+        request.cargo_items,
+        placements,
+        item_gap_mm=request.item_gap_mm,
+    )
+    return placements if validation.valid else None
+
+
+def _coordinate_placements_to_stacks(
+    request: PackRequest,
+    placements: list[Placement],
+) -> list[PackedStack]:
+    cargo_by_id = {item.id: item for item in request.cargo_items}
+    stacks: list[PackedStack] = []
+    for placement in placements:
+        cargo = cargo_by_id[placement.cargo_id]
+        stacks.append(
+            PackedStack(
+                unit=StackUnit(
+                    id=f"ai-coordinate-{placement.cargo_id}-{placement.instance_index}",
+                    cargo=cargo,
+                    orientation=placement.rotation,
+                    count=1,
+                    length_mm=placement.length_mm,
+                    width_mm=placement.width_mm,
+                    item_height_mm=placement.height_mm,
+                    stack_height_mm=placement.height_mm,
+                    total_weight_g=cargo.weight_g,
+                    first_instance_index=placement.instance_index,
+                    required=cargo.must_load,
+                ),
+                x_mm=placement.x_mm,
+                y_mm=placement.y_mm,
+                step=placement.step,
+                z_mm=placement.z_mm - request.container.clearance_mm,
+            )
+        )
+    return stacks
+
+
+def _select_ai_coordinate_stacks(
+    request: PackRequest,
+    baseline: list[PackedStack],
+    profile: str,
+) -> list[PackedStack] | None:
+    baseline_placements = _expand_stacks(request, baseline, profile)
+    candidate_placements = _select_ai_coordinate_candidate(
+        request,
+        baseline_placements,
+        profile,
+    )
+    if candidate_placements is None:
+        return None
+    candidate_stacks = _coordinate_placements_to_stacks(request, candidate_placements)
+    profile_request = _request_for_profile(request, profile) if profile in PROFILE_NAMES else request
+    candidate_score = _layout_quality_score(profile_request, candidate_placements, profile)
+    baseline_score = _layout_quality_score(profile_request, baseline_placements, profile)
+    if profile != "easy":
+        return candidate_stacks if candidate_score > baseline_score else None
+    profile_request = _request_for_profile(request, "easy")
+    candidate_compact = _easy_coordinate_score(profile_request, candidate_placements)
+    baseline_compact = _easy_coordinate_score(profile_request, baseline_placements)
+    max_zones = _easy_max_zones(profile_request)
+    candidate_zones = _metrics(request, candidate_placements).cargo_zones
+    baseline_zones = _metrics(request, baseline_placements).cargo_zones
+    target_improved = (
+        max_zones is not None
+        and baseline_zones > max_zones
+        and candidate_zones <= max_zones
+    )
+    if candidate_compact <= baseline_compact and not target_improved:
+        return None
+    return candidate_stacks
+
+
+def _placements_signature(placements: list[Placement]) -> tuple:
+    return tuple(
+        sorted(
+            (
+                item.cargo_id,
+                item.instance_index,
+                item.x_mm,
+                item.y_mm,
+                item.z_mm,
+                item.rotation.value,
+                item.step,
+            )
+            for item in placements
+        )
+    )
+
+
+def ai_coordinate_profiles_applied(
+    request: PackRequest,
+    solutions: list[PackingSolution],
+) -> list[str]:
+    """Report coordinate candidates whose exact validated layout was selected."""
+    applied: list[str] = []
+    for solution in solutions:
+        candidate = _select_ai_coordinate_candidate(
+            request,
+            solution.placements,
+            solution.profile,
+        )
+        if candidate is not None and _placements_signature(candidate) == _placements_signature(solution.placements):
+            applied.append(solution.profile)
+    return applied
+
+
+def _easy_coordinate_score(
+    request: PackRequest,
+    placements: list[Placement],
+) -> tuple[float, ...]:
+    quality = _layout_quality(request, placements)
+    metrics = _metrics(request, placements)
+    return (
+        -quality.floor_bbox_void_pct,
+        -quality.floor_largest_gap_mm,
+        -quality.floor_internal_gap_mm,
+        -quality.floor_largest_transverse_gap_mm,
+        -quality.floor_x_components,
+        -metrics.cargo_zones,
+        -metrics.loading_steps,
+        -quality.sku_transitions,
+    )
+
+
 def _validated_easy_candidate(
     request: PackRequest,
     stacks: list[PackedStack] | None,
@@ -5502,6 +5727,11 @@ def _pack_order_full(request: PackRequest) -> PackResponse:
     high_stacks = _prefer_compact_candidate(high_request, high_stacks, "high_fill")
     high_placements = _expand_stacks(request, high_stacks, "high_fill")
     selected_counts = Counter(item.cargo_id for item in high_placements)
+    ai_high_stacks = _select_ai_coordinate_stacks(request, high_stacks, "high_fill")
+    if ai_high_stacks is not None:
+        high_stacks = ai_high_stacks
+        high_placements = _expand_stacks(request, high_stacks, "high_fill")
+        selected_counts = Counter(item.cargo_id for item in high_placements)
     stable_units = _build_stack_units(stable_request, dict(selected_counts), "stable")
     merged_stable = _merge_pallet_cartons(stable_request, stable_units)
     stable_blocks = (
@@ -5573,6 +5803,9 @@ def _pack_order_full(request: PackRequest) -> PackResponse:
     )
     if bounded_stable is not None:
         stable_stacks = bounded_stable
+    ai_stable_stacks = _select_ai_coordinate_stacks(request, stable_stacks, "stable")
+    if ai_stable_stacks is not None:
+        stable_stacks = ai_stable_stacks
     easy_units = _build_stack_units(easy_request)
     easy_merged = _merge_pallet_cartons(easy_request, easy_units)
     easy_blocks = (
@@ -5638,6 +5871,9 @@ def _pack_order_full(request: PackRequest) -> PackResponse:
         bounded_easy,
     ):
         easy_stacks = bounded_easy
+    ai_easy_stacks = _select_ai_coordinate_stacks(request, easy_stacks, "easy")
+    if ai_easy_stacks is not None:
+        easy_stacks = ai_easy_stacks
 
     solutions = [
         _build_solution(request, high_stacks, "high_fill"),
@@ -5704,10 +5940,16 @@ def _fast_pack_order(request: PackRequest) -> PackResponse:
             "当前订单计算时间较长，暂未找到物理安全的装柜方案",
             hint="请减少货物数量或拆分订单后重试",
         )
+    ai_high_stacks = _select_ai_coordinate_stacks(request, high_stacks, "high_fill")
+    if ai_high_stacks is not None:
+        high_stacks = ai_high_stacks
     high_placements = _expand_stacks(request, high_stacks, "high_fill")
     selected_counts = Counter(item.cargo_id for item in high_placements)
     stable_stacks = _fast_profile_candidate(request, "stable", selected_counts)
     stable_stacks = stable_stacks or high_stacks
+    ai_stable_stacks = _select_ai_coordinate_stacks(request, stable_stacks, "stable")
+    if ai_stable_stacks is not None:
+        stable_stacks = ai_stable_stacks
     easy_stacks = _fast_profile_candidate(request, "easy", selected_counts)
     easy_request = _request_for_profile(request, "easy")
     easy_units = _build_stack_units(easy_request, None, "high_fill")
@@ -5741,6 +5983,9 @@ def _fast_pack_order(request: PackRequest) -> PackResponse:
     ):
         easy_stacks = easy_region
     easy_stacks = easy_stacks or high_stacks
+    ai_easy_stacks = _select_ai_coordinate_stacks(request, easy_stacks, "easy")
+    if ai_easy_stacks is not None:
+        easy_stacks = ai_easy_stacks
     solutions = [
         _build_solution(request, high_stacks, "high_fill"),
         _build_solution(request, stable_stacks, "stable"),

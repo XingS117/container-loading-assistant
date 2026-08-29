@@ -12,6 +12,7 @@ from app.packing import (
     _build_solution,
     _build_stack_units,
     _compact_floor_candidate,
+    _coordinate_placements_to_stacks,
     _expand_stacks,
     _generic_floor_band_layout,
     _ai_strategy_score,
@@ -21,6 +22,8 @@ from app.packing import (
     MaxRectsBssf,
     _pack_units,
     _pure_pallet_floor_first_layout,
+    _select_ai_coordinate_candidate,
+    ai_coordinate_profiles_applied,
     pack_order,
 )
 from app.validator import validate_solution
@@ -263,6 +266,81 @@ def test_budget_fallback_honors_easy_zone_target_with_bounded_drop():
     assert easy.unloaded_counts["cargo-c"] == 1
     assert any("易操作方案少装 1 件" in warning for warning in easy.warnings)
     assert validate_solution(request.container, request.cargo_items, easy.placements).valid
+
+
+def test_ai_coordinate_candidate_replaces_only_with_a_better_valid_layout():
+    request = PackRequest(
+        container=ContainerSpec(
+            id="coordinate-ai",
+            name="坐标候选测试柜",
+            inner_length_mm=2000,
+            inner_width_mm=1000,
+            inner_height_mm=1000,
+            door_width_mm=1000,
+            door_height_mm=1000,
+            max_payload_g=1_000_000,
+        ),
+        cargo_items=[
+            boxes(id="cargo-a", quantity=2, length_mm=400, width_mm=400),
+            boxes(id="cargo-b", quantity=2, length_mm=400, width_mm=400),
+        ],
+        ai_layout_hint={
+            "profiles": {
+                "high_fill": {
+                    "coordinate_candidate": {
+                        "placements": [
+                            {"cargo_id": "cargo-a", "instance_index": 0, "x_mm": 0, "y_mm": 0, "z_mm": 0, "rotation": "LWH", "step": 1},
+                            {"cargo_id": "cargo-a", "instance_index": 1, "x_mm": 400, "y_mm": 0, "z_mm": 0, "rotation": "LWH", "step": 1},
+                            {"cargo_id": "cargo-b", "instance_index": 0, "x_mm": 800, "y_mm": 0, "z_mm": 0, "rotation": "LWH", "step": 1},
+                            {"cargo_id": "cargo-b", "instance_index": 1, "x_mm": 1200, "y_mm": 0, "z_mm": 0, "rotation": "LWH", "step": 1},
+                        ]
+                    }
+                }
+            }
+        },
+    )
+    baseline = [
+        Placement(id="cargo-a-0", cargo_id="cargo-a", instance_index=0, x_mm=0, y_mm=0, z_mm=0, length_mm=400, width_mm=400, height_mm=1000, rotation=Orientation.LWH, weight_g=100_000, step=1),
+        Placement(id="cargo-a-1", cargo_id="cargo-a", instance_index=1, x_mm=800, y_mm=0, z_mm=0, length_mm=400, width_mm=400, height_mm=1000, rotation=Orientation.LWH, weight_g=100_000, step=1),
+        Placement(id="cargo-b-0", cargo_id="cargo-b", instance_index=0, x_mm=1200, y_mm=0, z_mm=0, length_mm=400, width_mm=400, height_mm=1000, rotation=Orientation.LWH, weight_g=100_000, step=1),
+        Placement(id="cargo-b-1", cargo_id="cargo-b", instance_index=1, x_mm=1600, y_mm=0, z_mm=0, length_mm=400, width_mm=400, height_mm=1000, rotation=Orientation.LWH, weight_g=100_000, step=1),
+    ]
+
+    selected = _select_ai_coordinate_candidate(request, baseline, "high_fill")
+
+    assert selected is not None
+    assert [placement.x_mm for placement in selected] == [0, 400, 800, 1200]
+    assert validate_solution(request.container, request.cargo_items, selected).valid
+    selected_solution = _build_solution(
+        request,
+        _coordinate_placements_to_stacks(request, selected),
+        "high_fill",
+    )
+    assert ai_coordinate_profiles_applied(request, [selected_solution]) == ["high_fill"]
+
+
+def test_ai_coordinate_candidate_rejects_out_of_bounds_layout():
+    request = PackRequest(
+        container=small_container(),
+        cargo_items=[boxes(quantity=1, length_mm=200, width_mm=200, height_mm=200)],
+        ai_layout_hint={
+            "profiles": {
+                "high_fill": {
+                    "coordinate_candidate": {
+                        "placements": [
+                            {"cargo_id": "box-a", "instance_index": 0, "x_mm": 1900, "y_mm": 0, "z_mm": 0, "rotation": "LWH", "step": 1},
+                        ]
+                    }
+                }
+            }
+        },
+    )
+
+    baseline = [
+        Placement(id="box-a-0", cargo_id="box-a", instance_index=0, x_mm=0, y_mm=0, z_mm=0, length_mm=200, width_mm=200, height_mm=200, rotation=Orientation.LWH, weight_g=100_000, step=1),
+    ]
+
+    assert _select_ai_coordinate_candidate(request, baseline, "high_fill") is None
 
 
 def test_ai_compaction_does_not_break_a_continuous_upper_core(monkeypatch):
