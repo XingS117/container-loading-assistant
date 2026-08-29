@@ -220,6 +220,9 @@ PACK_ALGOS = (MaxRectsBssf, MaxRectsBaf, GuillotineBssfSas)
 GENERIC_CANDIDATE_LIMIT = 2_500
 AI_GUIDED_CANDIDATE_LIMIT = 1_200
 FLOOR_COMBINATION_LIMIT = 128
+# Exact floor composition search is useful for small mixed orders; beyond this
+# size the validated shelf/rectpack fallbacks are both faster and sufficient.
+FLOOR_FIRST_SEARCH_UNIT_LIMIT = 40
 
 
 def _stack_capacity(
@@ -3780,6 +3783,9 @@ def _pure_pallet_floor_first_layout(
     for unit in units:
         by_cargo.setdefault(unit.cargo.id, unit)
     if not by_cargo:
+        return None
+
+    if len(units) > FLOOR_FIRST_SEARCH_UNIT_LIMIT and len(by_cargo) >= 4:
         return None
 
     available_height = request.container.inner_height_mm - 2 * c

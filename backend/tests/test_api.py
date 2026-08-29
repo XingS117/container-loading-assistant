@@ -1,5 +1,6 @@
 import asyncio
 import re
+import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -226,6 +227,43 @@ def test_pack_endpoint_reports_ai_fallback_when_the_hint_is_unavailable(monkeypa
     assert response.status_code == 200
     assert response.json()["ai_strategy"]["status"] == "fallback"
     assert response.json()["ai_strategy"]["message"] == "AI 网络请求失败，已自动使用本地安全算法"
+
+
+def test_pack_endpoint_keeps_local_result_when_ai_budget_expires(monkeypatch):
+    from app.packing import pack_order
+
+    payload = {
+        "container": {
+            "id": "small", "name": "小型测试柜", "inner_length_mm": 2000,
+            "inner_width_mm": 1000, "inner_height_mm": 1000,
+            "door_width_mm": 1000, "door_height_mm": 1000,
+            "max_payload_g": 1000000, "clearance_mm": 0,
+        },
+        "cargo_items": [{
+            "id": "a", "sku": "A", "name": "标准箱", "kind": "carton",
+            "length_mm": 1000, "width_mm": 1000, "height_mm": 1000,
+            "weight_g": 100000, "quantity": 1, "allowed_orientations": ["LWH"],
+            "stackable": False, "max_layers": 1, "max_top_load_g": 0,
+        }],
+    }
+
+    def slow_ai(_request, **_kwargs):
+        time.sleep(0.1)
+        return main.LayoutHintResult(None, "timeout")
+
+    monkeypatch.setattr(main, "AI_STRATEGY_TIMEOUT_SECONDS", 0.01, raising=False)
+    monkeypatch.setattr(main, "load_ai_layout_hint_diagnostic", slow_ai)
+    monkeypatch.setattr(main, "run_pack_calculation", lambda request: asyncio.sleep(0, result=pack_order(request)))
+
+    started = time.perf_counter()
+    response = client.post("/api/v1/pack", json=payload, headers={"X-AI-API-Key": "sk-browser-test"})
+    elapsed = time.perf_counter() - started
+
+    assert response.status_code == 200
+    assert elapsed < 0.08
+    assert len(response.json()["solutions"]) == 3
+    assert response.json()["ai_strategy"]["status"] == "fallback"
+    assert response.json()["ai_strategy"]["message"] == "AI 服务响应超时，已自动使用本地安全算法"
 
 
 def test_pack_endpoint_falls_back_to_local_algorithm_when_ai_raises(monkeypatch):

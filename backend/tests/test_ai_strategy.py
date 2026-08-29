@@ -75,7 +75,7 @@ def test_reports_read_timeout_from_ai_provider(monkeypatch):
 
     assert result.hint is None
     assert result.error == "timeout"
-    assert captured["timeout"] == 18.0
+    assert captured["timeout"] == 8.0
 
 
 def test_parses_openai_compatible_deepseek_hint(monkeypatch):

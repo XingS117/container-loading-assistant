@@ -32,6 +32,9 @@ MAX_REQUEST_BYTES = 1024 * 1024
 RATE_LIMIT_PER_MINUTE = 60
 # Leave room for the advisory AI request before local layout calculation.
 PACK_TIMEOUT_SECONDS = 45
+# AI only provides optional ordering hints; it must not consume the local
+# solver's entire request budget when the provider has a long tail.
+AI_STRATEGY_TIMEOUT_SECONDS = 8
 request_windows: dict[str, deque[float]] = defaultdict(deque)
 pack_slots = threading.BoundedSemaphore(2)
 
@@ -329,17 +332,28 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
         base_url = http_request.headers.get("X-AI-Base-URL")
         # AI is advisory only; timeout/errors leave the deterministic path unchanged.
         try:
-            hint_result: LayoutHintResult = await anyio.to_thread.run_sync(
-                lambda: load_ai_layout_hint_diagnostic(
-                    request,
-                    api_key=ai_key,
-                    provider=provider,
-                    model=model,
-                    base_url=base_url,
+            hint_result: LayoutHintResult = await asyncio.wait_for(
+                anyio.to_thread.run_sync(
+                    lambda: load_ai_layout_hint_diagnostic(
+                        request,
+                        api_key=ai_key,
+                        provider=provider,
+                        model=model,
+                        base_url=base_url,
+                    ),
+                    abandon_on_cancel=True,
                 ),
+                timeout=AI_STRATEGY_TIMEOUT_SECONDS,
             )
             hint = hint_result.hint
             hint_error = hint_result.error
+        except asyncio.TimeoutError:
+            logger.warning(
+                "AI layout hint exceeded budget after_seconds=%s; using local algorithm",
+                AI_STRATEGY_TIMEOUT_SECONDS,
+            )
+            hint = None
+            hint_error = "timeout"
         except Exception as exc:
             logger.warning("AI layout hint failed; using local algorithm: %s", type(exc).__name__)
             hint = None
