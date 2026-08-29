@@ -231,6 +231,40 @@ def test_budget_exhaustion_returns_safe_fallback_solutions():
     )
 
 
+def test_budget_fallback_honors_easy_zone_target_with_bounded_drop():
+    request = PackRequest(
+        container=ContainerSpec(
+            id="fallback-easy",
+            name="兜底易操作测试柜",
+            inner_length_mm=4000,
+            inner_width_mm=2000,
+            inner_height_mm=1000,
+            door_width_mm=2000,
+            door_height_mm=1000,
+            max_payload_g=1_000_000,
+        ),
+        cargo_items=[
+            boxes(id="cargo-a", quantity=2, length_mm=1000, width_mm=500, must_load=True),
+            boxes(id="cargo-b", quantity=2, length_mm=1000, width_mm=500, must_load=True),
+            boxes(id="cargo-c", quantity=1, length_mm=1000, width_mm=500),
+        ],
+        ai_layout_hint={
+            "profiles": {
+                "easy": {"zone_order": ["cargo-a", "cargo-b"], "max_zones": 2},
+            },
+        },
+    )
+
+    response = pack_order(request, time_budget_seconds=0)
+    easy = response.solutions[2]
+
+    assert easy.metrics.cargo_zones <= 2
+    assert easy.metrics.loaded_pieces == 4
+    assert easy.unloaded_counts["cargo-c"] == 1
+    assert any("易操作方案少装 1 件" in warning for warning in easy.warnings)
+    assert validate_solution(request.container, request.cargo_items, easy.placements).valid
+
+
 def test_ai_compaction_does_not_break_a_continuous_upper_core(monkeypatch):
     request = six_sku_pallet_request().model_copy(update={
         "ai_layout_hint": {"sku_order": ["jke", "ass", "hhg", "ewtwefg", "ersersfsfs", "werwfrt"]}

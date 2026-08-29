@@ -5018,6 +5018,7 @@ def _easy_region_layout(
     candidates: list[tuple[int, list[PackedStack]]] = []
     current_units = list(units)
     for drop_count in range(drop_limit + 1):
+        _check_packing_budget()
         layouts = []
         if all(unit.count == 1 and unit.cargo.kind == "pallet" for unit in current_units):
             layouts.append(_pallet_grid_layout(request, current_units))
@@ -5026,6 +5027,7 @@ def _easy_region_layout(
             _layer_layout(request, current_units, allow_partial=True),
         ))
         for candidate in layouts:
+            _check_packing_budget()
             if (
                 candidate is None
                 or not _required_satisfied(request, candidate)
@@ -5707,6 +5709,37 @@ def _fast_pack_order(request: PackRequest) -> PackResponse:
     stable_stacks = _fast_profile_candidate(request, "stable", selected_counts)
     stable_stacks = stable_stacks or high_stacks
     easy_stacks = _fast_profile_candidate(request, "easy", selected_counts)
+    easy_request = _request_for_profile(request, "easy")
+    easy_units = _build_stack_units(easy_request, None, "high_fill")
+    easy_merged = _merge_pallet_cartons(easy_request, easy_units)
+    easy_region = None
+    if easy_request.ai_layout_hint:
+        # Give the optional easy-layout refinement its own small slice so it
+        # cannot turn the request-budget fallback into another timeout.
+        easy_budget_token = _packing_deadline.set(time.monotonic() + 2.0)
+        try:
+            easy_region = _validated_easy_candidate(
+                easy_request,
+                _easy_region_layout(
+                    easy_request,
+                    easy_merged,
+                    reference_count=sum(selected_counts.values()),
+                ),
+                sum(selected_counts.values()),
+            )
+        except PackingBudgetExceeded:
+            easy_region = None
+        finally:
+            _packing_deadline.reset(easy_budget_token)
+    if easy_region is not None and (
+        easy_stacks is None
+        or (
+            _preserves_upper_quality(easy_request, easy_stacks, easy_region)
+            and _easy_compact_score(easy_request, easy_region)
+            > _easy_compact_score(easy_request, easy_stacks)
+        )
+    ):
+        easy_stacks = easy_region
     easy_stacks = easy_stacks or high_stacks
     solutions = [
         _build_solution(request, high_stacks, "high_fill"),
@@ -5718,6 +5751,10 @@ def _fast_pack_order(request: PackRequest) -> PackResponse:
             if _layout_signature(solution) == _layout_signature(previous):
                 solution.identical_to = previous.profile
                 break
+    if solutions[2].metrics.loaded_pieces < solutions[0].metrics.loaded_pieces:
+        dropped = solutions[0].metrics.loaded_pieces - solutions[2].metrics.loaded_pieces
+        solutions[2].warnings.append(f"易操作方案少装 {dropped} 件换取连续分区")
+        solutions[2].cons.append(f"为保持整托区域连续，少装 {dropped} 件")
     request_json = json.dumps(request.model_dump(mode="json"), sort_keys=True)
     request_id = hashlib.sha256(request_json.encode("utf-8")).hexdigest()[:12]
     return PackResponse(request_id=request_id, solutions=solutions)
