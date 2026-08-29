@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
+import time
 from collections import Counter, defaultdict
+from contextvars import ContextVar
 from dataclasses import dataclass, replace
 from functools import lru_cache
 from typing import Literal
@@ -37,6 +39,22 @@ class PackingFailure(Exception):
 
     def __reduce__(self):
         return type(self), (self.code, self.message, self.hint)
+
+
+class PackingBudgetExceeded(Exception):
+    """Internal signal used to switch from deep search to a safe fast path."""
+
+
+_packing_deadline: ContextVar[float | None] = ContextVar(
+    "packing_deadline",
+    default=None,
+)
+
+
+def _check_packing_budget() -> None:
+    deadline = _packing_deadline.get()
+    if deadline is not None and time.monotonic() >= deadline:
+        raise PackingBudgetExceeded
 
 
 #: 布局校验错误码 → 用户可执行的调整建议（中文）。
@@ -743,6 +761,7 @@ def _select_payload_units(
     capacity = request.container.max_payload_g
     selected: list[StackUnit] = []
     for unit in _ordered_units(units, strategy):
+        _check_packing_budget()
         if unit.total_weight_g <= capacity:
             selected.append(unit)
             capacity -= unit.total_weight_g
@@ -936,6 +955,7 @@ def _pack_units(
     packed: list[PackedStack] = []
     ai_order = (request.ai_layout_hint or {}).get("sku_order")
     for unit in _ordered_units(units, order, ai_order if isinstance(ai_order, list) else None):
+        _check_packing_budget()
         swapped_orientation = PackedStack(
             unit=unit,
             x_mm=0,
@@ -1044,6 +1064,7 @@ def _bounded_pallet_layout_candidate(
     candidates: list[tuple[tuple[float, ...], list[PackedStack]]] = []
     door_limit = request.container.inner_length_mm - request.door_buffer_mm - request.container.clearance_mm
     for counts in variants:
+        _check_packing_budget()
         candidate_items = [
             item.model_copy(update={"quantity": counts[item.id]})
             for item in request.cargo_items
@@ -2167,6 +2188,7 @@ def _same_sku_band_layout(
         minimum_floor_count(bridge_id),
         quantity_by_cargo[bridge_id] + 1,
     ):
+        _check_packing_budget()
         split = bridge_split(candidate_bridge_floor)
         if split is None:
             continue
@@ -2185,6 +2207,7 @@ def _same_sku_band_layout(
             minimum_floor_count(middle_id),
             quantity_by_cargo[middle_id] + 1,
         ):
+            _check_packing_budget()
             candidate_total_length = (
                 bridge_left_length
                 + band_length(
@@ -2550,6 +2573,7 @@ def _mixed_floor_band_layout(
         tuple[str, str, tuple[Orientation, int, int, int], tuple[Orientation, int, int, int]]
     ] = []
     for left_id, right_id in pair_ids:
+        _check_packing_budget()
         choices = [
             (left_option, right_option)
             for left_option in options_by_cargo[left_id]
@@ -3101,6 +3125,7 @@ def _generic_floor_band_layout(
     candidates: list[tuple[tuple[float, ...], list[PackedStack]]] = []
     examined_candidates = 0
     for chosen_options in itertools.product(*option_variants):
+        _check_packing_budget()
         option_by_cargo = dict(zip(cargo_ids, chosen_options))
         columns_by_cargo = {
             cargo_id: option_by_cargo[cargo_id][3]
@@ -3108,6 +3133,7 @@ def _generic_floor_band_layout(
         }
         count_lists = [count_options(cargo_id) for cargo_id in cargo_ids]
         for chosen_counts in itertools.product(*count_lists):
+            _check_packing_budget()
             counts = dict(zip(cargo_ids, chosen_counts))
             if any(
                 counts[cargo_id] < minimum_floor[cargo_id]
@@ -3116,6 +3142,7 @@ def _generic_floor_band_layout(
             ):
                 continue
             for cargo_order in order_variants:
+                _check_packing_budget()
                 examined_candidates += 1
                 if examined_candidates > candidate_limit:
                     return max(candidates, key=lambda candidate: candidate[0])[1] if candidates else None
@@ -3319,8 +3346,10 @@ def _shelf_mixed_floor_layout(
     cargo_ids = list(by_cargo)
     orientation_options = [options_by_cargo[cargo_id][:2] for cargo_id in cargo_ids]
     for chosen_options in itertools.product(*orientation_options):
+        _check_packing_budget()
         option_by_cargo = dict(zip(cargo_ids, chosen_options))
         for cargo_order in order_variants:
+            _check_packing_budget()
             rows: list[list[tuple[str, tuple[Orientation, int, int, int]]]] = []
             row_widths: list[int] = []
             row_lengths: list[int] = []
@@ -3334,6 +3363,7 @@ def _shelf_mixed_floor_layout(
             if strategy == "fill":
                 items.sort(key=lambda item: (-item[1][2], -item[1][1], item[0]))
             for cargo_id, option in items:
+                _check_packing_budget()
                 _, length, width, _ = option
                 best_row: int | None = None
                 best_remaining: int | None = None
@@ -3494,6 +3524,7 @@ def _optimized_shelf_mixed_floor_layout(
     candidates: list[tuple[tuple[float, ...], list[PackedStack]]] = []
     orientation_variants = [options_by_cargo[cargo_id][:2] for cargo_id in cargo_ids]
     for chosen_options in itertools.product(*orientation_variants):
+        _check_packing_budget()
         option_by_cargo = dict(zip(cargo_ids, chosen_options))
         max_counts = {
             cargo_id: min(
@@ -3553,6 +3584,7 @@ def _optimized_shelf_mixed_floor_layout(
         def solve(
             remaining: tuple[int, ...],
         ) -> tuple[tuple[int, int, tuple[tuple[int, ...], ...]], ...]:
+            _check_packing_budget()
             if not any(remaining):
                 return ((0, 0, ()),)
             first = next(index for index, count in enumerate(remaining) if count)
@@ -3665,6 +3697,7 @@ def _optimized_shelf_mixed_floor_layout(
                     pattern_variants.append(edge_grouped)
 
         for ordered_patterns in pattern_variants:
+            _check_packing_budget()
             floor_stacks: list[PackedStack] = []
             next_instance: Counter[str] = Counter()
             x_cursor = c
@@ -3988,6 +4021,7 @@ def _pure_pallet_floor_first_layout(
     }[strategy]
     candidates: list[tuple[tuple[float, ...], list[PackedStack]]] = []
     for counts in combinations:
+        _check_packing_budget()
         if any(
             counts[cargo_id] * capacity_by_cargo[cargo_id]
             < quantity_by_cargo[cargo_id]
@@ -3999,7 +4033,9 @@ def _pure_pallet_floor_first_layout(
         if any(unit.cargo.unload_order for unit in floor_units):
             candidate_orders = ("unload",) + orders
         for algorithm in PACK_ALGOS:
+            _check_packing_budget()
             for order in candidate_orders:
+                _check_packing_budget()
                 floor_stacks = _pack_units(request, floor_units, algorithm, order)
                 if len(floor_stacks) != len(floor_units):
                     continue
@@ -5403,7 +5439,7 @@ def _validated_easy_candidate(
     )
 
 
-def pack_order(request: PackRequest) -> PackResponse:
+def _pack_order_full(request: PackRequest) -> PackResponse:
     high_request = _request_for_profile(request, "high_fill")
     stable_request = _request_for_profile(request, "stable")
     easy_request = _request_for_profile(request, "easy")
@@ -5622,3 +5658,90 @@ def pack_order(request: PackRequest) -> PackResponse:
     request_json = json.dumps(request.model_dump(mode="json"), sort_keys=True)
     request_id = hashlib.sha256(request_json.encode("utf-8")).hexdigest()[:12]
     return PackResponse(request_id=request_id, solutions=solutions)
+
+
+def _fast_profile_candidate(
+    request: PackRequest,
+    profile: Literal["high_fill", "stable", "easy"],
+    expected_counts: Counter[str] | None = None,
+) -> list[PackedStack] | None:
+    """Build one low-branch candidate for the request-budget fallback."""
+    profile_request = _request_for_profile(request, profile)
+    units = _build_stack_units(
+        profile_request,
+        dict(expected_counts) if expected_counts is not None else None,
+        "stable" if profile == "stable" else "high_fill",
+    )
+    if not units:
+        return []
+    merged = _merge_pallet_cartons(profile_request, units)
+    orders = {
+        "high_fill": ("volume", "footprint"),
+        "stable": ("weight", "volume"),
+        "easy": ("sku", "lightweight"),
+    }[profile]
+    for order in orders:
+        stacks = _pack_units(profile_request, merged, MaxRectsBssf, order)
+        candidate = _validated_candidate(
+            request,
+            stacks,
+            profile,
+            expected_counts,
+        )
+        if candidate is not None:
+            return candidate
+    return None
+
+
+def _fast_pack_order(request: PackRequest) -> PackResponse:
+    """Return validated low-branch solutions when deep search uses its budget."""
+    high_stacks = _fast_profile_candidate(request, "high_fill")
+    if high_stacks is None:
+        raise PackingFailure(
+            "LAYOUT_NOT_FEASIBLE",
+            "当前订单计算时间较长，暂未找到物理安全的装柜方案",
+            hint="请减少货物数量或拆分订单后重试",
+        )
+    high_placements = _expand_stacks(request, high_stacks, "high_fill")
+    selected_counts = Counter(item.cargo_id for item in high_placements)
+    stable_stacks = _fast_profile_candidate(request, "stable", selected_counts)
+    stable_stacks = stable_stacks or high_stacks
+    easy_stacks = _fast_profile_candidate(request, "easy", selected_counts)
+    easy_stacks = easy_stacks or high_stacks
+    solutions = [
+        _build_solution(request, high_stacks, "high_fill"),
+        _build_solution(request, stable_stacks, "stable"),
+        _build_solution(request, easy_stacks, "easy"),
+    ]
+    for index, solution in enumerate(solutions):
+        for previous in solutions[:index]:
+            if _layout_signature(solution) == _layout_signature(previous):
+                solution.identical_to = previous.profile
+                break
+    request_json = json.dumps(request.model_dump(mode="json"), sort_keys=True)
+    request_id = hashlib.sha256(request_json.encode("utf-8")).hexdigest()[:12]
+    return PackResponse(request_id=request_id, solutions=solutions)
+
+
+def pack_order(
+    request: PackRequest,
+    time_budget_seconds: float | None = None,
+) -> PackResponse:
+    deadline = (
+        None
+        if time_budget_seconds is None
+        else time.monotonic() + max(0.0, time_budget_seconds)
+    )
+    token = _packing_deadline.set(deadline)
+    reset_needed = True
+    try:
+        if time_budget_seconds is not None and time_budget_seconds <= 0:
+            raise PackingBudgetExceeded
+        return _pack_order_full(request)
+    except PackingBudgetExceeded:
+        _packing_deadline.reset(token)
+        reset_needed = False
+        return _fast_pack_order(request)
+    finally:
+        if reset_needed:
+            _packing_deadline.reset(token)

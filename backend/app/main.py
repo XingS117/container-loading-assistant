@@ -33,6 +33,8 @@ MAX_REQUEST_BYTES = 1024 * 1024
 RATE_LIMIT_PER_MINUTE = 60
 # Leave room for the advisory AI request before local layout calculation.
 PACK_TIMEOUT_SECONDS = 45
+# Keep a small response margin after the optional AI request and process cleanup.
+PACK_CALCULATION_BUDGET_SECONDS = 35
 # AI only provides optional ordering hints; it must not consume the local
 # solver's entire request budget when the provider has a long tail.
 AI_STRATEGY_TIMEOUT_SECONDS = 8
@@ -167,6 +169,7 @@ async def run_pack_calculation(request: PackRequest) -> PackResponse:
     return await anyio.to_process.run_sync(
         pack_order,
         request,
+        PACK_CALCULATION_BUDGET_SECONDS,
         cancellable=True,
     )
 
