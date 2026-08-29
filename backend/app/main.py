@@ -18,10 +18,11 @@ from fastapi.staticfiles import StaticFiles
 from .models import AIStrategyStatus, ContainerSpec, PackRequest, PackResponse, PackingSolution
 from .ai_strategy import (
     PROVIDER_DEFAULTS,
+    ConnectionDiagnostic,
     LayoutHintResult,
     load_ai_layout_hint_diagnostic,
     resolve_ai_api_key,
-    verify_ai_connection,
+    verify_ai_connection_diagnostic,
 )
 from .packing import PackingFailure, pack_order
 
@@ -400,17 +401,33 @@ async def ai_connection_test(http_request: Request) -> JSONResponse:
     api_key = http_request.headers.get("X-AI-API-Key")
     if not api_key or not api_key.strip():
         return JSONResponse(status_code=422, content={"error": {"message": "请先填写 API Key"}})
-    message = await anyio.to_thread.run_sync(
-        lambda: verify_ai_connection(
+    diagnostic: ConnectionDiagnostic = await anyio.to_thread.run_sync(
+        lambda: verify_ai_connection_diagnostic(
             api_key=api_key,
             provider=http_request.headers.get("X-AI-Provider"),
             model=http_request.headers.get("X-AI-Model"),
             base_url=http_request.headers.get("X-AI-Base-URL"),
         ),
     )
-    if message is None:
-        return JSONResponse(status_code=422, content={"error": {"message": "连接失败，请检查 API Key、模型和地址"}})
-    return JSONResponse(content={"message": message})
+    if diagnostic.message is None:
+        messages = {
+            400: "模型或请求参数不被支持，请检查模型名称和 API 地址",
+            401: "API Key 无效，请检查 Key 是否正确或是否已失效",
+            402: "AI 账户余额或额度不足，请充值或检查套餐额度",
+            403: "API Key 没有调用权限，请检查账户权限",
+            429: "AI 服务请求频率或额度受限，请稍后重试或检查套餐限额",
+        }
+        message = messages.get(
+            diagnostic.status_code,
+            {
+                "invalid_config": "AI 提供商、模型或 API 地址配置不匹配",
+                "timeout": "AI 服务响应超时，请稍后重试",
+                "invalid_response": "AI 返回内容无法识别，请检查模型兼容性",
+                "request_error": "无法连接 AI 服务，请检查网络和 API 地址",
+            }.get(diagnostic.error, "AI 连接失败，请稍后重试"),
+        )
+        return JSONResponse(status_code=422, content={"error": {"message": message}})
+    return JSONResponse(content={"message": diagnostic.message})
 
 
 DIST_DIR = Path(__file__).resolve().parents[2] / "frontend" / "dist"

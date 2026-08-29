@@ -34,6 +34,7 @@ export const AI_PROVIDERS: Array<{
     models: [
       { id: "glm-5.2", label: "glm-5.2" },
       { id: "glm-5.3", label: "glm-5.3" },
+      { id: "glm-5.3-flash", label: "glm-5.3-flash" },
     ],
   },
 ];

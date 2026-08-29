@@ -1,6 +1,11 @@
 import httpx
 
-from app.ai_strategy import load_ai_layout_hint, load_ai_layout_hint_diagnostic, verify_ai_connection
+from app.ai_strategy import (
+    load_ai_layout_hint,
+    load_ai_layout_hint_diagnostic,
+    verify_ai_connection,
+    verify_ai_connection_diagnostic,
+)
 from app.models import CargoSpec, ContainerSpec, PackRequest
 
 
@@ -276,6 +281,23 @@ def test_uses_deepseek_v4_flash_as_the_default_model(monkeypatch):
 
     assert verify_ai_connection("deepseek-key", "deepseek", None, None)
     assert calls[0][1]["json"]["model"] == "deepseek-v4-flash"
+
+
+def test_connection_diagnostic_explains_provider_credit_error(monkeypatch):
+    request = httpx.Request("POST", "https://api.deepseek.com/v1/chat/completions")
+    response = httpx.Response(402, request=request)
+
+    class FailedResponse:
+        def raise_for_status(self):
+            raise httpx.HTTPStatusError("payment required", request=request, response=response)
+
+    monkeypatch.setattr(httpx, "post", lambda *_args, **_kwargs: FailedResponse())
+
+    result = verify_ai_connection_diagnostic("deepseek-key", "deepseek", None, None)
+
+    assert result.message is None
+    assert result.error == "http_error"
+    assert result.status_code == 402
 
 
 def test_uses_qwen_compatible_url_for_qwen_configuration(monkeypatch):

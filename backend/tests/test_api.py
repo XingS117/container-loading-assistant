@@ -3,6 +3,7 @@ import re
 import time
 from pathlib import Path
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app import main
@@ -350,9 +351,9 @@ def test_ai_connection_endpoint_passes_config_headers(monkeypatch):
 
     def test_connection(**kwargs):
         captured.update(kwargs)
-        return "连接成功，模型可用于策略建议"
+        return main.ConnectionDiagnostic("连接成功，模型可用于策略建议")
 
-    monkeypatch.setattr(main, "verify_ai_connection", test_connection)
+    monkeypatch.setattr(main, "verify_ai_connection_diagnostic", test_connection)
 
     response = client.post(
         "/api/v1/ai/test",
@@ -372,6 +373,29 @@ def test_ai_connection_endpoint_passes_config_headers(monkeypatch):
         "model": "glm-5.3",
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
     }
+
+
+@pytest.mark.parametrize(
+    ("status_code", "expected_message"),
+    [
+        (402, "AI 账户余额或额度不足，请充值或检查套餐额度"),
+        (429, "AI 服务请求频率或额度受限，请稍后重试或检查套餐限额"),
+    ],
+)
+def test_ai_connection_endpoint_explains_provider_status(monkeypatch, status_code, expected_message):
+    monkeypatch.setattr(
+        main,
+        "verify_ai_connection_diagnostic",
+        lambda **_kwargs: main.ConnectionDiagnostic(None, "http_error", status_code),
+    )
+
+    response = client.post(
+        "/api/v1/ai/test",
+        headers={"X-AI-API-Key": "sk-browser-test"},
+    )
+
+    assert response.status_code == 422
+    assert response.json() == {"error": {"message": expected_message}}
 
 
 def test_pack_endpoint_returns_structured_must_load_error():

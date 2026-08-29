@@ -163,6 +163,7 @@ test("lists official model identifiers without marketing labels", async () => {
 
   expect(screen.getByRole("option", { name: "glm-5.2" })).toBeInTheDocument();
   expect(screen.getByRole("option", { name: "glm-5.3" })).toBeInTheDocument();
+  expect(screen.getByRole("option", { name: "glm-5.3-flash" })).toBeInTheDocument();
   expect(screen.queryByText(/旗舰版|快速版|均衡版|深蓝科技/)).not.toBeInTheDocument();
 });
 

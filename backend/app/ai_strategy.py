@@ -72,6 +72,14 @@ class LayoutHintResult:
 class CompletionResult:
     payload: dict[str, Any] | None
     error: str | None = None
+    status_code: int | None = None
+
+
+@dataclass(frozen=True)
+class ConnectionDiagnostic:
+    message: str | None
+    error: str | None = None
+    status_code: int | None = None
 
 
 def resolve_ai_api_key(api_key: str | None) -> str:
@@ -321,7 +329,7 @@ def _post_chat_completion(
                 exc.response.status_code,
                 (time.monotonic() - started_at) * 1000,
             )
-            return CompletionResult(None, "http_error")
+            return CompletionResult(None, "http_error", exc.response.status_code)
         except (httpx.HTTPError, ValueError, KeyError, IndexError, TypeError) as exc:
             logger.warning(
                 "%s AI request failed model=%s error=%s after_ms=%d",
@@ -430,6 +438,15 @@ def verify_ai_connection(
     model: str | None,
     base_url: str | None,
 ) -> str | None:
+    return verify_ai_connection_diagnostic(api_key, provider, model, base_url).message
+
+
+def verify_ai_connection_diagnostic(
+    api_key: str | None,
+    provider: str | None,
+    model: str | None,
+    base_url: str | None,
+) -> ConnectionDiagnostic:
     completion = _post_chat_completion(
         api_key,
         provider,
@@ -439,5 +456,9 @@ def verify_ai_connection(
     )
     payload = completion.payload
     if payload is None or not payload.get("choices"):
-        return None
-    return "连接成功，模型可用于策略建议"
+        return ConnectionDiagnostic(
+            None,
+            completion.error,
+            completion.status_code,
+        )
+    return ConnectionDiagnostic("连接成功，模型可用于策略建议")
