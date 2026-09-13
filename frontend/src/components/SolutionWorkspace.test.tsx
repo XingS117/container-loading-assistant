@@ -211,3 +211,14 @@ test("records solution feedback selection", async () => {
   await userEvent.click(screen.getByRole("button", { name: "满意" }));
   expect(screen.getByRole("button", { name: "满意" })).toHaveClass("is-selected");
 });
+
+test("opens an adjustment panel and records the requested topics", async () => {
+  const response = makeResponse(8, 3);
+  render(<SolutionWorkspace response={response} container={container} presets={presets} cargoItems={cargoItems} onBack={() => undefined} onRecalculate={async () => undefined} recalculating={false} />);
+  await userEvent.click(screen.getByRole("button", { name: "需要调整" }));
+  expect(screen.getByRole("region", { name: "方案调整说明" })).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("checkbox", { name: "中间空隙太大" }));
+  await userEvent.type(screen.getByRole("textbox", { name: "补充调整要求" }), "把深绿色货物向中间集中");
+  await userEvent.click(screen.getByRole("button", { name: "提交调整说明" }));
+  expect(screen.getByText(/调整说明已记录/)).toHaveTextContent("当前布局未改变");
+});

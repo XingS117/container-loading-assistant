@@ -93,6 +93,10 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
   const [editMessage, setEditMessage] = useState<string | null>(null);
   const [editedCargoIds, setEditedCargoIds] = useState<Set<string>>(new Set());
   const [feedback, setFeedback] = useState<"accepted" | "needs_adjustment" | null>(null);
+  const [adjustmentOpen, setAdjustmentOpen] = useState(false);
+  const [adjustmentTopics, setAdjustmentTopics] = useState<string[]>([]);
+  const [adjustmentNote, setAdjustmentNote] = useState("");
+  const [adjustmentSubmitted, setAdjustmentSubmitted] = useState(false);
   const [swapSourceCargoId, setSwapSourceCargoId] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<Partial<Record<SolutionProfile, string>>>({});
   const [recalculateContainerId, setRecalculateContainerId] = useState(container.id);
@@ -152,8 +156,27 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
       <div className="solution-feedback no-print" role="group" aria-label="方案反馈">
         <span>这个方案对你有帮助吗？</span>
         <button type="button" className={feedback === "accepted" ? "is-selected" : ""} onClick={() => { setFeedback("accepted"); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "accepted" }); }}>满意</button>
-        <button type="button" className={feedback === "needs_adjustment" ? "is-selected" : ""} onClick={() => { setFeedback("needs_adjustment"); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "needs_adjustment" }); }}>需要调整</button>
+        <button type="button" className={feedback === "needs_adjustment" ? "is-selected" : ""} onClick={() => { setFeedback("needs_adjustment"); setAdjustmentOpen(true); setAdjustmentSubmitted(false); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "needs_adjustment" }); }}>需要调整</button>
       </div>
+      {adjustmentOpen && <section className="adjustment-panel no-print" aria-label="方案调整说明">
+        <div>
+          <h2>告诉我们希望怎么调整</h2>
+          <p>反馈会帮助定位问题；提交后当前布局不会自动改变。你可以先进入人工调整，或重新计算一套新方案。</p>
+        </div>
+        <div className="adjustment-topics" role="group" aria-label="调整原因">
+          {["中间空隙太大", "上层支撑不连续", "重心需要更稳", "希望保持更多件数", "希望更易装卸"].map((topic) => (
+            <label key={topic}><input type="checkbox" checked={adjustmentTopics.includes(topic)} onChange={(event) => setAdjustmentTopics((current) => event.target.checked ? [...current, topic] : current.filter((item) => item !== topic))} />{topic}</label>
+          ))}
+        </div>
+        <textarea aria-label="补充调整要求" placeholder="例如：把深绿色货物向中间集中，数量少的货物放两侧" value={adjustmentNote} onChange={(event) => setAdjustmentNote(event.target.value)} rows={3} />
+        <div className="adjustment-actions">
+          <button type="button" className="primary-outline-button" onClick={() => { setAdjustmentSubmitted(true); trackAnalyticsEvent("pack_solution_adjustment_submitted", { profile: selectedProfile, topics: adjustmentTopics.join("|") || "none", has_note: Boolean(adjustmentNote.trim()) }); }}>提交调整说明</button>
+          <button type="button" className="text-button" onClick={() => document.querySelector(".workspace-grid")?.scrollIntoView({ behavior: "smooth", block: "start" })}>进入人工调整</button>
+          <button type="button" className="text-button" onClick={handleRecalculate} disabled={recalculating}>重新计算</button>
+          <button type="button" className="text-button" onClick={() => setAdjustmentOpen(false)}>收起</button>
+        </div>
+        {adjustmentSubmitted && <p className="adjustment-confirmation" role="status">调整说明已记录。当前布局未改变；如需应用，请使用人工调整或重新计算。</p>}
+      </section>}
       {aiStrategy && <section className={`ai-strategy-status ai-strategy-status--${aiStrategy.status} no-print`} aria-label="AI 策略状态" role="status" aria-live="polite">
         <Sparkles size={18} aria-hidden="true" />
         <div>
