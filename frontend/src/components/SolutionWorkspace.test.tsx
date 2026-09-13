@@ -204,3 +204,10 @@ test("shows profile-specific AI adoption and easy-layout disclosure", async () =
   await userEvent.click(screen.getByRole("button", { name: /易操作/ }));
   expect(screen.getByText(/少装 2 件换取连续分区/)).toBeInTheDocument();
 });
+
+test("records solution feedback selection", async () => {
+  const response = makeResponse(8, 3);
+  render(<SolutionWorkspace response={response} container={container} presets={presets} cargoItems={cargoItems} onBack={() => undefined} onRecalculate={async () => undefined} recalculating={false} />);
+  await userEvent.click(screen.getByRole("button", { name: "满意" }));
+  expect(screen.getByRole("button", { name: "满意" })).toHaveClass("is-selected");
+});

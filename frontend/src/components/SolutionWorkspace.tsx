@@ -91,6 +91,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
   const [editedPlacements, setEditedPlacements] = useState(response.solutions[0]?.placements ?? []);
   const [editMessage, setEditMessage] = useState<string | null>(null);
   const [editedCargoIds, setEditedCargoIds] = useState<Set<string>>(new Set());
+  const [feedback, setFeedback] = useState<"accepted" | "needs_adjustment" | null>(null);
   const [snapshots, setSnapshots] = useState<Partial<Record<SolutionProfile, string>>>({});
   const [recalculateContainerId, setRecalculateContainerId] = useState(container.id);
   const [recalculateError, setRecalculateError] = useState<string | null>(null);
@@ -145,6 +146,11 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
       </header>
       {recalculateError && <p className="recalculate-error" role="alert">{recalculateError}</p>}
       {editedCargoIds.size > 0 && <div className="edit-summary no-print" role="status"><strong>存在人工调整</strong><span>已调整 {editedCargoIds.size} 种货物。当前调整已通过边界和碰撞校验，尚未重新计算整体指标。</span><button type="button" onClick={resetEdits}>恢复原始布局</button></div>}
+      <div className="solution-feedback no-print" role="group" aria-label="方案反馈">
+        <span>这个方案对你有帮助吗？</span>
+        <button type="button" className={feedback === "accepted" ? "is-selected" : ""} onClick={() => { setFeedback("accepted"); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "accepted" }); }}>满意</button>
+        <button type="button" className={feedback === "needs_adjustment" ? "is-selected" : ""} onClick={() => { setFeedback("needs_adjustment"); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "needs_adjustment" }); }}>需要调整</button>
+      </div>
       {aiStrategy && <section className={`ai-strategy-status ai-strategy-status--${aiStrategy.status} no-print`} aria-label="AI 策略状态" role="status" aria-live="polite">
         <Sparkles size={18} aria-hidden="true" />
         <div>
