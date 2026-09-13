@@ -1552,3 +1552,13 @@ def test_locked_layout_is_rejected_when_out_of_bounds():
     })
     with pytest.raises(PackingFailure, match="锁定布局无效"):
         pack_order(request)
+
+
+def test_valid_locked_layout_does_not_silently_ignore_local_recalculation():
+    request = PackRequest.model_validate({
+        "container": {"id": "small", "name": "测试柜", "inner_length_mm": 1000, "inner_width_mm": 1000, "inner_height_mm": 1000, "door_width_mm": 1000, "door_height_mm": 1000, "max_payload_g": 1000000},
+        "cargo_items": [{"id": "a", "sku": "A", "name": "A", "kind": "carton", "length_mm": 500, "width_mm": 500, "height_mm": 500, "weight_g": 100, "quantity": 1, "allowed_orientations": ["LWH"]}],
+        "locked_placements": [{"id": "a-0", "cargo_id": "a", "instance_index": 0, "x_mm": 0, "y_mm": 0, "z_mm": 0, "length_mm": 500, "width_mm": 500, "height_mm": 500, "rotation": "LWH", "weight_g": 100, "step": 1}],
+    })
+    with pytest.raises(PackingFailure, match="局部重算尚未启用"):
+        pack_order(request)

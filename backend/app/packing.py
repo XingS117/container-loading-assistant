@@ -6030,6 +6030,11 @@ def pack_order(
                 first_error = locked_validation.errors[0]
                 advice = LAYOUT_ADVICE.get(first_error.code, "请调整锁定货物位置后重试")
                 raise PackingFailure("INVALID_LOCKED_LAYOUT", f"锁定布局无效：{first_error.message}", advice)
+            raise PackingFailure(
+                "LOCKED_RECALCULATION_UNAVAILABLE",
+                "当前版本已校验锁定布局，但局部重算尚未启用",
+                "请先使用原始方案计算，或解除锁定后重新计算",
+            )
         return _pack_order_full(request)
     except PackingBudgetExceeded:
         _packing_deadline.reset(token)
