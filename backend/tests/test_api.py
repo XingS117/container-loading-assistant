@@ -101,6 +101,20 @@ def test_pack_endpoint_returns_four_core_solutions(monkeypatch):
     }
 
 
+def test_pack_endpoint_recalculates_around_locked_floor_placement(monkeypatch):
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    payload = {
+        "container": {"id": "small", "name": "小型测试柜", "inner_length_mm": 2000, "inner_width_mm": 1000, "inner_height_mm": 1000, "door_width_mm": 1000, "door_height_mm": 1000, "max_payload_g": 1000000, "clearance_mm": 0},
+        "cargo_items": [{"id": "a", "sku": "A", "name": "A", "kind": "carton", "length_mm": 500, "width_mm": 500, "height_mm": 500, "weight_g": 100, "quantity": 2, "allowed_orientations": ["LWH"], "stackable": False, "max_layers": 1, "max_top_load_g": 0}],
+        "locked_placements": [{"id": "a-0", "cargo_id": "a", "instance_index": 0, "x_mm": 0, "y_mm": 0, "z_mm": 0, "length_mm": 500, "width_mm": 500, "height_mm": 500, "rotation": "LWH", "weight_g": 100, "step": 1}],
+    }
+    response = client.post("/api/v1/pack", json=payload)
+    assert response.status_code == 200
+    for solution in response.json()["solutions"]:
+        assert any(item["id"] == "a-0" and item["x_mm"] == 0 for item in solution["placements"])
+        assert solution["loaded_counts"]["a"] == 2
+
+
 def test_pack_endpoint_passes_optional_ai_hint_without_changing_response_contract(monkeypatch):
     from app.ai_strategy import LayoutHint
     from app.packing import pack_order
