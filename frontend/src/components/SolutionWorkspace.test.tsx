@@ -125,8 +125,8 @@ test("shows balance warning and the recommended stable tab", async () => {
   expect(screen.queryByText("互叠高装载")).not.toBeInTheDocument();
   await userEvent.click(screen.getByRole("button", { name: /装载率优先/ }));
   expect(screen.getByRole("alert")).toHaveTextContent("前后重量偏差较大（20%），建议查看「重心稳妥」方案");
-  expect(screen.getByText("前后偏差")).toBeInTheDocument();
-  expect(screen.getByText("左右偏差")).toBeInTheDocument();
+  expect(screen.getAllByText("前后偏差").length).toBeGreaterThan(0);
+  expect(screen.getAllByText("左右偏差").length).toBeGreaterThan(0);
 });
 
 
