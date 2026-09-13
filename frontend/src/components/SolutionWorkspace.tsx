@@ -46,6 +46,18 @@ export function classifySolutionWarning(warning: string): WarningSeverity {
   return "caution";
 }
 
+export function explainFloorRisk(solution: PackingSolution): string {
+  const largestGap = solution.metrics.floor_largest_gap_mm ?? 0;
+  const transverseGap = solution.metrics.floor_largest_transverse_gap_mm ?? 0;
+  if (largestGap >= 150 || transverseGap >= 150) {
+    return `底层最大空隙 ${Math.max(largestGap, transverseGap)} mm，可能降低上层支撑连续性，需要现场复核并考虑填充或固定`;
+  }
+  if (largestGap >= 50 || transverseGap >= 50) {
+    return `底层存在 ${Math.max(largestGap, transverseGap)} mm 局部空隙，建议确认上层货物底面是否被充分支撑`;
+  }
+  return `底层最大空隙 ${Math.max(largestGap, transverseGap)} mm，一般可接受，当前未发现明显支撑风险`;
+}
+
 export function recommendProfile(response: PackResponse): SolutionProfile {
   if (response.recommended_profile && response.solutions.some((solution) => solution.profile === response.recommended_profile)) {
     return response.recommended_profile;
@@ -171,6 +183,10 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
           <div className="pros-cons-grid">
             <div className="pros"><h2><CheckCircle2 size={17} /> 优点</h2>{selected.pros.map((item) => <p key={item}>{item}</p>)}</div>
             <div className="cons"><h2><AlertTriangle size={17} /> 注意</h2>{selected.cons.map((item) => <p key={item}>{item}</p>)}</div>
+          </div>
+          <div className="load-summary">
+            <h2>空隙与支撑判断</h2>
+            <p>{explainFloorRisk(selected)}</p>
           </div>
           <div className="load-summary">
             <h2>装入明细</h2>

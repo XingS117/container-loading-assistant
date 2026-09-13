@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { classifySolutionWarning, recommendProfile, SolutionWorkspace } from "./SolutionWorkspace";
+import { classifySolutionWarning, explainFloorRisk, recommendProfile, SolutionWorkspace } from "./SolutionWorkspace";
 import type { CargoInput, ContainerSpec, PackResponse, SolutionProfile } from "../types";
 
 
@@ -82,6 +82,15 @@ test("classifies solution notices by operational severity", () => {
   expect(classifySolutionWarning("上层未充分集中在中部，请现场复核")).toBe("caution");
   expect(classifySolutionWarning("柜门预留操作空间 300mm")).toBe("info");
   expect(classifySolutionWarning("当前方案仍剩载重 0.75t")).toBe("info");
+});
+
+test("explains whether a floor gap needs stability review", () => {
+  const solution = makeSolution("stable", 3);
+  solution.metrics.floor_largest_gap_mm = 180;
+  solution.metrics.floor_largest_transverse_gap_mm = 0;
+  expect(explainFloorRisk(solution)).toContain("需要现场复核");
+  solution.metrics.floor_largest_gap_mm = 20;
+  expect(explainFloorRisk(solution)).toContain("一般可接受");
 });
 
 
