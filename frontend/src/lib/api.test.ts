@@ -82,6 +82,16 @@ test("explains an HTML response from the packing endpoint", async () => {
   );
 });
 
+test("explains a calculation timeout with a next step", async () => {
+  vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({
+    error: { code: "CALCULATION_TIMEOUT", message: "订单较复杂，45 秒内未完成计算" },
+  }), { status: 504 }));
+
+  await expect(packOrder(container, [createCargo("TIMEOUT")], 0)).rejects.toThrow(
+    "计算超时：订单较复杂，45 秒内未完成计算。请减少货物种类或先关闭 AI 策略后重试",
+  );
+});
+
 test("explains an HTML response from the AI connection endpoint", async () => {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response("<html><h1>Bad Gateway</h1></html>", {

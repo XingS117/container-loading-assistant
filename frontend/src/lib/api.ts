@@ -70,10 +70,17 @@ export async function packOrder(
       })),
     }),
   });
-  const payload = await readJsonResponse<PackResponse & { error?: { message?: string; hint?: string } }>(response, "装柜服务返回了无效响应");
+  const payload = await readJsonResponse<PackResponse & { error?: { code?: string; message?: string; hint?: string } }>(response, "装柜服务返回了无效响应");
   if (!response.ok) {
     const message = payload?.error?.message ?? "计算失败，请检查货物参数";
     const hint = payload?.error?.hint as string | undefined;
+    const code = payload?.error?.code;
+    if (code === "CALCULATION_TIMEOUT") {
+      throw new Error(`计算超时：${message}。请减少货物种类或先关闭 AI 策略后重试`);
+    }
+    if (code === "CALCULATION_BUSY") {
+      throw new Error("当前计算任务较多，请稍后重试");
+    }
     throw new Error(hint ? `${message}\n${hint}` : message);
   }
   return payload;
