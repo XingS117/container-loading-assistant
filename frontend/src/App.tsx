@@ -8,7 +8,7 @@ import { ModelSettings } from "./components/ModelSettings";
 import voyageBanner from "./assets/voyage-banner.jpg";
 import { getContainerPresets, packOrder, testAIConnection } from "./lib/api";
 import { loadAIConfig, saveAIConfig } from "./lib/aiConfig";
-import { createCargo, validateCargo } from "./lib/cargo";
+import { createCargo, validateCargo, validateCargoIssues } from "./lib/cargo";
 import { cloneCargoPreset } from "./lib/cargoPresets";
 import { downloadCargoTemplate, readCargoExcel } from "./lib/excel";
 import { trackAnalyticsEvent } from "./lib/analytics";
@@ -46,6 +46,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const cargoValidationError = validateCargo(cargoItems);
+  const cargoValidationIssues = validateCargoIssues(cargoItems);
 
   useEffect(() => {
     getContainerPresets()
@@ -174,6 +175,10 @@ export default function App() {
           </div>
         </section>
 
+        {cargoValidationIssues.length > 0 && <div className="form-error" role="alert">
+          <strong>请先修正货物清单</strong>
+          <ul>{cargoValidationIssues.map((issue, index) => <li key={`${issue.row}-${issue.field}-${index}`}>{issue.row ? `第 ${issue.row} 种货物：` : "整单："}{issue.field}{issue.message}</li>)}</ul>
+        </div>}
         {error && <div className="form-error" role="alert">{error}</div>}
         <div className="calculate-bar">
           <div><strong>{cargoItems.reduce((sum, item) => sum + item.quantity, 0)}</strong><span>件货物 · {container?.name ?? "读取柜型中"}</span></div>

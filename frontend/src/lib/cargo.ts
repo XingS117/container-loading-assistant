@@ -59,3 +59,25 @@ export function validateCargo(rows: CargoInput[]): string | null {
   return null;
 }
 
+export interface CargoValidationIssue {
+  row: number;
+  field: string;
+  message: string;
+}
+
+export function validateCargoIssues(rows: CargoInput[]): CargoValidationIssue[] {
+  const issues: CargoValidationIssue[] = [];
+  rows.forEach((row, index) => {
+    const rowNumber = index + 1;
+    if (!row.sku.trim()) issues.push({ row: rowNumber, field: "货物代号", message: "不能为空" });
+    if (row.weight_kg == null || row.weight_kg <= 0) issues.push({ row: rowNumber, field: "单重", message: "必须大于 0" });
+    if (row.length_cm <= 0) issues.push({ row: rowNumber, field: "长", message: "必须大于 0" });
+    if (row.width_cm <= 0) issues.push({ row: rowNumber, field: "宽", message: "必须大于 0" });
+    if (row.height_cm <= 0) issues.push({ row: rowNumber, field: "高", message: "必须大于 0" });
+    if (!Number.isInteger(row.quantity) || row.quantity < 1) issues.push({ row: rowNumber, field: "数量", message: "必须是大于 0 的整数" });
+  });
+  if (rows.length > 30) issues.push({ row: 0, field: "货物种类", message: "单次最多支持 30 种" });
+  if (rows.reduce((sum, row) => sum + row.quantity, 0) > 5000) issues.push({ row: 0, field: "总数量", message: "单次最多支持 5000 件" });
+  return issues;
+}
+
