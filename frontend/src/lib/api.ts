@@ -26,6 +26,7 @@ export async function packOrder(
   itemGapCm: number,
   aiConfig?: AIModelConfig,
   preferredProfile: SolutionProfile = "high_fill",
+  lockedPlacements: import("../types").Placement[] = [],
 ): Promise<PackResponse> {
   const validationError = validateCargo(cargoItems);
   if (validationError) throw new Error(validationError);
@@ -47,6 +48,7 @@ export async function packOrder(
       container,
       item_gap_mm: Math.round(itemGapCm * 10),
       preferred_profile: preferredProfile,
+      locked_placements: lockedPlacements,
       cargo_items: cargoItems.map((item) => ({
         id: item.id,
         sku: item.sku.trim(),

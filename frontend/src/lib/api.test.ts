@@ -1,5 +1,6 @@
 import { getContainerPresets, packOrder, testAIConnection } from "./api";
 import { createCargo } from "./cargo";
+import type { Placement } from "../types";
 
 const container = {
   id: "40hq",
@@ -54,6 +55,14 @@ test("sends the user's layout priority in the packing request", async () => {
   expect(JSON.parse(fetchSpy.mock.calls[0][1]?.body as string)).toMatchObject({
     preferred_profile: "easy",
   });
+});
+
+test("sends locked placements when recalculating a layout", async () => {
+  const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({ request_id: "locked", solutions: [] }), { status: 200 }));
+  const cargo = createCargo("LOCKED");
+  const locked: Placement[] = [{ id: "locked-0", cargo_id: cargo.id, instance_index: 0, x_mm: 0, y_mm: 0, z_mm: 0, length_mm: 600, width_mm: 400, height_mm: 400, rotation: "LWH", weight_g: 18000, step: 1 }];
+  await packOrder(container, [cargo], 0, undefined, "high_fill", locked);
+  expect(JSON.parse(fetchSpy.mock.calls[0][1]?.body as string).locked_placements).toHaveLength(1);
 });
 
 test("explains an HTML gateway response instead of exposing a JSON parse error", async () => {

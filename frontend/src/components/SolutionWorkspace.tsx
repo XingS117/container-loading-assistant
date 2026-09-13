@@ -13,7 +13,7 @@ interface Props {
   presets: ContainerSpec[];
   cargoItems: CargoInput[];
   onBack: () => void;
-  onRecalculate: (container: ContainerSpec) => Promise<void>;
+  onRecalculate: (container: ContainerSpec, lockedPlacements?: import("../types").Placement[]) => Promise<void>;
   recalculating: boolean;
 }
 
@@ -130,7 +130,8 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
   const handleRecalculate = async () => {
     setRecalculateError(null);
     try {
-      await onRecalculate(selectedRecalculateContainer);
+      const lockedPlacements = selected.placements.filter((placement) => lockedCargoIds.has(placement.cargo_id));
+      await onRecalculate(selectedRecalculateContainer, lockedPlacements);
     } catch (reason) {
       setRecalculateError(reason instanceof Error ? reason.message : "重算失败，请稍后重试");
     }

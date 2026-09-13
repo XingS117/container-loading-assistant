@@ -68,7 +68,7 @@ export default function App() {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(nextDraft));
   }, [container, cargoItems, itemGapCm, clearanceCm]);
 
-  const calculateFor = async (nextContainer: ContainerSpec) => {
+  const calculateFor = async (nextContainer: ContainerSpec, lockedPlacements: import("./types").Placement[] = []) => {
     const validationError = validateCargo(cargoItems);
     if (validationError) throw new Error(validationError);
     setLoading(true);
@@ -76,7 +76,7 @@ export default function App() {
     trackAnalyticsEvent("pack_calculation_started", { cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), preferred_profile: preferredProfile });
     try {
       const requestContainer = { ...nextContainer, clearance_mm: Math.round(clearanceCm * 10) };
-      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig, preferredProfile);
+      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig, preferredProfile, lockedPlacements);
       setContainer(nextContainer);
       setResult(nextResult);
       trackAnalyticsEvent("pack_solutions_generated", { cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), recommended_profile: nextResult.recommended_profile ?? preferredProfile });
