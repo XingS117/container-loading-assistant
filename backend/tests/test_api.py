@@ -18,6 +18,18 @@ def test_pack_timeout_covers_ai_request_timeout():
     assert main.PACK_TIMEOUT_SECONDS > AI_REQUEST_TIMEOUT_SECONDS
 
 
+def test_pack_request_rejects_duplicate_locked_instances():
+    from app.models import PackRequest
+
+    base = {
+        "container": {"id": "small", "name": "小型测试柜", "inner_length_mm": 2000, "inner_width_mm": 1000, "inner_height_mm": 1000, "door_width_mm": 1000, "door_height_mm": 1000, "max_payload_g": 1000000},
+        "cargo_items": [{"id": "a", "sku": "A", "name": "A", "kind": "carton", "length_mm": 1000, "width_mm": 500, "height_mm": 500, "weight_g": 100, "quantity": 1, "allowed_orientations": ["LWH"]}],
+        "locked_placements": [{"id": "a-0", "cargo_id": "a", "instance_index": 0, "x_mm": 0, "y_mm": 0, "z_mm": 0, "length_mm": 1000, "width_mm": 500, "height_mm": 500, "rotation": "LWH", "weight_g": 100, "step": 1}, {"id": "a-0-copy", "cargo_id": "a", "instance_index": 0, "x_mm": 0, "y_mm": 0, "z_mm": 0, "length_mm": 1000, "width_mm": 500, "height_mm": 500, "rotation": "LWH", "weight_g": 100, "step": 1}],
+    }
+    with pytest.raises(ValueError, match="同一件货物不能重复锁定"):
+        PackRequest.model_validate(base)
+
+
 def test_production_proxy_timeout_covers_ai_and_packing_budget():
     config_path = Path(__file__).parents[2] / "deploy" / "nginx" / "packing.xingshuwen.com.conf"
     config = config_path.read_text(encoding="utf-8")

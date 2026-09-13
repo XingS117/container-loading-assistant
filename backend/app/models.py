@@ -97,6 +97,7 @@ class PackRequest(BaseModel):
     container: ContainerSpec
     cargo_items: list[CargoSpec] = Field(min_length=1, max_length=30)
     preferred_profile: Literal["high_fill", "stable", "easy"] = "high_fill"
+    locked_placements: list[Placement] = Field(default_factory=list, max_length=5000)
     item_gap_mm: int = Field(default=0, ge=0, le=1000)
     # 门端操作空间：可用柜长 = 柜长 - door_buffer_mm（默认 300，0=关闭）
     door_buffer_mm: int = Field(default=300, ge=0)
@@ -114,6 +115,18 @@ class PackRequest(BaseModel):
             raise ValueError("单次计算最多支持 5000 件货物")
         if len({item.id for item in self.cargo_items}) != len(self.cargo_items):
             raise ValueError("货物 ID 不能重复")
+        cargo_by_id = {item.id: item for item in self.cargo_items}
+        locked_instances: set[tuple[str, int]] = set()
+        for placement in self.locked_placements:
+            cargo = cargo_by_id.get(placement.cargo_id)
+            if cargo is None:
+                raise ValueError("锁定布局引用了不存在的货物")
+            key = (placement.cargo_id, placement.instance_index)
+            if key in locked_instances:
+                raise ValueError("同一件货物不能重复锁定")
+            locked_instances.add(key)
+            if placement.instance_index >= cargo.quantity:
+                raise ValueError("锁定布局的货物序号超过输入数量")
         return self
 
 
