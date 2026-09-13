@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { LoadVisualizer, StaticLayout } from "./LoadVisualizer";
 import type { CargoInput, ContainerSpec, PackResponse, PackingSolution, SolutionProfile } from "../types";
+import { trackAnalyticsEvent } from "../lib/analytics";
 
 interface Props {
   response: PackResponse;
@@ -128,7 +129,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
         <div><span className="eyebrow">计算结果 · {response.request_id}</span><h1>方案比较</h1></div>
         <div className="result-actions">
           <label className="recalculate-control"><span className="visually-hidden">重算柜型</span><select aria-label="重算柜型" value={recalculateContainerId} onChange={(event) => setRecalculateContainerId(event.target.value)} disabled={recalculating}>{recalculateContainers.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><button type="button" className="primary-outline-button recalculate-button" title="确认重算" onClick={handleRecalculate} disabled={recalculating}><RefreshCw className={recalculating ? "spin" : undefined} size={17} /><span>{recalculating ? "正在重算" : "确认重算"}</span></button></label>
-          <button type="button" className="primary-outline-button" onClick={() => window.print()}><Printer size={17} /> 打印 / PDF</button>
+          <button type="button" className="primary-outline-button" onClick={() => { trackAnalyticsEvent("pack_export_print", { profile: selectedProfile }); window.print(); }}><Printer size={17} /> 打印 / PDF</button>
         </div>
       </header>
       {recalculateError && <p className="recalculate-error" role="alert">{recalculateError}</p>}
@@ -160,7 +161,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
               ? `${solution.metrics.weight_imbalance_pct}%`
               : `${solution.metrics.loading_steps} 步`;
           return (
-            <button key={solution.profile} type="button" className={`solution-tab ${selected.profile === solution.profile ? "is-active" : ""}`} onClick={() => setSelectedProfile(solution.profile)}>
+            <button key={solution.profile} type="button" className={`solution-tab ${selected.profile === solution.profile ? "is-active" : ""}`} onClick={() => { trackAnalyticsEvent("pack_solution_selected", { profile: solution.profile }); setSelectedProfile(solution.profile); }}>
               <span className="solution-tab-name">{profileDisplayName[solution.profile]}</span>
               <strong>{primaryValue}</strong>
               <span>{profileShortName[solution.profile]} · {solution.metrics.loaded_pieces} 件</span>

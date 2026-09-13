@@ -71,6 +71,7 @@ export default function App() {
     if (validationError) throw new Error(validationError);
     setLoading(true);
     setError(null);
+    trackAnalyticsEvent("pack_calculation_started", { cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), preferred_profile: preferredProfile });
     try {
       const requestContainer = { ...nextContainer, clearance_mm: Math.round(clearanceCm * 10) };
       const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig, preferredProfile);
@@ -87,6 +88,7 @@ export default function App() {
     try {
       await calculateFor(container);
     } catch (reason) {
+      trackAnalyticsEvent("pack_calculation_failed", { reason: reason instanceof Error ? reason.message.slice(0, 80) : "unknown" });
       setError(reason instanceof Error ? reason.message : "计算失败，请稍后重试");
     }
   };
@@ -122,7 +124,7 @@ export default function App() {
   };
 
   if (result && container) {
-    return <SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} onBack={() => setResult(null)} onRecalculate={calculateFor} recalculating={loading} />;
+    return <SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} onBack={() => { trackAnalyticsEvent("pack_edit_input"); setResult(null); }} onRecalculate={calculateFor} recalculating={loading} />;
   }
 
   if (showModelSettings) {

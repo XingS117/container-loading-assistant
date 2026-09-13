@@ -26,7 +26,7 @@ export function initAnalytics(): void {
   initialized = true;
 }
 
-export function trackAnalyticsEvent(eventName: string): void {
+export function trackAnalyticsEvent(eventName: string, eventData?: Record<string, string | number | boolean>): void {
   if (typeof window === "undefined") return;
-  window.umami?.track(eventName);
+  window.umami?.track(eventName, eventData);
 }
