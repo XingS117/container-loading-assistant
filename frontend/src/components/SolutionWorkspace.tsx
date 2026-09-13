@@ -47,6 +47,9 @@ export function classifySolutionWarning(warning: string): WarningSeverity {
 }
 
 export function recommendProfile(response: PackResponse): SolutionProfile {
+  if (response.recommended_profile && response.solutions.some((solution) => solution.profile === response.recommended_profile)) {
+    return response.recommended_profile;
+  }
   const highFill = response.solutions.find((solution) => solution.profile === "high_fill");
   const stable = response.solutions.find((solution) => solution.profile === "stable");
   if (

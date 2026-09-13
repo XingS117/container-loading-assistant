@@ -69,6 +69,12 @@ test("keeps high_fill when already balanced or improvement is small", () => {
   expect(recommendProfile(makeResponse(20, 17))).toBe("high_fill");
 });
 
+test("uses the server recommendation when a preferred goal was selected", () => {
+  const response = makeResponse(8, 3);
+  response.recommended_profile = "easy";
+  expect(recommendProfile(response)).toBe("easy");
+});
+
 
 test("classifies solution notices by operational severity", () => {
   expect(classifySolutionWarning("订单总重 28.65t，超过柜体最大载重 28.60t")).toBe("critical");
