@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Callable, TypeVar
 
 
 @dataclass(frozen=True)
@@ -9,6 +10,17 @@ class FloorRect:
     y: int
     length: int
     width: int
+
+
+T = TypeVar("T")
+
+
+def choose_region(regions: list[FloorRect], length: int, width: int, score: Callable[[FloorRect], tuple] | None = None) -> FloorRect | None:
+    """Return the smallest usable free region for one rectangle."""
+    candidates = [region for region in regions if (length <= region.length and width <= region.width) or (width <= region.length and length <= region.width)]
+    if not candidates:
+        return None
+    return min(candidates, key=score or (lambda region: (region.length * region.width, region.x, region.y)))
 
 
 def subtract_rect(free: FloorRect, occupied: FloorRect) -> list[FloorRect]:
