@@ -19,6 +19,7 @@ interface Props {
   onRotateCargo?: (cargoId: string) => void;
   onSwapCargo?: (cargoId: string) => void;
   swapSourceCargoId?: string | null;
+  onMovePlacement?: (placementId: string, x_mm: number, y_mm: number) => void;
 }
 
 const PALETTE = ["#0b8f79", "#df8b2f", "#3375b8", "#c6534d", "#6d6eb5", "#568b48", "#b15888", "#4b8996", "#9c6a3c", "#78818c"];
@@ -270,7 +271,7 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
   return <div className="three-scene" ref={hostRef} />;
 }
 
-export function StaticLayout({ mode, container, placements, zones, cargoItems, selectedCargoId, onSelectCargo, testId = "layout-svg", compact }: {
+export function StaticLayout({ mode, container, placements, zones, cargoItems, selectedCargoId, onSelectCargo, onMovePlacement, testId = "layout-svg", compact }: {
   mode: Exclude<ViewMode, "3d">;
   container: ContainerSpec;
   placements: Placement[];
@@ -278,6 +279,7 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
   cargoItems: CargoInput[];
   selectedCargoId?: string | null;
   onSelectCargo?: (cargoId: string | null) => void;
+  onMovePlacement?: (placementId: string, x_mm: number, y_mm: number) => void;
   testId?: string;
   compact?: boolean;
 }) {
@@ -303,7 +305,7 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
         const height = isTop ? placement.width_mm : placement.height_mm;
         const dimmed = selectedCargoId != null && selectedCargoId !== placement.cargo_id;
         return (
-          <g key={placement.id} onClick={() => onSelectCargo?.(placement.cargo_id)} className="layout-item" opacity={dimmed ? 0.2 : 1}>
+            <g key={placement.id} onClick={() => onSelectCargo?.(placement.cargo_id)} onPointerUp={(event) => { if (!onMovePlacement || compact || mode === "door") return; const svg = event.currentTarget.ownerSVGElement; if (!svg) return; const point = svg.createSVGPoint(); point.x = event.clientX; point.y = event.clientY; const transformed = point.matrixTransform(svg.getScreenCTM()?.inverse()); if (transformed) onMovePlacement(placement.id, Math.max(0, Math.round(transformed.x - width / 2)), Math.max(0, Math.round(transformed.y - height / 2))); }} className="layout-item" opacity={dimmed ? 0.2 : 1}>
             <rect x={x} y={y} width={width} height={height} fill={colors[placement.cargo_id] ?? "#7b8680"} stroke="#173029" strokeWidth={Math.max(totalWidth, totalHeight) / 850} />
             {!compact && width > fontSize * 3 && height > fontSize * 1.5 && <text x={x + width / 2} y={y + height / 2} dominantBaseline="middle" textAnchor="middle" fontSize={fontSize} fill="white">{cargoById[placement.cargo_id]?.sku ?? placement.cargo_id}</text>}
           </g>
@@ -326,7 +328,7 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
   );
 }
 
-export function LoadVisualizer({ container, solution, cargoItems, selectedCargoId, onSelectCargo, onSnapshot, lockedCargoIds, onToggleLockCargo, onRotateCargo, onSwapCargo, swapSourceCargoId }: Props) {
+export function LoadVisualizer({ container, solution, cargoItems, selectedCargoId, onSelectCargo, onSnapshot, lockedCargoIds, onToggleLockCargo, onRotateCargo, onSwapCargo, swapSourceCargoId, onMovePlacement }: Props) {
   const [mode, setMode] = useState<ViewMode>("3d");
   const [threeUnavailable, setThreeUnavailable] = useState(false);
   const maxStep = Math.max(1, ...solution.placements.map((item) => item.step));
@@ -385,7 +387,7 @@ export function LoadVisualizer({ container, solution, cargoItems, selectedCargoI
         {mode === "3d" && !threeUnavailable ? <ThreeScene container={container} placements={solution.placements} visibleStep={step} colors={colors} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onSnapshot={onSnapshot} onUnavailable={handleThreeUnavailable} /> : (
           <>
             {threeUnavailable && mode === "top" && <div className="visual-fallback" role="status" aria-live="polite">当前设备不支持 3D，已自动切换为二维俯视图。</div>}
-            <StaticLayout mode={mode === "3d" ? "top" : mode} container={container} placements={visible} zones={solution.zones} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} />
+            <StaticLayout mode={mode === "3d" ? "top" : mode} container={container} placements={visible} zones={solution.zones} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onMovePlacement={onMovePlacement} />
           </>
         )}
       </div>

@@ -1,4 +1,4 @@
-import { rotateCargoPlacements, swapCargoPlacements } from "./layoutEdit";
+import { movePlacement, rotateCargoPlacements, swapCargoPlacements } from "./layoutEdit";
 import type { CargoInput, ContainerSpec, Placement } from "../types";
 
 const container = { inner_length_mm: 2000, inner_width_mm: 1000, inner_height_mm: 1000 } as ContainerSpec;
@@ -25,4 +25,8 @@ test("swaps matching cargo positions", () => {
   const result = swapCargoPlacements([placement, second], "a", "b");
   expect(result.error).toBeUndefined();
   expect(result.placements.find((item) => item.cargo_id === "a")?.x_mm).toBe(1000);
+});
+
+test("rejects moving a locked placement", () => {
+  expect(movePlacement([placement], "a-0", 100, 100, container, new Set(["a"])).error).toContain("锁定");
 });

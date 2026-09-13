@@ -43,3 +43,13 @@ export function swapCargoPlacements(placements: Placement[], firstCargoId: strin
   });
   return { placements: swapped };
 }
+
+export function movePlacement(placements: Placement[], placementId: string, x_mm: number, y_mm: number, container: ContainerSpec, lockedCargoIds?: Set<string>): { placements: Placement[]; error?: string } {
+  const current = placements.find((item) => item.id === placementId);
+  if (!current) return { placements, error: "找不到要调整的货物" };
+  if (lockedCargoIds?.has(current.cargo_id)) return { placements, error: "锁定货物不能移动，请先解锁" };
+  const moved = placements.map((item) => item.id === placementId ? { ...item, x_mm, y_mm } : item);
+  if (moved.some((item) => item.x_mm < 0 || item.y_mm < 0 || item.x_mm + item.length_mm > container.inner_length_mm || item.y_mm + item.width_mm > container.inner_width_mm || item.z_mm + item.height_mm > container.inner_height_mm)) return { placements, error: "调整后超出柜体边界" };
+  for (let index = 0; index < moved.length; index += 1) for (let other = index + 1; other < moved.length; other += 1) if (intersects(moved[index], moved[other])) return { placements, error: "调整后与其他货物发生碰撞" };
+  return { placements: moved };
+}
