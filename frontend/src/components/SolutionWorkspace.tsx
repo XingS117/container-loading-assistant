@@ -2,7 +2,7 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, CircleX, Info, Printer, Refresh
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { LoadVisualizer, StaticLayout } from "./LoadVisualizer";
-import type { CargoInput, ContainerSpec, PackResponse, SolutionProfile } from "../types";
+import type { CargoInput, ContainerSpec, PackResponse, PackingSolution, SolutionProfile } from "../types";
 
 interface Props {
   response: PackResponse;
