@@ -28,6 +28,7 @@ from .models import (
     Zone,
 )
 from .validator import ValidationResult, validate_solution
+from .fixed_regions import FloorRect
 
 
 class PackingFailure(Exception):
@@ -993,6 +994,32 @@ def _pack_units(
                 rotated=rotated,
             )
         )
+    packed.sort(key=lambda stack: stack.unit.id)
+    return packed
+
+
+def _pack_units_in_regions(
+    request: PackRequest,
+    units: list[StackUnit],
+    pack_algo,
+    order: str,
+    regions: list[FloorRect],
+) -> list[PackedStack]:
+    """Pack units into free floor regions created by locked cargo."""
+    bins = [(region, pack_algo(region.length + request.item_gap_mm, region.width + request.item_gap_mm, rot=False)) for region in regions]
+    packed: list[PackedStack] = []
+    ai_order = (request.ai_layout_hint or {}).get("sku_order")
+    for unit in _ordered_units(units, order, ai_order if isinstance(ai_order, list) else None):
+        _check_packing_budget()
+        for region, packing_bin in bins:
+            swapped_orientation = PackedStack(unit=unit, x_mm=0, y_mm=0, rotated=True).orientation
+            packing_bin.rot = not isinstance(unit, CompositeUnit) and swapped_orientation in unit.cargo.allowed_orientations
+            rect = packing_bin.add_rect(unit.length_mm + request.item_gap_mm, unit.width_mm + request.item_gap_mm, rid=unit.id)
+            if rect is None:
+                continue
+            rotated = unit.length_mm != unit.width_mm and int(rect.width) == unit.width_mm + request.item_gap_mm and int(rect.height) == unit.length_mm + request.item_gap_mm
+            packed.append(PackedStack(unit=unit, x_mm=region.x + int(rect.x), y_mm=region.y + int(rect.y), rotated=rotated))
+            break
     packed.sort(key=lambda stack: stack.unit.id)
     return packed
 
