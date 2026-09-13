@@ -212,6 +212,10 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 .solution-feedback { width: min(1380px, calc(100% - 32px)); margin: 10px auto 0; display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .solution-feedback button { padding: 5px 11px; color: #526058; background: white; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; }
 .solution-feedback button.is-selected { color: white; background: var(--accent); border-color: var(--accent); }
+.saved-orders { margin: -12px 0 24px; padding: 10px 12px; display: flex; align-items: center; gap: 10px; color: var(--muted); background: rgba(255,255,255,.65); border: 1px solid var(--line); border-radius: 5px; font-size: 12px; }
+.saved-orders > div { display: flex; align-items: center; gap: 8px; }
+.saved-orders button { padding: 5px 9px; color: var(--accent-dark); background: #f0fbf7; border: 1px solid #b9d1c5; border-radius: 4px; font-size: 11px; }
+.saved-orders select { min-width: 220px; margin-left: auto; padding: 5px 8px; color: var(--ink); background: white; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; }
 .result-inspector { padding: 18px; border-left: 1px solid var(--line); }
 .metric-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); }
 .metric-strip > div { padding: 11px; display: grid; gap: 4px; background: white; }

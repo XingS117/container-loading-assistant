@@ -12,6 +12,7 @@ import { createCargo, validateCargo, validateCargoIssues } from "./lib/cargo";
 import { cloneCargoPreset } from "./lib/cargoPresets";
 import { downloadCargoTemplate, readCargoExcel } from "./lib/excel";
 import { trackAnalyticsEvent } from "./lib/analytics";
+import { loadSavedOrders, saveOrder } from "./lib/orderHistory";
 import type { AIModelConfig, CargoInput, CargoPreset, ContainerSpec, PackResponse, SolutionProfile } from "./types";
 
 const STORAGE_KEY = "container-loading-assistant-draft-v1";
@@ -45,6 +46,7 @@ export default function App() {
   const [result, setResult] = useState<PackResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [savedOrders, setSavedOrders] = useState(() => loadSavedOrders());
   const cargoValidationError = validateCargo(cargoItems);
   const cargoValidationIssues = validateCargoIssues(cargoItems);
 
@@ -124,6 +126,13 @@ export default function App() {
     setError(null);
   };
 
+  const saveCurrentOrder = () => {
+    if (!container) return;
+    const saved = saveOrder({ name: `订单 ${new Date().toLocaleDateString("zh-CN")}`, container, cargoItems, itemGapCm, clearanceCm });
+    setSavedOrders((current) => [saved, ...current.filter((item) => item.name !== saved.name)].slice(0, 10));
+    setError("订单已保存到本机，可在下方恢复");
+  };
+
   if (result && container) {
     return <SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} onBack={() => { trackAnalyticsEvent("pack_edit_input"); setResult(null); }} onRecalculate={calculateFor} recalculating={loading} />;
   }
@@ -152,6 +161,10 @@ export default function App() {
           </div>
         </section>
         <ContainerPicker presets={presets} selected={container} onSelect={setContainer} />
+        <section className="saved-orders" aria-label="本机订单">
+          <div><strong>本机订单</strong><button type="button" onClick={saveCurrentOrder}>保存当前订单</button></div>
+          {savedOrders.length > 0 && <select aria-label="恢复本机订单" defaultValue="" onChange={(event) => { const order = savedOrders.find((item) => item.id === event.target.value); if (!order) return; setContainer(order.container); setCargoItems(order.cargoItems); setItemGapCm(order.itemGapCm); setClearanceCm(order.clearanceCm); setResult(null); setError(null); trackAnalyticsEvent("order_restored", { order_id: order.id }); }}><option value="">选择已保存订单</option>{savedOrders.map((order) => <option value={order.id} key={order.id}>{order.name} · {new Date(order.savedAt).toLocaleDateString("zh-CN")}</option>)}</select>}
+        </section>
         <CargoTable
           rows={cargoItems}
           onChange={setCargoItems}
