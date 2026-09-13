@@ -17,6 +17,8 @@ interface Props {
   lockedCargoIds?: Set<string>;
   onToggleLockCargo?: (cargoId: string) => void;
   onRotateCargo?: (cargoId: string) => void;
+  onSwapCargo?: (cargoId: string) => void;
+  swapSourceCargoId?: string | null;
 }
 
 const PALETTE = ["#0b8f79", "#df8b2f", "#3375b8", "#c6534d", "#6d6eb5", "#568b48", "#b15888", "#4b8996", "#9c6a3c", "#78818c"];
@@ -324,7 +326,7 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
   );
 }
 
-export function LoadVisualizer({ container, solution, cargoItems, selectedCargoId, onSelectCargo, onSnapshot, lockedCargoIds, onToggleLockCargo, onRotateCargo }: Props) {
+export function LoadVisualizer({ container, solution, cargoItems, selectedCargoId, onSelectCargo, onSnapshot, lockedCargoIds, onToggleLockCargo, onRotateCargo, onSwapCargo, swapSourceCargoId }: Props) {
   const [mode, setMode] = useState<ViewMode>("3d");
   const [threeUnavailable, setThreeUnavailable] = useState(false);
   const maxStep = Math.max(1, ...solution.placements.map((item) => item.step));
@@ -390,7 +392,7 @@ export function LoadVisualizer({ container, solution, cargoItems, selectedCargoI
 
       {mode === "layers" && layers.length > 0 && <label className="layer-control no-print"><span>层高 {(layers[layerIndex] / 10).toFixed(1)} cm</span><input aria-label="查看层高" type="range" min="0" max={Math.max(0, layers.length - 1)} value={layerIndex} onChange={(event) => setLayerIndex(Number(event.target.value))} /></label>}
       <div className="cargo-legend no-print">
-        {cargoItems.map((cargo) => <span className="cargo-legend-item" key={cargo.id}><button type="button" className={selectedCargoId === cargo.id ? "is-active" : ""} onClick={() => onSelectCargo?.(selectedCargoId === cargo.id ? null : cargo.id)}><i style={{ background: colors[cargo.id] }} />{cargo.sku}</button><button type="button" className="cargo-lock-button" aria-label={`旋转 ${cargo.sku}`} onClick={() => onRotateCargo?.(cargo.id)}>旋转</button><button type="button" className={`cargo-lock-button ${lockedCargoIds?.has(cargo.id) ? "is-locked" : ""}`} aria-label={`${lockedCargoIds?.has(cargo.id) ? "解锁" : "锁定"} ${cargo.sku}`} onClick={() => onToggleLockCargo?.(cargo.id)}>{lockedCargoIds?.has(cargo.id) ? "已锁定" : "锁定"}</button></span>)}
+        {cargoItems.map((cargo) => <span className="cargo-legend-item" key={cargo.id}><button type="button" className={selectedCargoId === cargo.id ? "is-active" : ""} onClick={() => onSelectCargo?.(selectedCargoId === cargo.id ? null : cargo.id)}><i style={{ background: colors[cargo.id] }} />{cargo.sku}</button><button type="button" className="cargo-lock-button" aria-label={`旋转 ${cargo.sku}`} onClick={() => onRotateCargo?.(cargo.id)}>旋转</button>{swapSourceCargoId && swapSourceCargoId !== cargo.id && <button type="button" className="cargo-lock-button" aria-label={`交换 ${cargo.sku}`} onClick={() => onSwapCargo?.(cargo.id)}>交换</button>}<button type="button" className={`cargo-lock-button ${lockedCargoIds?.has(cargo.id) ? "is-locked" : ""}`} aria-label={`${lockedCargoIds?.has(cargo.id) ? "解锁" : "锁定"} ${cargo.sku}`} onClick={() => onToggleLockCargo?.(cargo.id)}>{lockedCargoIds?.has(cargo.id) ? "已锁定" : "锁定"}</button></span>)}
       </div>
     </div>
   );

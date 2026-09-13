@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { LoadVisualizer, StaticLayout } from "./LoadVisualizer";
 import type { CargoInput, ContainerSpec, PackResponse, PackingSolution, SolutionProfile } from "../types";
 import { trackAnalyticsEvent } from "../lib/analytics";
-import { rotateCargoPlacements } from "../lib/layoutEdit";
+import { rotateCargoPlacements, swapCargoPlacements } from "../lib/layoutEdit";
 import { recalculateMetrics } from "../lib/layoutMetrics";
 
 interface Props {
@@ -93,6 +93,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
   const [editMessage, setEditMessage] = useState<string | null>(null);
   const [editedCargoIds, setEditedCargoIds] = useState<Set<string>>(new Set());
   const [feedback, setFeedback] = useState<"accepted" | "needs_adjustment" | null>(null);
+  const [swapSourceCargoId, setSwapSourceCargoId] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<Partial<Record<SolutionProfile, string>>>({});
   const [recalculateContainerId, setRecalculateContainerId] = useState(container.id);
   const [recalculateError, setRecalculateError] = useState<string | null>(null);
@@ -214,7 +215,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
 
       <section className="workspace-grid">
         {editMessage && <p className="edit-message" role="status">{editMessage}</p>}
-        <LoadVisualizer container={container} solution={editedSelected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={setSelectedCargoId} onSnapshot={handleSnapshot} lockedCargoIds={lockedCargoIds} onToggleLockCargo={(cargoId) => setLockedCargoIds((current) => { const next = new Set(current); if (next.has(cargoId)) next.delete(cargoId); else next.add(cargoId); return next; })} onRotateCargo={(cargoId) => { const cargo = cargoItems.find((item) => item.id === cargoId); if (!cargo) return; if (selected.profile !== "high_fill") { setEditMessage("当前版本先支持在装载率优先方案中编辑，其他方案请重新计算后复核"); return; } const result = rotateCargoPlacements(editedSelected.placements, cargo, container, lockedCargoIds); setEditMessage(result.error ?? `${cargo.sku} 已旋转，布局通过边界和碰撞校验`); if (!result.error) { setEditedPlacements(result.placements); setEditedCargoIds((current) => new Set(current).add(cargoId)); trackAnalyticsEvent("pack_layout_edited", { action: "rotate", cargo_id: cargoId }); } }} />
+        <LoadVisualizer container={container} solution={editedSelected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={(cargoId) => { setSelectedCargoId(cargoId); if (cargoId && selected.profile === "high_fill") setSwapSourceCargoId(cargoId); }} onSnapshot={handleSnapshot} lockedCargoIds={lockedCargoIds} swapSourceCargoId={swapSourceCargoId} onSwapCargo={(cargoId) => { if (!swapSourceCargoId || selected.profile !== "high_fill") return; const result = swapCargoPlacements(editedSelected.placements, swapSourceCargoId, cargoId, lockedCargoIds); setEditMessage(result.error ?? "货物位置已交换，指标已重新计算"); if (!result.error) { setEditedPlacements(result.placements); setEditedCargoIds((current) => new Set([...current, swapSourceCargoId, cargoId])); trackAnalyticsEvent("pack_layout_edited", { action: "swap" }); setSwapSourceCargoId(null); } }} onToggleLockCargo={(cargoId) => setLockedCargoIds((current) => { const next = new Set(current); if (next.has(cargoId)) next.delete(cargoId); else next.add(cargoId); return next; })} onRotateCargo={(cargoId) => { const cargo = cargoItems.find((item) => item.id === cargoId); if (!cargo) return; if (selected.profile !== "high_fill") { setEditMessage("当前版本先支持在装载率优先方案中编辑，其他方案请重新计算后复核"); return; } const result = rotateCargoPlacements(editedSelected.placements, cargo, container, lockedCargoIds); setEditMessage(result.error ?? `${cargo.sku} 已旋转，布局通过边界和碰撞校验`); if (!result.error) { setEditedPlacements(result.placements); setEditedCargoIds((current) => new Set(current).add(cargoId)); trackAnalyticsEvent("pack_layout_edited", { action: "rotate", cargo_id: cargoId }); } }} />
         <aside className="result-inspector">
           <div className="metric-strip">
             <div><span>体积利用率</span><strong>{selected.metrics.volume_utilization_pct}%</strong></div>
