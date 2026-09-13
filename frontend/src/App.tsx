@@ -77,7 +77,7 @@ export default function App() {
       const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig, preferredProfile);
       setContainer(nextContainer);
       setResult(nextResult);
-      trackAnalyticsEvent("pack_solutions_generated");
+      trackAnalyticsEvent("pack_solutions_generated", { cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), recommended_profile: nextResult.recommended_profile ?? preferredProfile });
     } finally {
       setLoading(false);
     }
@@ -110,6 +110,7 @@ export default function App() {
     );
     if (hintedContainer) setContainer(hintedContainer);
     setCargoItems(cloneCargoPreset(preset));
+    trackAnalyticsEvent("cargo_preset_loaded", { preset: preset.id });
     setResult(null);
     setError(null);
   };
@@ -158,8 +159,8 @@ export default function App() {
           onDownloadTemplate={() => downloadCargoTemplate().catch((reason: Error) => setError(reason.message))}
           onImportFile={(file) => {
             readCargoExcel(file)
-              .then((rows) => { setCargoItems(rows); setError(null); })
-              .catch((reason: Error) => setError(reason.message));
+              .then((rows) => { setCargoItems(rows); setError(null); trackAnalyticsEvent("cargo_excel_imported", { cargo_types: rows.length, pieces: rows.reduce((sum, item) => sum + item.quantity, 0) }); })
+              .catch((reason: Error) => { trackAnalyticsEvent("cargo_excel_import_failed", { reason: reason.message.slice(0, 80) }); setError(reason.message); });
           }}
         />
 
