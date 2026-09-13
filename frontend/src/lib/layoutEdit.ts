@@ -29,3 +29,17 @@ export function rotateCargoPlacements(placements: Placement[], cargo: CargoInput
   }
   return { placements: rotated };
 }
+
+export function swapCargoPlacements(placements: Placement[], firstCargoId: string, secondCargoId: string, lockedCargoIds?: Set<string>): { placements: Placement[]; error?: string } {
+  if (firstCargoId === secondCargoId) return { placements, error: "请选择两种不同货物" };
+  if (lockedCargoIds?.has(firstCargoId) || lockedCargoIds?.has(secondCargoId)) return { placements, error: "锁定货物不能交换位置，请先解锁" };
+  const first = placements.filter((item) => item.cargo_id === firstCargoId);
+  const second = placements.filter((item) => item.cargo_id === secondCargoId);
+  if (first.length !== second.length || first.some((item, index) => item.z_mm !== second[index]?.z_mm)) return { placements, error: "只有数量和层高匹配的货物可以交换" };
+  const swapped = placements.map((item) => {
+    if (item.cargo_id === firstCargoId) { const target = second[item.instance_index]; return target ? { ...item, x_mm: target.x_mm, y_mm: target.y_mm, z_mm: target.z_mm, step: target.step } : item; }
+    if (item.cargo_id === secondCargoId) { const target = first[item.instance_index]; return target ? { ...item, x_mm: target.x_mm, y_mm: target.y_mm, z_mm: target.z_mm, step: target.step } : item; }
+    return item;
+  });
+  return { placements: swapped };
+}
