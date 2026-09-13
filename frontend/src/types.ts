@@ -130,5 +130,6 @@ export interface AIStrategyStatus {
 export interface PackResponse {
   request_id: string;
   solutions: PackingSolution[];
+  recommended_profile?: SolutionProfile;
   ai_strategy?: AIStrategyStatus;
 }

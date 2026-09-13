@@ -76,6 +76,7 @@ def test_pack_endpoint_returns_four_core_solutions(monkeypatch):
 
     assert response.status_code == 200
     assert len(response.json()["solutions"]) == 3
+    assert response.json()["recommended_profile"] == "high_fill"
     assert response.json()["ai_strategy"] == {
         "status": "disabled",
         "applied": False,

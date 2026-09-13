@@ -5679,7 +5679,7 @@ def _pack_order_full(request: PackRequest) -> PackResponse:
         ]
         request_json = json.dumps(request.model_dump(mode="json"), sort_keys=True)
         request_id = hashlib.sha256(request_json.encode("utf-8")).hexdigest()[:12]
-        return PackResponse(request_id=request_id, solutions=solutions)
+        return PackResponse(request_id=request_id, solutions=solutions, recommended_profile=request.preferred_profile)
     pure_pallet_skus = {unit.cargo.id for unit in units}
     pure_pallet_order = (
         bool(units)
@@ -5895,7 +5895,7 @@ def _pack_order_full(request: PackRequest) -> PackResponse:
         )
     request_json = json.dumps(request.model_dump(mode="json"), sort_keys=True)
     request_id = hashlib.sha256(request_json.encode("utf-8")).hexdigest()[:12]
-    return PackResponse(request_id=request_id, solutions=solutions)
+    return PackResponse(request_id=request_id, solutions=solutions, recommended_profile=request.preferred_profile)
 
 
 def _fast_profile_candidate(
@@ -6002,7 +6002,7 @@ def _fast_pack_order(request: PackRequest) -> PackResponse:
         solutions[2].cons.append(f"为保持整托区域连续，少装 {dropped} 件")
     request_json = json.dumps(request.model_dump(mode="json"), sort_keys=True)
     request_id = hashlib.sha256(request_json.encode("utf-8")).hexdigest()[:12]
-    return PackResponse(request_id=request_id, solutions=solutions)
+    return PackResponse(request_id=request_id, solutions=solutions, recommended_profile=request.preferred_profile)
 
 
 def pack_order(

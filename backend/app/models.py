@@ -186,6 +186,7 @@ class AIStrategyStatus(BaseModel):
 class PackResponse(BaseModel):
     request_id: str
     solutions: list[PackingSolution]
+    recommended_profile: Literal["high_fill", "stable", "easy"] = "high_fill"
     ai_strategy: AIStrategyStatus = Field(
         default_factory=lambda: AIStrategyStatus(
             status="disabled",
