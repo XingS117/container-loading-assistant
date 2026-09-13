@@ -290,6 +290,14 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
               <div><h3>优点</h3>{solution.pros.map((item) => <p key={item}>{item}</p>)}</div>
               <div><h3>注意</h3>{solution.cons.map((item) => <p key={item}>{item}</p>)}</div>
             </div>
+            <h3>风险摘要</h3>
+            <p>{explainFloorRisk(solution)}</p>
+            <h3>装载步骤（从柜门向柜内）</h3>
+            <div className="print-steps">
+              {loadingStepLabels(solution, cargoItems).length > 0
+                ? loadingStepLabels(solution, cargoItems).map((step) => <p key={step}>{step}</p>)
+                : <p>暂无区域步骤，请结合装载图现场复核。</p>}
+            </div>
             {snapshots[solution.profile] && <img className="print-snapshot" src={snapshots[solution.profile]} alt={`${profileDisplayName[solution.profile]}三维装柜布局`} />}
             <h3>装柜图（俯视 · 侧视）</h3>
             <div className="print-layouts">

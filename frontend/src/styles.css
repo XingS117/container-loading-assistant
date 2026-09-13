@@ -319,7 +319,9 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
   .print-layouts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 8px 0; }
   .print-layouts .layout-svg { min-height: 0; max-height: 300px; padding: 0; page-break-inside: avoid; }
   .print-zones { font-size: 11px; color: #46534d; line-height: 1.6; }
-  .print-zones span { white-space: normal; }
+.print-zones span { white-space: normal; }
+.print-steps { margin: 6px 0 10px; padding: 7px 10px; background: #f5f7f5; border-left: 3px solid #087f68; }
+.print-steps p { margin: 3px 0; }
   .print-layer-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .print-layer { page-break-inside: avoid; break-inside: avoid; }
   .print-layer .layout-svg { width: 100%; max-height: 170px; min-height: 0; padding: 0; }
