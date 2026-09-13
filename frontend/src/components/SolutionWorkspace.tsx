@@ -5,6 +5,7 @@ import { LoadVisualizer, StaticLayout } from "./LoadVisualizer";
 import type { CargoInput, ContainerSpec, PackResponse, PackingSolution, SolutionProfile } from "../types";
 import { trackAnalyticsEvent } from "../lib/analytics";
 import { rotateCargoPlacements } from "../lib/layoutEdit";
+import { recalculateMetrics } from "../lib/layoutMetrics";
 
 interface Props {
   response: PackResponse;
@@ -96,7 +97,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
   const [recalculateContainerId, setRecalculateContainerId] = useState(container.id);
   const [recalculateError, setRecalculateError] = useState<string | null>(null);
   const selected = response.solutions.find((solution) => solution.profile === selectedProfile) ?? response.solutions[0];
-  const editedSelected = selected === response.solutions[0] ? { ...selected, placements: editedPlacements } : selected;
+  const editedSelected = selected === response.solutions[0] ? { ...selected, placements: editedPlacements, metrics: editedCargoIds.size > 0 ? recalculateMetrics(container, cargoItems, editedPlacements, selected.metrics.loading_steps, selected.metrics.cargo_zones) : selected.metrics } : selected;
   const resetEdits = () => {
     setEditedPlacements(response.solutions[0]?.placements ?? []);
     setEditedCargoIds(new Set());
