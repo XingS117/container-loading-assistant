@@ -111,3 +111,10 @@ test("falls back to the top view when WebGL is unavailable", async () => {
   expect(screen.getByRole("button", { name: "俯视" })).toHaveAttribute("aria-pressed", "true");
   expect(screen.getByTestId("layout-svg")).toBeInTheDocument();
 });
+
+test("can lock a cargo from the legend", async () => {
+  const onToggleLockCargo = vi.fn();
+  render(<LoadVisualizer container={container} solution={solution} cargoItems={cargoItems} lockedCargoIds={new Set()} onToggleLockCargo={onToggleLockCargo} />);
+  await userEvent.click(screen.getByRole("button", { name: "锁定 A-01" }));
+  expect(onToggleLockCargo).toHaveBeenCalledWith("a");
+});

@@ -86,6 +86,7 @@ export function recommendProfile(response: PackResponse): SolutionProfile {
 export function SolutionWorkspace({ response, container, presets, cargoItems, onBack, onRecalculate, recalculating }: Props) {
   const [selectedProfile, setSelectedProfile] = useState<SolutionProfile>(() => recommendProfile(response));
   const [selectedCargoId, setSelectedCargoId] = useState<string | null>(null);
+  const [lockedCargoIds, setLockedCargoIds] = useState<Set<string>>(new Set());
   const [snapshots, setSnapshots] = useState<Partial<Record<SolutionProfile, string>>>({});
   const [recalculateContainerId, setRecalculateContainerId] = useState(container.id);
   const [recalculateError, setRecalculateError] = useState<string | null>(null);
@@ -194,7 +195,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
       )}
 
       <section className="workspace-grid">
-        <LoadVisualizer container={container} solution={selected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={setSelectedCargoId} onSnapshot={handleSnapshot} />
+        <LoadVisualizer container={container} solution={selected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={setSelectedCargoId} onSnapshot={handleSnapshot} lockedCargoIds={lockedCargoIds} onToggleLockCargo={(cargoId) => setLockedCargoIds((current) => { const next = new Set(current); if (next.has(cargoId)) next.delete(cargoId); else next.add(cargoId); return next; })} />
         <aside className="result-inspector">
           <div className="metric-strip">
             <div><span>体积利用率</span><strong>{selected.metrics.volume_utilization_pct}%</strong></div>

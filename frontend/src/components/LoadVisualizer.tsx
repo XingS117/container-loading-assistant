@@ -14,6 +14,8 @@ interface Props {
   selectedCargoId?: string | null;
   onSelectCargo?: (cargoId: string | null) => void;
   onSnapshot?: (dataUrl: string) => void;
+  lockedCargoIds?: Set<string>;
+  onToggleLockCargo?: (cargoId: string) => void;
 }
 
 const PALETTE = ["#0b8f79", "#df8b2f", "#3375b8", "#c6534d", "#6d6eb5", "#568b48", "#b15888", "#4b8996", "#9c6a3c", "#78818c"];
@@ -321,7 +323,7 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
   );
 }
 
-export function LoadVisualizer({ container, solution, cargoItems, selectedCargoId, onSelectCargo, onSnapshot }: Props) {
+export function LoadVisualizer({ container, solution, cargoItems, selectedCargoId, onSelectCargo, onSnapshot, lockedCargoIds, onToggleLockCargo }: Props) {
   const [mode, setMode] = useState<ViewMode>("3d");
   const [threeUnavailable, setThreeUnavailable] = useState(false);
   const maxStep = Math.max(1, ...solution.placements.map((item) => item.step));
@@ -387,7 +389,7 @@ export function LoadVisualizer({ container, solution, cargoItems, selectedCargoI
 
       {mode === "layers" && layers.length > 0 && <label className="layer-control no-print"><span>层高 {(layers[layerIndex] / 10).toFixed(1)} cm</span><input aria-label="查看层高" type="range" min="0" max={Math.max(0, layers.length - 1)} value={layerIndex} onChange={(event) => setLayerIndex(Number(event.target.value))} /></label>}
       <div className="cargo-legend no-print">
-        {cargoItems.map((cargo) => <button key={cargo.id} type="button" className={selectedCargoId === cargo.id ? "is-active" : ""} onClick={() => onSelectCargo?.(selectedCargoId === cargo.id ? null : cargo.id)}><i style={{ background: colors[cargo.id] }} />{cargo.sku}</button>)}
+        {cargoItems.map((cargo) => <span className="cargo-legend-item" key={cargo.id}><button type="button" className={selectedCargoId === cargo.id ? "is-active" : ""} onClick={() => onSelectCargo?.(selectedCargoId === cargo.id ? null : cargo.id)}><i style={{ background: colors[cargo.id] }} />{cargo.sku}</button><button type="button" className={`cargo-lock-button ${lockedCargoIds?.has(cargo.id) ? "is-locked" : ""}`} aria-label={`${lockedCargoIds?.has(cargo.id) ? "解锁" : "锁定"} ${cargo.sku}`} onClick={() => onToggleLockCargo?.(cargo.id)}>{lockedCargoIds?.has(cargo.id) ? "已锁定" : "锁定"}</button></span>)}
       </div>
     </div>
   );
