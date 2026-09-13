@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { LoadVisualizer, StaticLayout } from "./LoadVisualizer";
 import type { CargoInput, ContainerSpec, PackResponse, PackingSolution, SolutionProfile } from "../types";
 import { trackAnalyticsEvent } from "../lib/analytics";
+import { rotateCargoPlacements } from "../lib/layoutEdit";
 
 interface Props {
   response: PackResponse;
@@ -87,10 +88,13 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
   const [selectedProfile, setSelectedProfile] = useState<SolutionProfile>(() => recommendProfile(response));
   const [selectedCargoId, setSelectedCargoId] = useState<string | null>(null);
   const [lockedCargoIds, setLockedCargoIds] = useState<Set<string>>(new Set());
+  const [editedPlacements, setEditedPlacements] = useState(response.solutions[0]?.placements ?? []);
+  const [editMessage, setEditMessage] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<Partial<Record<SolutionProfile, string>>>({});
   const [recalculateContainerId, setRecalculateContainerId] = useState(container.id);
   const [recalculateError, setRecalculateError] = useState<string | null>(null);
   const selected = response.solutions.find((solution) => solution.profile === selectedProfile) ?? response.solutions[0];
+  const editedSelected = selected === response.solutions[0] ? { ...selected, placements: editedPlacements } : selected;
   const cargoById = Object.fromEntries(cargoItems.map((item) => [item.id, item]));
   const recommended = recommendProfile(response);
   const aiStrategy = response.ai_strategy;
@@ -195,7 +199,8 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
       )}
 
       <section className="workspace-grid">
-        <LoadVisualizer container={container} solution={selected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={setSelectedCargoId} onSnapshot={handleSnapshot} lockedCargoIds={lockedCargoIds} onToggleLockCargo={(cargoId) => setLockedCargoIds((current) => { const next = new Set(current); if (next.has(cargoId)) next.delete(cargoId); else next.add(cargoId); return next; })} />
+        {editMessage && <p className="edit-message" role="status">{editMessage}</p>}
+        <LoadVisualizer container={container} solution={editedSelected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={setSelectedCargoId} onSnapshot={handleSnapshot} lockedCargoIds={lockedCargoIds} onToggleLockCargo={(cargoId) => setLockedCargoIds((current) => { const next = new Set(current); if (next.has(cargoId)) next.delete(cargoId); else next.add(cargoId); return next; })} onRotateCargo={(cargoId) => { const cargo = cargoItems.find((item) => item.id === cargoId); if (!cargo) return; if (selected.profile !== "high_fill") { setEditMessage("当前版本先支持在装载率优先方案中编辑，其他方案请重新计算后复核"); return; } const result = rotateCargoPlacements(editedSelected.placements, cargo, container); setEditMessage(result.error ?? `${cargo.sku} 已旋转，布局通过边界和碰撞校验`); if (!result.error) setEditedPlacements(result.placements); }} />
         <aside className="result-inspector">
           <div className="metric-strip">
             <div><span>体积利用率</span><strong>{selected.metrics.volume_utilization_pct}%</strong></div>
