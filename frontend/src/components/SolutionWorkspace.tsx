@@ -171,6 +171,22 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
         })}
       </section>
 
+      <section className="solution-comparison no-print" aria-label="方案指标对比">
+        <h2>方案指标对比</h2>
+        <div className="comparison-table-wrap">
+          <table className="comparison-table">
+            <thead><tr><th>指标</th>{response.solutions.map((solution) => <th key={solution.profile}>{profileDisplayName[solution.profile]}{recommended === solution.profile ? " · 推荐" : ""}</th>)}</tr></thead>
+            <tbody>
+              <tr><th>装入件数</th>{response.solutions.map((solution) => <td key={solution.profile}>{solution.metrics.loaded_pieces} 件</td>)}</tr>
+              <tr><th>体积利用率</th>{response.solutions.map((solution) => <td key={solution.profile}>{solution.metrics.volume_utilization_pct}%</td>)}</tr>
+              <tr><th>前后偏差</th>{response.solutions.map((solution) => <td key={solution.profile}>{solution.metrics.length_imbalance_pct}%</td>)}</tr>
+              <tr><th>底层最大空隙</th>{response.solutions.map((solution) => <td key={solution.profile}>{solution.metrics.floor_largest_gap_mm ?? 0} mm</td>)}</tr>
+              <tr><th>装载步数</th>{response.solutions.map((solution) => <td key={solution.profile}>{solution.metrics.loading_steps} 步</td>)}</tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
       {selected.profile !== "stable" && selected.metrics.length_imbalance_pct > 10 && (
         <p className="balance-warning" role="alert">
           前后重量偏差较大（{selected.metrics.length_imbalance_pct}%），建议查看「重心稳妥」方案
