@@ -15,3 +15,7 @@ test("rejects a rotation that causes a collision", () => {
   const other = { ...placement, id: "b-0", cargo_id: "b", x_mm: 300, width_mm: 500 };
   expect(rotateCargoPlacements([placement, other], cargo, container).error).toContain("碰撞");
 });
+
+test("rejects editing a locked cargo", () => {
+  expect(rotateCargoPlacements([placement], cargo, container, new Set(["a"])).error).toContain("已锁定");
+});

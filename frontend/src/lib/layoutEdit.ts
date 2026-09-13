@@ -8,7 +8,8 @@ function intersects(left: Placement, right: Placement): boolean {
     && left.z_mm < right.z_mm + right.height_mm && left.z_mm + left.height_mm > right.z_mm;
 }
 
-export function rotateCargoPlacements(placements: Placement[], cargo: CargoInput, container: ContainerSpec): { placements: Placement[]; error?: string } {
+export function rotateCargoPlacements(placements: Placement[], cargo: CargoInput, container: ContainerSpec, lockedCargoIds?: Set<string>): { placements: Placement[]; error?: string } {
+  if (lockedCargoIds?.has(cargo.id)) return { placements, error: `${cargo.sku} 已锁定，请先解锁后再编辑` };
   const rotated = placements.map((placement) => {
     if (placement.cargo_id !== cargo.id) return placement;
     const rotation = nextRotation[placement.rotation];
