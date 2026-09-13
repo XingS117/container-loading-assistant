@@ -90,11 +90,17 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
   const [lockedCargoIds, setLockedCargoIds] = useState<Set<string>>(new Set());
   const [editedPlacements, setEditedPlacements] = useState(response.solutions[0]?.placements ?? []);
   const [editMessage, setEditMessage] = useState<string | null>(null);
+  const [editedCargoIds, setEditedCargoIds] = useState<Set<string>>(new Set());
   const [snapshots, setSnapshots] = useState<Partial<Record<SolutionProfile, string>>>({});
   const [recalculateContainerId, setRecalculateContainerId] = useState(container.id);
   const [recalculateError, setRecalculateError] = useState<string | null>(null);
   const selected = response.solutions.find((solution) => solution.profile === selectedProfile) ?? response.solutions[0];
   const editedSelected = selected === response.solutions[0] ? { ...selected, placements: editedPlacements } : selected;
+  const resetEdits = () => {
+    setEditedPlacements(response.solutions[0]?.placements ?? []);
+    setEditedCargoIds(new Set());
+    setEditMessage("已恢复计算生成的原始布局");
+  };
   const cargoById = Object.fromEntries(cargoItems.map((item) => [item.id, item]));
   const recommended = recommendProfile(response);
   const aiStrategy = response.ai_strategy;
@@ -138,6 +144,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
         </div>
       </header>
       {recalculateError && <p className="recalculate-error" role="alert">{recalculateError}</p>}
+      {editedCargoIds.size > 0 && <div className="edit-summary no-print" role="status"><strong>存在人工调整</strong><span>已调整 {editedCargoIds.size} 种货物。当前调整已通过边界和碰撞校验，尚未重新计算整体指标。</span><button type="button" onClick={resetEdits}>恢复原始布局</button></div>}
       {aiStrategy && <section className={`ai-strategy-status ai-strategy-status--${aiStrategy.status} no-print`} aria-label="AI 策略状态" role="status" aria-live="polite">
         <Sparkles size={18} aria-hidden="true" />
         <div>
@@ -200,7 +207,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
 
       <section className="workspace-grid">
         {editMessage && <p className="edit-message" role="status">{editMessage}</p>}
-        <LoadVisualizer container={container} solution={editedSelected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={setSelectedCargoId} onSnapshot={handleSnapshot} lockedCargoIds={lockedCargoIds} onToggleLockCargo={(cargoId) => setLockedCargoIds((current) => { const next = new Set(current); if (next.has(cargoId)) next.delete(cargoId); else next.add(cargoId); return next; })} onRotateCargo={(cargoId) => { const cargo = cargoItems.find((item) => item.id === cargoId); if (!cargo) return; if (selected.profile !== "high_fill") { setEditMessage("当前版本先支持在装载率优先方案中编辑，其他方案请重新计算后复核"); return; } const result = rotateCargoPlacements(editedSelected.placements, cargo, container); setEditMessage(result.error ?? `${cargo.sku} 已旋转，布局通过边界和碰撞校验`); if (!result.error) setEditedPlacements(result.placements); }} />
+        <LoadVisualizer container={container} solution={editedSelected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={setSelectedCargoId} onSnapshot={handleSnapshot} lockedCargoIds={lockedCargoIds} onToggleLockCargo={(cargoId) => setLockedCargoIds((current) => { const next = new Set(current); if (next.has(cargoId)) next.delete(cargoId); else next.add(cargoId); return next; })} onRotateCargo={(cargoId) => { const cargo = cargoItems.find((item) => item.id === cargoId); if (!cargo) return; if (selected.profile !== "high_fill") { setEditMessage("当前版本先支持在装载率优先方案中编辑，其他方案请重新计算后复核"); return; } const result = rotateCargoPlacements(editedSelected.placements, cargo, container); setEditMessage(result.error ?? `${cargo.sku} 已旋转，布局通过边界和碰撞校验`); if (!result.error) { setEditedPlacements(result.placements); setEditedCargoIds((current) => new Set(current).add(cargoId)); trackAnalyticsEvent("pack_layout_edited", { action: "rotate", cargo_id: cargoId }); } }} />
         <aside className="result-inspector">
           <div className="metric-strip">
             <div><span>体积利用率</span><strong>{selected.metrics.volume_utilization_pct}%</strong></div>

@@ -206,6 +206,9 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 .cargo-lock-button { min-height: 27px; padding: 0 5px; color: var(--muted); background: #f5f7f5; border: 1px solid var(--line); border-radius: 3px; font-size: 10px; }
 .cargo-lock-button.is-locked { color: var(--accent-dark); background: #e3f3eb; border-color: #9ccbb5; }
 .edit-message { margin: 8px 0; padding: 8px 10px; color: #31564a; background: #edf7f1; border: 1px solid #b9d8c6; border-radius: 4px; font-size: 12px; }
+.edit-summary { width: min(1380px, calc(100% - 32px)); margin: 12px auto 0; padding: 9px 12px; display: flex; align-items: center; gap: 10px; color: #6b4a18; background: #fff8e9; border: 1px solid #e4c98f; border-radius: 5px; font-size: 12px; }
+.edit-summary span { color: #765f35; }
+.edit-summary button { margin-left: auto; padding: 4px 8px; color: #6b4a18; background: transparent; border: 1px solid #cba967; border-radius: 3px; font-size: 11px; }
 .result-inspector { padding: 18px; border-left: 1px solid var(--line); }
 .metric-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); }
 .metric-strip > div { padding: 11px; display: grid; gap: 4px; background: white; }
