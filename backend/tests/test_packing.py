@@ -1541,3 +1541,14 @@ def test_layout_advice_covers_every_validator_error_code():
     assert validator_codes, "应能从 validator.py 提取错误码"
     missing = sorted(validator_codes - set(LAYOUT_ADVICE))
     assert not missing, f"LAYOUT_ADVICE 缺少以下错误码的建议：{missing}"
+def test_locked_layout_is_rejected_when_out_of_bounds():
+    from app.models import PackRequest
+    from app.packing import PackingFailure, pack_order
+
+    request = PackRequest.model_validate({
+        "container": {"id": "small", "name": "测试柜", "inner_length_mm": 1000, "inner_width_mm": 1000, "inner_height_mm": 1000, "door_width_mm": 1000, "door_height_mm": 1000, "max_payload_g": 1000000},
+        "cargo_items": [{"id": "a", "sku": "A", "name": "A", "kind": "carton", "length_mm": 600, "width_mm": 500, "height_mm": 500, "weight_g": 100, "quantity": 1, "allowed_orientations": ["LWH"]}],
+        "locked_placements": [{"id": "a-0", "cargo_id": "a", "instance_index": 0, "x_mm": 500, "y_mm": 0, "z_mm": 0, "length_mm": 600, "width_mm": 500, "height_mm": 500, "rotation": "LWH", "weight_g": 100, "step": 1}],
+    })
+    with pytest.raises(PackingFailure, match="锁定布局无效"):
+        pack_order(request)

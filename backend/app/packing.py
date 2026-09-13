@@ -6019,6 +6019,17 @@ def pack_order(
     try:
         if time_budget_seconds is not None and time_budget_seconds <= 0:
             raise PackingBudgetExceeded
+        if request.locked_placements:
+            locked_validation = validate_solution(
+                request.container,
+                request.cargo_items,
+                request.locked_placements,
+                item_gap_mm=request.item_gap_mm,
+            )
+            if not locked_validation.valid:
+                first_error = locked_validation.errors[0]
+                advice = LAYOUT_ADVICE.get(first_error.code, "请调整锁定货物位置后重试")
+                raise PackingFailure("INVALID_LOCKED_LAYOUT", f"锁定布局无效：{first_error.message}", advice)
         return _pack_order_full(request)
     except PackingBudgetExceeded:
         _packing_deadline.reset(token)
