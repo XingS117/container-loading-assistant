@@ -1,5 +1,5 @@
 import { orientationsFor, validateCargo } from "./cargo";
-import type { AIModelConfig, CargoInput, ContainerSpec, PackResponse } from "../types";
+import type { AIModelConfig, CargoInput, ContainerSpec, PackResponse, SolutionProfile } from "../types";
 
 async function readJsonResponse<T>(response: Response, context: string): Promise<T> {
   const body = await response.text();
@@ -25,6 +25,7 @@ export async function packOrder(
   cargoItems: CargoInput[],
   itemGapCm: number,
   aiConfig?: AIModelConfig,
+  preferredProfile: SolutionProfile = "high_fill",
 ): Promise<PackResponse> {
   const validationError = validateCargo(cargoItems);
   if (validationError) throw new Error(validationError);
@@ -45,6 +46,7 @@ export async function packOrder(
     body: JSON.stringify({
       container,
       item_gap_mm: Math.round(itemGapCm * 10),
+      preferred_profile: preferredProfile,
       cargo_items: cargoItems.map((item) => ({
         id: item.id,
         sku: item.sku.trim(),

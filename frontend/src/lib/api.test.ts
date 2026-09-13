@@ -44,6 +44,18 @@ test("sends AI provider settings only as request headers", async () => {
   expect(request.body).not.toContain("sk-test");
 });
 
+test("sends the user's layout priority in the packing request", async () => {
+  const fetchSpy = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(new Response(JSON.stringify({ request_id: "goal", solutions: [] }), { status: 200 }));
+
+  await packOrder(container, [createCargo("GOAL")], 0, undefined, "easy");
+
+  expect(JSON.parse(fetchSpy.mock.calls[0][1]?.body as string)).toMatchObject({
+    preferred_profile: "easy",
+  });
+});
+
 test("explains an HTML gateway response instead of exposing a JSON parse error", async () => {
   vi.spyOn(globalThis, "fetch").mockResolvedValue(
     new Response("<html><h1>502 Bad Gateway</h1></html>", {

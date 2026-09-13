@@ -12,7 +12,7 @@ import { createCargo, validateCargo } from "./lib/cargo";
 import { cloneCargoPreset } from "./lib/cargoPresets";
 import { downloadCargoTemplate, readCargoExcel } from "./lib/excel";
 import { trackAnalyticsEvent } from "./lib/analytics";
-import type { AIModelConfig, CargoInput, CargoPreset, ContainerSpec, PackResponse } from "./types";
+import type { AIModelConfig, CargoInput, CargoPreset, ContainerSpec, PackResponse, SolutionProfile } from "./types";
 
 const STORAGE_KEY = "container-loading-assistant-draft-v1";
 
@@ -39,6 +39,7 @@ export default function App() {
   const [cargoItems, setCargoItems] = useState<CargoInput[]>(draft.cargoItems?.length ? draft.cargoItems : [createCargo("SKU-001")]);
   const [itemGapCm, setItemGapCm] = useState(draft.itemGapCm ?? 0);
   const [clearanceCm, setClearanceCm] = useState(draft.clearanceCm ?? 0);
+  const [preferredProfile, setPreferredProfile] = useState<SolutionProfile>("high_fill");
   const [aiConfig, setAIConfig] = useState<AIModelConfig>(loadAIConfig);
   const [showModelSettings, setShowModelSettings] = useState(false);
   const [result, setResult] = useState<PackResponse | null>(null);
@@ -71,7 +72,7 @@ export default function App() {
     setError(null);
     try {
       const requestContainer = { ...nextContainer, clearance_mm: Math.round(clearanceCm * 10) };
-      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig);
+      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig, preferredProfile);
       setContainer(nextContainer);
       setResult(nextResult);
       trackAnalyticsEvent("pack_solutions_generated");
@@ -162,6 +163,11 @@ export default function App() {
         <section className="section-block settings-block" aria-labelledby="settings-heading">
           <div className="section-heading"><div><span className="step-index">03</span><h2 id="settings-heading">计算设置</h2></div></div>
           <div className="settings-grid">
+            <label><span>本次优先目标</span><select aria-label="本次优先目标" value={preferredProfile} onChange={(event) => setPreferredProfile(event.target.value as SolutionProfile)}>
+              <option value="high_fill">高装载率</option>
+              <option value="stable">优先稳定</option>
+              <option value="easy">优先易操作</option>
+            </select></label>
             <label><span>货物间隙</span><span className="unit-input"><input type="number" min="0" step="0.1" value={itemGapCm} onChange={(event) => setItemGapCm(Number(event.target.value))} /><i>cm</i></span></label>
             <label><span>柜体安全边距</span><span className="unit-input"><input type="number" min="0" step="0.1" value={clearanceCm} onChange={(event) => setClearanceCm(Number(event.target.value))} /><i>cm</i></span></label>
             <div className="setting-summary"><FileSpreadsheet size={18} /><span>尺寸按厘米录入，计算时使用整数毫米<br />{aiConfig.apiKey.trim() ? `AI 策略：${aiConfig.model}` : "未配置 AI 时使用本地算法"}</span></div>
