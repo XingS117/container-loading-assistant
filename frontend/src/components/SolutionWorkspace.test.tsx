@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import { classifySolutionWarning, explainFloorRisk, recommendProfile, SolutionWorkspace } from "./SolutionWorkspace";
+import { classifySolutionWarning, explainFloorRisk, loadingStepLabels, recommendProfile, SolutionWorkspace } from "./SolutionWorkspace";
 import type { CargoInput, ContainerSpec, PackResponse, SolutionProfile } from "../types";
 
 
@@ -91,6 +91,18 @@ test("explains whether a floor gap needs stability review", () => {
   expect(explainFloorRisk(solution)).toContain("需要现场复核");
   solution.metrics.floor_largest_gap_mm = 20;
   expect(explainFloorRisk(solution)).toContain("一般可接受");
+});
+
+test("lists loading steps from door to container end", () => {
+  const solution = makeSolution("easy", 3);
+  solution.zones = [
+    { step: 2, cargo_id: "b", x_mm: 1000, y_mm: 0, length_mm: 100, width_mm: 100, piece_count: 2 },
+    { step: 1, cargo_id: "a", x_mm: 0, y_mm: 0, length_mm: 100, width_mm: 100, piece_count: 3 },
+  ];
+  expect(loadingStepLabels(solution, [{ id: "a", sku: "A", quantity: 3 } as CargoInput, { id: "b", sku: "B", quantity: 2 } as CargoInput)).toEqual([
+    "第 1 步：A × 3 件",
+    "第 2 步：B × 2 件",
+  ]);
 });
 
 

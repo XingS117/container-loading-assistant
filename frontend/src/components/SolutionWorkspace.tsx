@@ -58,6 +58,13 @@ export function explainFloorRisk(solution: PackingSolution): string {
   return `底层最大空隙 ${Math.max(largestGap, transverseGap)} mm，一般可接受，当前未发现明显支撑风险`;
 }
 
+export function loadingStepLabels(solution: PackingSolution, cargoItems: CargoInput[]): string[] {
+  const names = Object.fromEntries(cargoItems.map((item) => [item.id, item.sku]));
+  return [...solution.zones]
+    .sort((left, right) => left.step - right.step)
+    .map((zone) => `第 ${zone.step} 步：${names[zone.cargo_id] ?? zone.cargo_id} × ${zone.piece_count} 件`);
+}
+
 export function recommendProfile(response: PackResponse): SolutionProfile {
   if (response.recommended_profile && response.solutions.some((solution) => solution.profile === response.recommended_profile)) {
     return response.recommended_profile;
@@ -187,6 +194,12 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
           <div className="load-summary">
             <h2>空隙与支撑判断</h2>
             <p>{explainFloorRisk(selected)}</p>
+          </div>
+          <div className="load-summary">
+            <h2>装载步骤</h2>
+            {loadingStepLabels(selected, cargoItems).length > 0
+              ? loadingStepLabels(selected, cargoItems).map((step) => <p key={step}>{step}</p>)
+              : <p>当前方案暂无可拆分的区域步骤，请按 3D 图和装入明细现场复核。</p>}
           </div>
           <div className="load-summary">
             <h2>装入明细</h2>
