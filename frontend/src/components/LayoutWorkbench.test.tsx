@@ -25,6 +25,13 @@ test('edits any profile, reviews exact draft and applies authoritative metrics',
   expect(apply).toHaveBeenCalledWith(expect.objectContaining({ profile: 'easy', placements: [expect.objectContaining({ x_mm: 500 })], metrics: valid.metrics }), expect.any(Set));
 });
 
+test('shows cargo dimensions as read-only while allowing position edits', async () => {
+  render(<LayoutWorkbench solution={solution} container={container} cargoItems={[cargo]} itemGapCm={0} onApply={vi.fn()} onClose={() => {}} />);
+  await userEvent.click(screen.getByRole('button', { name: 'A · 第 1 件' }));
+  expect(screen.getByLabelText('货物尺寸（不可修改）')).toHaveValue('60 × 40 × 40 cm');
+  expect(screen.getByLabelText('货物尺寸（不可修改）')).toHaveAttribute('readonly');
+});
+
 test('invalid draft cannot be applied and undo restores coordinates', async () => {
   vi.mocked(reviewLayout).mockResolvedValue({ valid: false, errors: [{ code: 'UNSUPPORTED', message: '缺少支撑', placement_ids: ['a-0'] }], metrics: null, zones: [] });
   render(<LayoutWorkbench solution={solution} container={container} cargoItems={[cargo]} itemGapCm={0} onApply={vi.fn()} onClose={() => {}} />);

@@ -124,6 +124,7 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
           <p>{cargo.sku} · 第 {selected.instance_index + 1} 件</p>
           <label><input type="checkbox" checked={wholeCargo} onChange={e => setWholeCargo(e.target.checked)} />移动同 SKU 全部货物</label>
           <button onClick={() => setLocked(previous => { const next = new Set(previous); if (next.has(cargo.id)) next.delete(cargo.id); else next.add(cargo.id); return next; })}>{locked.has(cargo.id) ? "解锁该 SKU" : "锁定该 SKU"}</button>
+          <label className="workbench-readonly-field">货物尺寸（不可修改）<input aria-label="货物尺寸（不可修改）" value={`${cargo.length_cm} × ${cargo.width_cm} × ${cargo.height_cm} cm`} readOnly /></label>
           <div className="workbench-coordinates">{["X 柜长 cm", "Y 柜宽 cm", "Z 高度 cm"].map((label, i) => <label key={label}>{label}<input aria-label={label} type="number" step="1" value={position[i]} disabled={locked.has(cargo.id)} onChange={e => setPosition(p => p.map((v, j) => i === j ? e.target.value : v))} /></label>)}</div>
           <button disabled={locked.has(cargo.id)} onClick={() => {
             if (position.some(v => !v.trim() || !Number.isFinite(Number(v)))) { setError("请输入有效坐标"); return; }

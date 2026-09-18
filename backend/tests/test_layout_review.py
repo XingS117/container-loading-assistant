@@ -39,6 +39,14 @@ def test_review_rejects_duplicate_ids():
     assert client.post("/api/v1/layout/review", json=body).status_code == 422
 
 
+def test_review_rejects_changed_cargo_dimensions():
+    body = payload()
+    body["placements"][0]["length_mm"] = 600
+    data = client.post("/api/v1/layout/review", json=body).json()
+    assert data["valid"] is False
+    assert any(e["code"] == "DIMENSIONS_MISMATCH" for e in data["errors"])
+
+
 def test_review_checks_overlap_load_and_clearance():
     for change, code in [("overlap", "OVERLAP"), ("load", "TOP_LOAD_EXCEEDED"), ("clearance", "OUT_OF_BOUNDS")]:
         body = deepcopy(payload())

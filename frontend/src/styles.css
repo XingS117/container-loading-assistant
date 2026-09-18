@@ -222,6 +222,7 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 .workbench-caption { position: absolute; left: 12px; bottom: 10px; padding: 5px 8px; color: var(--muted); background: rgba(255,255,255,.85); border: 1px solid var(--line); border-radius: 3px; font-size: 11px; pointer-events: none; }
 .workbench-inspector p, .workbench-inspector small, .workbench-cargo p { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .workbench-inspector > label { display: block; margin: 8px 0; color: var(--muted); font-size: 11px; }
+.workbench-readonly-field input { color: var(--muted); background: #f3f6f3; cursor: not-allowed; }
 .workbench-inspector > label input[type="checkbox"] { width: auto; min-height: 0; margin-right: 5px; }
 .workbench-coordinates { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
 .workbench-coordinates label { color: var(--muted); font-size: 10px; }
