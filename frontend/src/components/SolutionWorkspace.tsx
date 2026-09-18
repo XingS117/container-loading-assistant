@@ -157,49 +157,6 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
       </header>
       {recalculateError && <p className="recalculate-error" role="alert">{recalculateError}</p>}
       {solutionOverrides[selectedProfile] && <div className="edit-summary no-print" role="status"><strong>当前方案已人工调整</strong><span>布局与指标已通过后端规则复核；打印使用本次应用的布局。</span><button type="button" onClick={resetEdits}>恢复原始布局</button></div>}
-      <div className="solution-feedback no-print" role="group" aria-label="方案反馈">
-        <span>这个方案对你有帮助吗？</span>
-        <button type="button" className={feedback === "accepted" ? "is-selected" : ""} onClick={() => { setFeedback("accepted"); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "accepted" }); }}>满意</button>
-        <button type="button" className={feedback === "needs_adjustment" ? "is-selected" : ""} onClick={() => { setFeedback("needs_adjustment"); setAdjustmentOpen(true); setAdjustmentSubmitted(false); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "needs_adjustment" }); }}>需要调整</button>
-      </div>
-      {adjustmentOpen && <section className="adjustment-panel no-print" aria-label="方案调整说明">
-        <div>
-          <h2>告诉我们希望怎么调整</h2>
-          <p>反馈会帮助定位问题；提交后当前布局不会自动改变。你可以先进入人工调整，或重新计算一套新方案。</p>
-        </div>
-        <div className="adjustment-topics" role="group" aria-label="调整原因">
-          {["中间空隙太大", "上层支撑不连续", "重心需要更稳", "希望保持更多件数", "希望更易装卸"].map((topic) => (
-            <label key={topic}><input type="checkbox" checked={adjustmentTopics.includes(topic)} onChange={(event) => setAdjustmentTopics((current) => event.target.checked ? [...current, topic] : current.filter((item) => item !== topic))} />{topic}</label>
-          ))}
-        </div>
-        <textarea aria-label="补充调整要求" placeholder="例如：把深绿色货物向中间集中，数量少的货物放两侧" value={adjustmentNote} onChange={(event) => setAdjustmentNote(event.target.value)} rows={3} />
-        <div className="adjustment-actions">
-          <button type="button" className="primary-outline-button" onClick={() => { setAdjustmentSubmitted(true); trackAnalyticsEvent("pack_solution_adjustment_submitted", { profile: selectedProfile, topics: adjustmentTopics.join("|") || "none", has_note: Boolean(adjustmentNote.trim()) }); }}>提交调整说明</button>
-          <button type="button" className="text-button" onClick={() => setWorkbenchOpen(true)}>进入人工调整</button>
-          <button type="button" className="text-button" onClick={handleRecalculate} disabled={recalculating}>重新计算</button>
-          <button type="button" className="text-button" onClick={() => setAdjustmentOpen(false)}>收起</button>
-        </div>
-        {adjustmentSubmitted && <p className="adjustment-confirmation" role="status">调整说明已记录。当前布局未改变；说明仅暂存本页，文字尚未发送给算法。请进入人工调整应用具体位置。</p>}
-      </section>}
-      {aiStrategy && <section className={`ai-strategy-status ai-strategy-status--${aiStrategy.status} no-print`} aria-label="AI 策略状态" role="status" aria-live="polite">
-        <Sparkles size={18} aria-hidden="true" />
-        <div>
-          <h2>AI 策略</h2>
-          <p>{aiStrategy.message}</p>
-          {hasProfileHints && <small>三种方案按目标分别优化</small>}
-          {aiStrategy.applied && <small>
-            {aiStrategy.row_groups.length > 0
-              ? `已采纳 ${aiStrategy.row_groups.length} 个行组建议`
-              : "已采纳 AI 引导候选"}
-          </small>}
-          {aiStrategy.coordinate_candidates_applied && aiStrategy.coordinate_candidates_applied.length > 0 && (
-            <small>
-              已采纳经校验的 AI 坐标候选：{aiStrategy.coordinate_candidates_applied.map((profile) => coordinateProfileNames[profile]).join("、")}
-            </small>
-          )}
-          {aiStrategy.provider && aiStrategy.model && <small>{aiStrategy.provider} / {aiStrategy.model}</small>}
-        </div>
-      </section>}
 
       <section className="solution-tabs" aria-label="装柜方案">
         {response.solutions.map((baseSolution) => { const solution = solutionOverrides[baseSolution.profile] ?? baseSolution;
@@ -219,8 +176,8 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
         })}
       </section>
 
-      <section className="solution-comparison no-print" aria-label="方案指标对比">
-        <h2>方案指标对比</h2>
+      <details className="solution-comparison no-print" aria-label="方案指标对比">
+        <summary>方案指标对比 <span>展开查看三种方案的详细指标</span></summary>
         <div className="comparison-table-wrap">
           <table className="comparison-table">
             <thead><tr><th>指标</th>{response.solutions.map((baseSolution) => { const solution = solutionOverrides[baseSolution.profile] ?? baseSolution; return <th key={solution.profile}>{profileDisplayName[solution.profile]}{recommended === solution.profile ? " · 推荐" : ""}</th>; })}</tr></thead>
@@ -229,7 +186,7 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
             </tbody>
           </table>
         </div>
-      </section>
+      </details>
 
       {selected.profile !== "stable" && selected.metrics.length_imbalance_pct > 10 && (
         <p className="balance-warning" role="alert">
@@ -238,9 +195,9 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
       )}
 
       <section className="workspace-grid">
-        {editMessage && <p className="edit-message" role="status">{editMessage}</p>}
         <LoadVisualizer container={container} solution={selected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={setSelectedCargoId} onSnapshot={handleSnapshot} />
         <aside className="result-inspector">
+          {editMessage && <p className="edit-message" role="status">{editMessage}</p>}
           <div className="metric-strip">
             <div><span>体积利用率</span><strong>{selected.metrics.volume_utilization_pct}%</strong></div>
             <div><span>重量利用率</span><strong>{selected.metrics.weight_utilization_pct}%</strong></div>
@@ -284,6 +241,50 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
           </section>}
         </aside>
       </section>
+
+      <div className="solution-feedback no-print" role="group" aria-label="方案反馈">
+        <span>这个方案对你有帮助吗？</span>
+        <button type="button" className={feedback === "accepted" ? "is-selected" : ""} onClick={() => { setFeedback("accepted"); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "accepted" }); }}>满意</button>
+        <button type="button" className={feedback === "needs_adjustment" ? "is-selected" : ""} onClick={() => { setFeedback("needs_adjustment"); setAdjustmentOpen(true); setAdjustmentSubmitted(false); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "needs_adjustment" }); }}>需要调整</button>
+      </div>
+      {adjustmentOpen && <section className="adjustment-panel no-print" aria-label="方案调整说明">
+        <div>
+          <h2>告诉我们希望怎么调整</h2>
+          <p>反馈会帮助定位问题；提交后当前布局不会自动改变。你可以先进入人工调整，或重新计算一套新方案。</p>
+        </div>
+        <div className="adjustment-topics" role="group" aria-label="调整原因">
+          {["中间空隙太大", "上层支撑不连续", "重心需要更稳", "希望保持更多件数", "希望更易装卸"].map((topic) => (
+            <label key={topic}><input type="checkbox" checked={adjustmentTopics.includes(topic)} onChange={(event) => setAdjustmentTopics((current) => event.target.checked ? [...current, topic] : current.filter((item) => item !== topic))} />{topic}</label>
+          ))}
+        </div>
+        <textarea aria-label="补充调整要求" placeholder="例如：把深绿色货物向中间集中，数量少的货物放两侧" value={adjustmentNote} onChange={(event) => setAdjustmentNote(event.target.value)} rows={3} />
+        <div className="adjustment-actions">
+          <button type="button" className="primary-outline-button" onClick={() => { setAdjustmentSubmitted(true); trackAnalyticsEvent("pack_solution_adjustment_submitted", { profile: selectedProfile, topics: adjustmentTopics.join("|") || "none", has_note: Boolean(adjustmentNote.trim()) }); }}>提交调整说明</button>
+          <button type="button" className="text-button" onClick={() => setWorkbenchOpen(true)}>进入人工调整</button>
+          <button type="button" className="text-button" onClick={handleRecalculate} disabled={recalculating}>重新计算</button>
+          <button type="button" className="text-button" onClick={() => setAdjustmentOpen(false)}>收起</button>
+        </div>
+        {adjustmentSubmitted && <p className="adjustment-confirmation" role="status">调整说明已记录。当前布局未改变；说明仅暂存本页，文字尚未发送给算法。请进入人工调整应用具体位置。</p>}
+      </section>}
+      {aiStrategy && <section className={`ai-strategy-status ai-strategy-status--${aiStrategy.status} no-print`} aria-label="AI 策略状态" role="status" aria-live="polite">
+        <Sparkles size={18} aria-hidden="true" />
+        <div>
+          <h2>AI 策略</h2>
+          <p>{aiStrategy.message}</p>
+          {hasProfileHints && <small>三种方案按目标分别优化</small>}
+          {aiStrategy.applied && <small>
+            {aiStrategy.row_groups.length > 0
+              ? `已采纳 ${aiStrategy.row_groups.length} 个行组建议`
+              : "已采纳 AI 引导候选"}
+          </small>}
+          {aiStrategy.coordinate_candidates_applied && aiStrategy.coordinate_candidates_applied.length > 0 && (
+            <small>
+              已采纳经校验的 AI 坐标候选：{aiStrategy.coordinate_candidates_applied.map((profile) => coordinateProfileNames[profile]).join("、")}
+            </small>
+          )}
+          {aiStrategy.provider && aiStrategy.model && <small>{aiStrategy.provider} / {aiStrategy.model}</small>}
+        </div>
+      </section>}
 
       <section className="print-only print-report">
         <h1>装柜方案助手</h1>

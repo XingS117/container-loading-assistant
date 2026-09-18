@@ -2,8 +2,8 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import { LoadVisualizer } from "./LoadVisualizer";
 import { reviewLayout } from "../lib/api";
 import { orientationsFor } from "../lib/cargo";
-import { editHistory, moveDraft } from "../lib/workbench";
-import type { CargoInput, ContainerSpec, LayoutReviewResponse, PackingSolution, Placement } from "../types";
+import { constrainMove, editHistory, geometryError } from "../lib/workbench";
+import type { CargoInput, ContainerSpec, LayoutReviewResponse, Orientation, PackingSolution, Placement } from "../types";
 
 interface Props {
   solution: PackingSolution;
@@ -25,6 +25,10 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
   const [position, setPosition] = useState(["0", "0", "0"]);
   const [review, setReview] = useState<{ placements: Placement[]; result: LayoutReviewResponse } | null>(null);
   const [error, setError] = useState("");
+  const [actionError, setActionError] = useState("");
+  const [checking, setChecking] = useState(false);
+  const busyRef = useRef(false);
+  const aliveRef = useRef(true);
   const [panel, setPanel] = useState<"cargo" | "inspect" | null>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   const placements = history.present;
@@ -36,11 +40,12 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
   const names = Object.fromEntries(cargoItems.map(c => [c.id, c.sku]));
 
   useEffect(() => {
+    aliveRef.current = true;
     const previous = document.activeElement as HTMLElement | null;
     const overflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     closeRef.current?.focus();
-    return () => { document.body.style.overflow = overflow; previous?.focus(); };
+    return () => { aliveRef.current = false; document.body.style.overflow = overflow; previous?.focus(); };
   }, []);
 
   useEffect(() => {
@@ -58,14 +63,39 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
     return () => { active = false; window.clearTimeout(timer); };
   }, [placements, container, cargoItems, itemGapCm]);
 
-  const edit = (next: Placement[]) => {
+  const edit = async (next: Placement[]) => {
+    if (busyRef.current) return;
     if (next === placements || JSON.stringify(next) === JSON.stringify(placements)) return;
-    dispatch({ type: "edit", placements: next });
+    const issue = geometryError(next, container, itemGapCm * 10);
+    if (issue) { setActionError(issue); return; }
+    busyRef.current = true; setChecking(true); setActionError("");
+    try {
+      const result = await reviewLayout(container, cargoItems, next, itemGapCm);
+      if (!aliveRef.current) return;
+      if (!result.valid || !result.metrics) { setActionError(result.errors.map(e => e.message).join('；') || '校验未通过，已保留原位置'); return; }
+      dispatch({ type: "edit", placements: next });
+    } catch (reason) {
+      if (aliveRef.current) setActionError(`${reason instanceof Error ? reason.message : '检查失败'}，已保留原位置`);
+    } finally {
+      busyRef.current = false;
+      if (aliveRef.current) setChecking(false);
+    }
   };
   const move = (id: string, x: number, y: number, z?: number) => {
     const item = placements.find(p => p.id === id);
     if (!item) return;
-    edit(moveDraft(placements, id, [Math.round(x), Math.round(y), Math.round(z ?? item.z_mm)], wholeCargo, locked));
+    edit(constrainMove(placements, id, [x, y, z ?? item.z_mm], wholeCargo, locked, container));
+  };
+  const rotate = (rotation: Orientation) => {
+    if (!selected || !cargo || locked.has(cargo.id) || !orientationsFor(cargo.orientation_mode).includes(rotation)) return;
+    const dims: Record<string, number> = { L: Math.round(cargo.length_cm * 10), W: Math.round(cargo.width_cm * 10), H: Math.round(cargo.height_cm * 10) };
+    edit(placements.map(p => p.id !== selected.id ? p : { ...p, rotation, length_mm: dims[rotation[0]], width_mm: dims[rotation[1]], height_mm: dims[rotation[2]] }));
+  };
+  const previewMove = (id: string, x: number, y: number) => {
+    const item = placements.find(p => p.id === id);
+    if (!item) return null;
+    const next = constrainMove(placements, id, [x, y, item.z_mm], wholeCargo, locked, container);
+    return geometryError(next, container, itemGapCm * 10) ? null : next.find(p => p.id === id) ?? null;
   };
   const close = () => { if (!dirty || window.confirm("放弃本次尚未应用的调整？")) onClose(); };
   const apply = () => {
@@ -89,16 +119,16 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
       <div><small>LAYOUT STUDIO · {solution.name}</small><h1>装柜编辑工作台</h1></div>
       <div className="workbench-actions">
         <button ref={closeRef} onClick={close}>返回方案</button>
-        <button disabled={!history.past.length} onClick={() => dispatch({ type: "undo" })}>撤销</button>
-        <button disabled={!history.future.length} onClick={() => dispatch({ type: "redo" })}>重做</button>
-        <button disabled={!dirty} onClick={() => edit(solution.placements)}>恢复原方案</button>
-        <button className="workbench-apply" disabled={!dirty || !currentReview?.valid || !currentReview.metrics} onClick={apply}>应用调整</button>
+        <button disabled={checking || !history.past.length} onClick={() => { setActionError(''); dispatch({ type: "undo" }); }}>撤销</button>
+        <button disabled={checking || !history.future.length} onClick={() => { setActionError(''); dispatch({ type: "redo" }); }}>重做</button>
+        <button disabled={checking || !dirty} onClick={() => edit(solution.placements)}>恢复原方案</button>
+        <button className="workbench-apply" disabled={checking || !dirty || !currentReview?.valid || !currentReview.metrics} onClick={apply}>应用调整</button>
       </div>
     </header>
     <nav className="workbench-mode" aria-label="编辑操作">
       <button aria-pressed={!moving} onClick={() => setMoving(false)}>浏览 / 选择</button>
       <button aria-pressed={moving} onClick={() => setMoving(true)}>移动货物</button>
-      <span>{moving ? "3D 拖动彩色轴或平面手柄；俯视图直接拖动。Esc 退出移动" : "点击货物选中；拖动空白处转视角，滚轮缩放"}</span>
+      <span>{moving ? "仅在当前层平移，柜壁自动限位；上层须有完整支撑。Esc 退出移动" : "点击货物选中；拖动空白处转视角，滚轮缩放"}</span>
       <button className="workbench-panel-toggle" onClick={() => setPanel(panel === "cargo" ? null : "cargo")}>货物列表</button>
       <button className="workbench-panel-toggle" onClick={() => setPanel(panel === "inspect" ? null : "inspect")}>坐标 / 检查</button>
     </nav>
@@ -115,28 +145,35 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
         <LoadVisualizer container={container} solution={{ ...solution, placements, zones: [] }} cargoItems={cargoItems}
           selectedCargoId={selected?.cargo_id} selectedPlacementId={selectedId} onSelectPlacement={setSelectedId}
           onSelectCargo={id => setSelectedId(placements.find(p => p.cargo_id === id)?.id ?? null)}
-          onMovePlacement={moving ? move : undefined} editing={moving} hideLegend lockedCargoIds={locked} invalidPlacementIds={invalidIds} />
+          onMovePlacement={moving && !checking ? move : undefined} previewMove={previewMove} editing={moving && !checking} hideLegend lockedCargoIds={locked} invalidPlacementIds={invalidIds} />
+        {(actionError || checking) && <div className="workbench-action-status" role="alert">{checking ? '正在校验承重和摆放规则…' : actionError}</div>}
         <div className="workbench-caption">{selected ? `${names[selected.cargo_id]} · 第 ${selected.instance_index + 1} 件` : "先点击货物，再选择移动或输入坐标"} · 未应用草稿</div>
       </div>
       <aside className={`workbench-inspector ${panel === "inspect" ? "is-open" : ""}`}>
         <h2>位置与朝向</h2>
         {selected && cargo ? <>
+          <fieldset disabled={checking} className="workbench-edit-fields">
           <p>{cargo.sku} · 第 {selected.instance_index + 1} 件</p>
           <label><input type="checkbox" checked={wholeCargo} onChange={e => setWholeCargo(e.target.checked)} />移动同 SKU 全部货物</label>
           <button onClick={() => setLocked(previous => { const next = new Set(previous); if (next.has(cargo.id)) next.delete(cargo.id); else next.add(cargo.id); return next; })}>{locked.has(cargo.id) ? "解锁该 SKU" : "锁定该 SKU"}</button>
           <label className="workbench-readonly-field">货物尺寸（不可修改）<input aria-label="货物尺寸（不可修改）" value={`${cargo.length_cm} × ${cargo.width_cm} × ${cargo.height_cm} cm`} readOnly /></label>
+          <div className="workbench-nudge" role="group" aria-label="按货物尺寸平移">
+            <button disabled={locked.has(cargo.id)} onClick={() => move(selected.id, selected.x_mm - selected.length_mm - itemGapCm * 10, selected.y_mm)}>向柜头移一件</button>
+            <button disabled={locked.has(cargo.id)} onClick={() => move(selected.id, selected.x_mm + selected.length_mm + itemGapCm * 10, selected.y_mm)}>向柜门移一件</button>
+            <button disabled={locked.has(cargo.id)} onClick={() => move(selected.id, selected.x_mm, selected.y_mm - selected.width_mm - itemGapCm * 10)}>左移一件宽</button>
+            <button disabled={locked.has(cargo.id)} onClick={() => move(selected.id, selected.x_mm, selected.y_mm + selected.width_mm + itemGapCm * 10)}>右移一件宽</button>
+            <button disabled={locked.has(cargo.id)} onClick={() => rotate(`${selected.rotation[1]}${selected.rotation[0]}${selected.rotation[2]}` as Orientation)}>水平旋转 90°</button>
+            <button disabled={locked.has(cargo.id)} onClick={() => move(selected.id, selected.x_mm, selected.y_mm, container.clearance_mm ?? 0)}>放回底层</button>
+          </div>
+          <small>方向以俯视图为准；步距为当前占用长/宽加间隙。高度只能落在柜底或完整承载面上。</small>
           <div className="workbench-coordinates">{["X 柜长 cm", "Y 柜宽 cm", "Z 高度 cm"].map((label, i) => <label key={label}>{label}<input aria-label={label} type="number" step="1" value={position[i]} disabled={locked.has(cargo.id)} onChange={e => setPosition(p => p.map((v, j) => i === j ? e.target.value : v))} /></label>)}</div>
           <button disabled={locked.has(cargo.id)} onClick={() => {
             if (position.some(v => !v.trim() || !Number.isFinite(Number(v)))) { setError("请输入有效坐标"); return; }
             move(selected.id, Number(position[0]) * 10, Number(position[1]) * 10, Number(position[2]) * 10);
           }}>预览坐标</button>
-          <label>当前单件朝向<select aria-label="当前单件朝向" disabled={locked.has(cargo.id)} value={selected.rotation} onChange={e => {
-            const rotation = orientationsFor(cargo.orientation_mode).find(r => r === e.target.value);
-            if (!rotation) return;
-            const dims: Record<string, number> = { L: cargo.length_cm * 10, W: cargo.width_cm * 10, H: cargo.height_cm * 10 };
-            edit(placements.map(p => p.id !== selected.id ? p : { ...p, rotation, length_mm: dims[rotation[0]], width_mm: dims[rotation[1]], height_mm: dims[rotation[2]] }));
-          }}>{orientationsFor(cargo.orientation_mode).map(r => <option key={r}>{r}</option>)}</select></label>
+          <label>当前单件朝向<select aria-label="当前单件朝向" disabled={locked.has(cargo.id)} value={selected.rotation} onChange={e => rotate(e.target.value as Orientation)}>{orientationsFor(cargo.orientation_mode).map(r => <option key={r}>{r}</option>)}</select></label>
           <small>L=原长，W=原宽，H=原高；按柜长、柜宽、高度依次排列。仅显示货物允许的朝向。</small>
+          </fieldset>
         </> : <p>请选择一件货物，或在左侧搜索。</p>}
         <h2>安全复核</h2>
         <p role="status">{error || (!currentReview ? "正在检查当前草稿…" : currentReview.valid ? "规则检查通过，可应用；现场仍需复核" : "当前草稿不能应用，请处理以下问题")}</p>

@@ -19,8 +19,9 @@ test('edits any profile, reviews exact draft and applies authoritative metrics',
   await userEvent.click(screen.getByRole('button', { name: 'A · 第 1 件' }));
   fireEvent.change(screen.getByLabelText('X 柜长 cm'), { target: { value: '50' } });
   await userEvent.click(screen.getByRole('button', { name: '预览坐标' }));
-  expect(screen.getByRole('button', { name: '撤销' })).toBeEnabled();
+  await waitFor(() => expect(screen.getByRole('button', { name: '撤销' })).toBeEnabled());
   await waitFor(() => expect(reviewLayout).toHaveBeenCalledWith(container, [cargo], [expect.objectContaining({ x_mm: 500 })], 2));
+  await waitFor(() => expect(screen.getByRole('button', { name: '应用调整' })).toBeEnabled());
   await userEvent.click(screen.getByRole('button', { name: '应用调整' }));
   expect(apply).toHaveBeenCalledWith(expect.objectContaining({ profile: 'easy', placements: [expect.objectContaining({ x_mm: 500 })], metrics: valid.metrics }), expect.any(Set));
 });
@@ -32,16 +33,14 @@ test('shows cargo dimensions as read-only while allowing position edits', async 
   expect(screen.getByLabelText('货物尺寸（不可修改）')).toHaveAttribute('readonly');
 });
 
-test('invalid draft cannot be applied and undo restores coordinates', async () => {
-  vi.mocked(reviewLayout).mockResolvedValue({ valid: false, errors: [{ code: 'UNSUPPORTED', message: '缺少支撑', placement_ids: ['a-0'] }], metrics: null, zones: [] });
+test('floating moves are rejected before changing the layout', async () => {
   render(<LayoutWorkbench solution={solution} container={container} cargoItems={[cargo]} itemGapCm={0} onApply={vi.fn()} onClose={() => {}} />);
   await userEvent.click(screen.getByRole('button', { name: 'A · 第 1 件' }));
   fireEvent.change(screen.getByLabelText('Z 高度 cm'), { target: { value: '50' } });
   await userEvent.click(screen.getByRole('button', { name: '预览坐标' }));
-  expect(await screen.findByText('缺少支撑')).toBeInTheDocument();
+  expect(await screen.findByRole('alert')).toHaveTextContent('支撑');
   expect(screen.getByRole('button', { name: '应用调整' })).toBeDisabled();
-  await userEvent.click(screen.getByRole('button', { name: '撤销' }));
-  expect(screen.getByLabelText('Z 高度 cm')).toHaveValue(0);
+  expect(screen.getByRole('button', { name: '撤销' })).toBeDisabled();
 });
 
 test('ignores a stale review and waits for the current draft review', async () => {
@@ -56,5 +55,21 @@ test('ignores a stale review and waits for the current draft review', async () =
   await act(async () => { resolvers[0](valid); });
   expect(screen.getByRole('button', { name: '应用调整' })).toBeDisabled();
   await act(async () => { resolvers[1](valid); });
-  expect(screen.getByRole('button', { name: '应用调整' })).toBeEnabled();
+  await waitFor(() => expect(resolvers).toHaveLength(3));
+  await act(async () => { resolvers[2](valid); });
+  await waitFor(() => expect(screen.getByRole('button', { name: '应用调整' })).toBeEnabled());
+});
+
+test('step and rotation buttons preserve dimensions and server rejection preserves position', async () => {
+  render(<LayoutWorkbench solution={solution} container={container} cargoItems={[cargo]} itemGapCm={0} onApply={vi.fn()} onClose={() => {}} />);
+  await userEvent.click(screen.getByRole('button', { name: 'A · 第 1 件' }));
+  await userEvent.click(screen.getByRole('button', { name: '向柜门移一件' }));
+  await waitFor(() => expect(screen.getByLabelText('X 柜长 cm')).toHaveValue(60));
+  await userEvent.click(screen.getByRole('button', { name: '水平旋转 90°' }));
+  await waitFor(() => expect(screen.getByLabelText('当前单件朝向')).toHaveValue('WLH'));
+  expect(screen.getByLabelText('货物尺寸（不可修改）')).toHaveValue('60 × 40 × 40 cm');
+  vi.mocked(reviewLayout).mockResolvedValue({ valid: false, errors: [{ code: 'TOP_LOAD_EXCEEDED', message: '承重超限', placement_ids: ['a-0'] }], metrics: null, zones: [] });
+  await userEvent.click(screen.getByRole('button', { name: '向柜门移一件' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('承重超限');
+  expect(screen.getByLabelText('X 柜长 cm')).toHaveValue(60);
 });
