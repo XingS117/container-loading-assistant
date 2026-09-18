@@ -6,12 +6,26 @@ import { createCargo } from '../lib/cargo';
 import type { ContainerSpec, PackingSolution } from '../types';
 
 vi.mock('../lib/api', () => ({ reviewLayout: vi.fn() }));
-vi.mock('./LoadVisualizer', () => ({ LoadVisualizer: () => <div>画布</div> }));
+vi.mock('./LoadVisualizer', () => ({ LoadVisualizer: ({ onMovePlacement }: { onMovePlacement?: (id: string, x: number, y: number) => void }) => <button onClick={() => onMovePlacement?.('a-0', 1400, 0)}>模拟搬移</button> }));
 const cargo = { ...createCargo('A'), id: 'a' };
 const container = { id: 'c', inner_length_mm: 3000, inner_width_mm: 2000, inner_height_mm: 2000 } as ContainerSpec;
 const solution = { profile: 'easy', name: '易操作', placements: [{ id: 'a-0', cargo_id: 'a', instance_index: 0, x_mm: 0, y_mm: 0, z_mm: 0, length_mm: 600, width_mm: 400, height_mm: 400, weight_g: 18000, rotation: 'LWH', step: 1 }], metrics: { loaded_pieces: 1, length_imbalance_pct: 80, width_imbalance_pct: 80 }, zones: [], warnings: [], pros: [], cons: [] } as unknown as PackingSolution;
 const valid = { valid: true, errors: [], metrics: solution.metrics, zones: [] };
 beforeEach(() => { vi.mocked(reviewLayout).mockReset().mockResolvedValue(valid); });
+
+test('relocates a bottom box, settles its upper box and undoes the complete operation', async () => {
+  const stack = { ...solution, placements: [...solution.placements, { ...solution.placements[0], id: 'a-1', instance_index: 1, z_mm: 400 }] };
+  render(<LayoutWorkbench solution={stack} container={container} cargoItems={[cargo]} itemGapCm={0} onApply={vi.fn()} onClose={() => {}} />);
+  await userEvent.click(screen.getByRole('button', { name: 'A · 第 1 件' }));
+  await userEvent.click(screen.getByRole('button', { name: '移动货物' }));
+  await userEvent.click(screen.getByRole('button', { name: '模拟搬移' }));
+  await waitFor(() => expect(screen.getByLabelText('X 柜长 cm')).toHaveValue(140));
+  expect(reviewLayout).toHaveBeenCalledWith(container, [cargo], [expect.objectContaining({ x_mm: 1400, z_mm: 0 }), expect.objectContaining({ x_mm: 0, z_mm: 0 })], 0);
+  expect(screen.getByText(/原货位 1 件货物已向下归位/)).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: '撤销' }));
+  await userEvent.click(screen.getByRole('button', { name: 'A · 第 2 件' }));
+  expect(screen.getByLabelText('Z 高度 cm')).toHaveValue(40);
+});
 
 test('edits any profile, reviews exact draft and applies authoritative metrics', async () => {
   const apply = vi.fn();

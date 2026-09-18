@@ -47,6 +47,42 @@ export function constrainMove(placements: Placement[], id: string, position: [nu
   return moveDraft(placements, id, bounded, wholeCargo, locked);
 }
 
+// Relocation describes the final layout, not a physical path through intervening boxes.
+export function relocateDraft(placements: Placement[], id: string, position: [number, number], wholeCargo: boolean, locked: Set<string>, container: ContainerSpec, gap = 0): { placements: Placement[]; error: string | null } {
+  const selected = placements.find(p => p.id === id);
+  const fail = (error: string) => ({ placements, error });
+  if (!selected || locked.has(selected.cargo_id)) return fail('该货物已锁定，不能搬移');
+  if (!position.every(Number.isFinite)) return fail('请输入有效坐标');
+  const bounded = constrainMove(placements, id, [position[0], position[1], selected.z_mm], wholeCargo, locked, container).find(p => p.id === id)!;
+  if (bounded.x_mm === selected.x_mm && bounded.y_mm === selected.y_mm) return { placements, error: null };
+  const moving = new Set(placements.filter(p => wholeCargo ? p.cargo_id === selected.cargo_id : p.id === id).map(p => p.id));
+  const floor = container.clearance_mm ?? 0;
+  const overlaps = (a: Placement, b: Placement) => a.x_mm < b.x_mm + b.length_mm && b.x_mm < a.x_mm + a.length_mm
+    && a.y_mm < b.y_mm + b.width_mm && b.y_mm < a.y_mm + a.width_mm;
+  const settled: Placement[] = [];
+  // Settle the remaining stack bottom-up, including cargo that lost its support.
+  for (const p of placements.filter(p => !moving.has(p.id)).sort((a, b) => a.z_mm - b.z_mm)) {
+    const z = Math.max(floor, ...settled.filter(b => overlaps(p, b)).map(b => b.z_mm + b.height_mm));
+    if (locked.has(p.cargo_id) && z !== p.z_mm) return fail('搬移会改变已锁定货物的支撑，请先解锁相关 SKU');
+    settled.push({ ...p, z_mm: z });
+  }
+  const target = settled.filter(p => p.cargo_id === selected.cargo_id && p.rotation === selected.rotation
+    && p.length_mm === selected.length_mm && p.width_mm === selected.width_mm
+    && Math.abs(p.x_mm - position[0]) <= Math.min(150, selected.length_mm / 4)
+    && Math.abs(p.y_mm - position[1]) <= Math.min(150, selected.width_mm / 4))
+    .sort((a, b) => Math.hypot(a.x_mm - position[0], a.y_mm - position[1]) - Math.hypot(b.x_mm - position[0], b.y_mm - position[1]))[0];
+  const [x, y] = target ? [target.x_mm, target.y_mm] : position;
+  const group = constrainMove(placements, id, [x, y, selected.z_mm], wholeCargo, locked, container).filter(p => moving.has(p.id));
+  const destination = group.find(p => p.id === id)!;
+  if (destination.x_mm === selected.x_mm && destination.y_mm === selected.y_mm) return { placements, error: null };
+  // A SKU group moves rigidly; all members share the same vertical displacement.
+  const dz = Math.max(...group.map(p => Math.max(floor, ...settled.filter(b => overlaps(p, b)).map(b => b.z_mm + b.height_mm)) - p.z_mm));
+  const byId = new Map([...settled, ...group.map(p => ({ ...p, z_mm: p.z_mm + dz }))].map(p => [p.id, p]));
+  const next = placements.map(p => byId.get(p.id)!);
+  const error = geometryError(next, container, gap);
+  return error ? fail(error) : { placements: next, error: null };
+}
+
 export interface EditHistory {
   past: Placement[][];
   present: Placement[];

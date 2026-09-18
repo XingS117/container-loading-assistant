@@ -184,7 +184,9 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 .comparison-table thead th { color: var(--accent-dark); font-weight: 800; background: #f2f7f3; }
 .comparison-table tbody th { color: var(--muted); font-weight: 600; }
 .balance-warning { width: min(1380px, calc(100% - 32px)); margin: 12px auto 0; padding: 10px 12px; color: #7a4d0b; background: #fff3dc; border: 1px solid #ecc98b; border-radius: 8px; font-size: 13px; }
-.workspace-grid { width: min(1380px, calc(100% - 32px)); min-height: 620px; margin: 12px auto 0; display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(350px, .75fr); background: white; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.workspace-grid { width: min(1380px, calc(100% - 32px)); height: clamp(360px, calc(100dvh - 340px), 640px); margin: 12px auto 0; display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(320px, .75fr); background: white; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.workspace-grid > .load-visualizer { min-height: 0; }
+.workspace-grid .layout-svg { min-height: 0; }
 .load-visualizer { position: relative; min-width: 0; min-height: 620px; display: grid; grid-template-rows: auto minmax(0, 1fr) auto; background: #e9eeea; overflow: hidden; }
 .visual-controls { min-height: 48px; padding: 7px 10px; display: flex; align-items: center; justify-content: space-between; gap: 12px; background: rgba(244,246,243,.94); border-bottom: 1px solid var(--line); }
 .view-switcher { display: flex; gap: 2px; padding: 3px; background: #dfe5e0; border-radius: 5px; }
@@ -283,7 +285,12 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
 .saved-orders > div { display: flex; align-items: center; gap: 8px; }
 .saved-orders button { padding: 5px 9px; color: var(--accent-dark); background: #f0fbf7; border: 1px solid #b9d1c5; border-radius: 4px; font-size: 11px; }
 .saved-orders select { min-width: 220px; margin-left: auto; padding: 5px 8px; color: var(--ink); background: white; border: 1px solid var(--line); border-radius: 4px; font-size: 11px; }
-.result-inspector { padding: 18px; border-left: 1px solid var(--line); }
+.result-inspector { min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px; border-left: 1px solid var(--line); }
+.inspector-details { padding: 10px 0; border-top: 1px solid var(--line); }
+.inspector-details summary { cursor: pointer; font-size: 13px; font-weight: 700; }
+.inspector-details summary span { margin-left: 6px; font-size: 11px; font-weight: 400; color: var(--muted); }
+.inspector-details summary svg { vertical-align: middle; margin-right: 5px; }
+.inspector-details[open] summary { margin-bottom: 10px; }
 .metric-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--line); border: 1px solid var(--line); }
 .metric-strip > div { padding: 11px; display: grid; gap: 4px; background: white; }
 .metric-strip span { color: var(--muted); font-size: 10px; }
@@ -313,9 +320,10 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
   .container-options { grid-template-columns: 1fr; }
   .settings-grid { grid-template-columns: 1fr 1fr; }
   .setting-summary { grid-column: 1 / -1; justify-content: flex-start; }
-  .workspace-grid { grid-template-columns: 1fr; }
+  .workspace-grid { grid-template-columns: 1fr; height: auto; }
+  .workspace-grid > .load-visualizer { height: clamp(360px, 60dvh, 540px); }
   .load-visualizer { min-height: 500px; }
-  .result-inspector { border-left: 0; border-top: 1px solid var(--line); }
+  .result-inspector { max-height: 440px; border-left: 0; border-top: 1px solid var(--line); }
   .custom-container-editor { grid-template-columns: repeat(3, 1fr); }
 }
 
@@ -358,7 +366,8 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
   .result-toolbar > .text-button:first-child { grid-area: back; }
   .result-toolbar > div:nth-child(2) { grid-area: title; }
   .result-toolbar .text-button, .result-toolbar .primary-outline-button { width: 38px; min-width: 38px; padding: 0; font-size: 0; }
-  .result-actions { width: 100%; display: grid; grid-area: actions; grid-template-columns: minmax(0, 1fr) 38px; gap: 6px; }
+  .result-actions { width: 100%; display: grid; grid-area: actions; grid-template-columns: auto minmax(0, 1fr) 38px; gap: 6px; }
+  .result-actions > .primary-outline-button:first-child { width: auto; padding: 0 10px; font-size: 12px; }
   .recalculate-control { display: grid; grid-template-columns: minmax(0, 1fr) 38px; gap: 6px; }
   .recalculate-control select { width: 100%; min-width: 0; }
   .ai-strategy-status { width: calc(100% - 24px); }

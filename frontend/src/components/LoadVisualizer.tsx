@@ -91,6 +91,7 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
     scene.fog = new THREE.Fog("#e9eeea", 15, 34);
 
     const camera = new THREE.PerspectiveCamera(37, width / height, 0.01, 100);
+    camera.setViewOffset(width, height, 0, height * 0.07, width, height);
     camera.position.set(12.5, 8.2, 10.8);
     let renderer: THREE.WebGLRenderer;
     try {
@@ -119,6 +120,23 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
     controls.minDistance = 4;
     controls.maxDistance = 32;
     if (viewRef.current) { camera.position.copy(viewRef.current.position); controls.target.copy(viewRef.current.target); }
+    let viewChanged = Boolean(viewRef.current);
+    controls.addEventListener('start', () => { viewChanged = true; });
+    const fitContainer = (force = false) => {
+      if (viewChanged && !force) return;
+      camera.lookAt(controls.target);
+      const inverseRotation = camera.quaternion.clone().invert();
+      const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+      const tanH = tanV * camera.aspect;
+      let distance = 4;
+      for (const x of [-1, 1]) for (const y of [-1, 1]) for (const z of [-1, 1]) {
+        const corner = new THREE.Vector3(x * container.inner_length_mm * scale / 2, y * container.inner_height_mm * scale / 2, z * container.inner_width_mm * scale / 2).sub(controls.target).applyQuaternion(inverseRotation);
+        distance = Math.max(distance, corner.z + Math.max(Math.abs(corner.x) / tanH, Math.abs(corner.y) / tanV) * 1.25);
+      }
+      camera.position.sub(controls.target).normalize().multiplyScalar(distance).add(controls.target);
+      controls.update();
+    };
+    fitContainer();
 
     const proxy = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xe8aa3b, transparent: true, opacity: 0.5, wireframe: true, depthTest: false }));
     proxy.visible = false;
@@ -138,9 +156,15 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
         proxy.position.z / scale + container.inner_width_mm / 2 - item.width_mm / 2);
       if (candidate) proxy.position.set(
         (candidate.x_mm + item.length_mm / 2 - container.inner_length_mm / 2) * scale,
-        start.y,
+        (candidate.z_mm + item.height_mm / 2 - container.inner_height_mm / 2) * scale,
         (candidate.y_mm + item.width_mm / 2 - container.inner_width_mm / 2) * scale);
-      else proxy.position.copy(start);
+      else {
+        const c = container.clearance_mm ?? 0;
+        proxy.position.x = Math.max((c + item.length_mm / 2 - container.inner_length_mm / 2) * scale, Math.min((container.inner_length_mm / 2 - c - item.length_mm / 2) * scale, proxy.position.x));
+        proxy.position.z = Math.max((c + item.width_mm / 2 - container.inner_width_mm / 2) * scale, Math.min((container.inner_width_mm / 2 - c - item.width_mm / 2) * scale, proxy.position.z));
+        proxy.position.y = start.y;
+      }
+      (proxy.material as THREE.MeshBasicMaterial).color.set(candidate ? 0xe8aa3b : 0xdc463d);
     });
     transform.addEventListener("mouseDown", () => { start = proxy.position.clone(); });
     transform.addEventListener("dragging-changed", event => { controls.enabled = !event.value; });
@@ -149,13 +173,19 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
       if (item && start && start.distanceTo(proxy.position) > 0.0001) {
         editRef.current.onMovePlacement?.(item.id,
           Math.round(proxy.position.x / scale + container.inner_length_mm / 2 - item.length_mm / 2),
-          Math.round(proxy.position.z / scale + container.inner_width_mm / 2 - item.width_mm / 2),
-          Math.round(proxy.position.y / scale + container.inner_height_mm / 2 - item.height_mm / 2));
+          Math.round(proxy.position.z / scale + container.inner_width_mm / 2 - item.width_mm / 2));
       }
       if (start) proxy.position.copy(start);
+      (proxy.material as THREE.MeshBasicMaterial).color.set(0xe8aa3b);
       start = null;
     });
-    const cancelDrag = () => { if (start) proxy.position.copy(start); start = null; transform.reset(); controls.enabled = true; };
+    let directDrag: { item: Placement; origin: THREE.Vector3; plane: THREE.Plane; pointerId: number; x: number; y: number; moved: boolean } | null = null;
+    const cancelDrag = () => {
+      if (directDrag && renderer.domElement.hasPointerCapture(directDrag.pointerId)) renderer.domElement.releasePointerCapture(directDrag.pointerId);
+      directDrag = null; transform.enabled = true;
+      if (start) proxy.position.copy(start); start = null; transform.reset(); controls.enabled = true;
+      (proxy.material as THREE.MeshBasicMaterial).color.set(0xe8aa3b);
+    };
     const escapeDrag = (event: KeyboardEvent) => { if (event.key === "Escape") cancelDrag(); };
     renderer.domElement.addEventListener("pointercancel", cancelDrag);
     window.addEventListener("keydown", escapeDrag);
@@ -257,6 +287,60 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
     };
     renderer.domElement.addEventListener("pointerdown", handlePointer);
 
+    const locatePointer = (event: PointerEvent) => {
+      const bounds = renderer.domElement.getBoundingClientRect();
+      pointer.set((event.clientX - bounds.left) / bounds.width * 2 - 1, -(event.clientY - bounds.top) / bounds.height * 2 + 1);
+      raycaster.setFromCamera(pointer, camera);
+    };
+    const directDown = (event: PointerEvent) => {
+      if (event.button !== 0 || !editRef.current.editing || transform.axis || transform.dragging) return;
+      locatePointer(event);
+      const hit = raycaster.intersectObjects(cargoMeshes)[0];
+      const group = groupsRef.current.find(g => g.mesh === hit?.object);
+      const item = group && hit.instanceId !== undefined ? group.placements[hit.instanceId] : undefined;
+      if (!item || editRef.current.lockedCargoIds?.has(item.cargo_id)) return;
+      event.stopImmediatePropagation();
+      editRef.current.onSelectPlacement?.(item.id);
+      directDrag = { item, origin: hit.point.clone(), plane: new THREE.Plane(new THREE.Vector3(0, 1, 0), -hit.point.y),
+        pointerId: event.pointerId, x: item.x_mm, y: item.y_mm, moved: false };
+      start = new THREE.Vector3((item.x_mm + item.length_mm / 2 - container.inner_length_mm / 2) * scale,
+        (item.z_mm + item.height_mm / 2 - container.inner_height_mm / 2) * scale,
+        (item.y_mm + item.width_mm / 2 - container.inner_width_mm / 2) * scale);
+      controls.enabled = false; transform.enabled = false;
+      renderer.domElement.setPointerCapture(event.pointerId);
+    };
+    const directMove = (event: PointerEvent) => {
+      if (!directDrag) return;
+      event.stopImmediatePropagation();
+      locatePointer(event);
+      const point = raycaster.ray.intersectPlane(directDrag.plane, new THREE.Vector3());
+      if (!point) return;
+      const { item, origin } = directDrag;
+      const c = container.clearance_mm ?? 0;
+      const x = Math.max(c, Math.min(container.inner_length_mm - c - item.length_mm, item.x_mm + Math.round((point.x - origin.x) / scale / 10) * 10));
+      const y = Math.max(c, Math.min(container.inner_width_mm - c - item.width_mm, item.y_mm + Math.round((point.z - origin.z) / scale / 10) * 10));
+      const candidate = editRef.current.previewMove?.(item.id, x, y);
+      directDrag.x = x; directDrag.y = y;
+      directDrag.moved = directDrag.moved || Math.hypot(x - item.x_mm, y - item.y_mm) > 10;
+      const p = candidate ?? { ...item, x_mm: x, y_mm: y };
+      proxy.position.set((p.x_mm + p.length_mm / 2 - container.inner_length_mm / 2) * scale,
+        (p.z_mm + p.height_mm / 2 - container.inner_height_mm / 2) * scale,
+        (p.y_mm + p.width_mm / 2 - container.inner_width_mm / 2) * scale);
+      (proxy.material as THREE.MeshBasicMaterial).color.set(candidate ? 0xe8aa3b : 0xdc463d);
+    };
+    const directUp = (event: PointerEvent) => {
+      if (!directDrag) return;
+      event.stopImmediatePropagation();
+      const { item, x, y, moved, pointerId } = directDrag;
+      if (renderer.domElement.hasPointerCapture(pointerId)) renderer.domElement.releasePointerCapture(pointerId);
+      cancelDrag();
+      (proxy.material as THREE.MeshBasicMaterial).color.set(0xe8aa3b);
+      if (moved) editRef.current.onMovePlacement?.(item.id, x, y);
+    };
+    renderer.domElement.addEventListener('pointerdown', directDown, true);
+    renderer.domElement.addEventListener('pointermove', directMove, true);
+    renderer.domElement.addEventListener('pointerup', directUp, true);
+
     let frame = 0;
     const animate = () => {
       controls.update();
@@ -271,8 +355,11 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
     const resize = () => {
       const nextWidth = Math.max(host.clientWidth, 320);
       const nextHeight = Math.max(host.clientHeight, 320);
+      const aspectChanged = Math.abs(camera.aspect - nextWidth / nextHeight) > 0.1;
       camera.aspect = nextWidth / nextHeight;
+      camera.setViewOffset(nextWidth, nextHeight, 0, nextHeight * 0.07, nextWidth, nextHeight);
       camera.updateProjectionMatrix();
+      fitContainer(aspectChanged);
       renderer.setSize(nextWidth, nextHeight);
     };
     const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(resize);
@@ -292,6 +379,9 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
       observer?.disconnect();
       if (!observer) window.removeEventListener("resize", resize);
       renderer.domElement.removeEventListener("pointerdown", handlePointer);
+      renderer.domElement.removeEventListener('pointerdown', directDown, true);
+      renderer.domElement.removeEventListener('pointermove', directMove, true);
+      renderer.domElement.removeEventListener('pointerup', directUp, true);
       renderer.domElement.removeEventListener("webglcontextlost", handleContextLost);
       controls.dispose();
       scene.traverse((object) => {
@@ -425,7 +515,12 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
                 const dx = Math.round((dest.x - drag.current.x) / 10) * 10;
                 const dy = Math.round((dest.y - drag.current.y) / 10) * 10;
                 const candidate = previewMove?.(placement.id, placement.x_mm + dx, placement.y_mm + dy);
-                if (previewMove) setPreview(candidate ? { id: placement.id, dx: candidate.x_mm - placement.x_mm, dy: candidate.y_mm - placement.y_mm } : null);
+                if (previewMove) {
+                  const c = container.clearance_mm ?? 0;
+                  setPreview({ id: placement.id,
+                    dx: (candidate?.x_mm ?? Math.max(c, Math.min(container.inner_length_mm - c - placement.length_mm, placement.x_mm + dx))) - placement.x_mm,
+                    dy: (candidate?.y_mm ?? Math.max(c, Math.min(container.inner_width_mm - c - placement.width_mm, placement.y_mm + dy))) - placement.y_mm });
+                }
                 else setPreview({ id: placement.id, dx, dy });
               }}
               onPointerCancel={() => { drag.current = null; setPreview(null); }}

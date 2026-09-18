@@ -63,7 +63,13 @@ export function explainFloorRisk(solution: PackingSolution): string {
 
 export function loadingStepLabels(solution: PackingSolution, cargoItems: CargoInput[]): string[] {
   const names = Object.fromEntries(cargoItems.map((item) => [item.id, item.sku]));
-  return [...solution.zones]
+  const groups = new Map<string, { step: number; cargo_id: string; piece_count: number }>();
+  for (const zone of solution.zones) {
+    const key = `${zone.step}:${zone.cargo_id}`;
+    const group = groups.get(key);
+    groups.set(key, { step: zone.step, cargo_id: zone.cargo_id, piece_count: (group?.piece_count ?? 0) + zone.piece_count });
+  }
+  return [...groups.values()]
     .sort((left, right) => left.step - right.step)
     .map((zone) => `第 ${zone.step} 步：${names[zone.cargo_id] ?? zone.cargo_id} × ${zone.piece_count} 件`);
 }
@@ -214,14 +220,14 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
             <h2>空隙与支撑判断</h2>
             <p>{explainFloorRisk(selected)}</p>
           </div>
-          <div className="load-summary">
-            <h2>装载步骤</h2>
+          <details className="load-summary inspector-details">
+            <summary>装载步骤 <span>{selected.metrics.loading_steps} 步 · 展开查看</span></summary>
             {loadingStepLabels(selected, cargoItems).length > 0
-              ? loadingStepLabels(selected, cargoItems).map((step) => <p key={step}>{step}</p>)
+              ? loadingStepLabels(selected, cargoItems).map((step, index) => <p key={`${index}:${step}`}>{step}</p>)
               : <p>当前方案暂无可拆分的区域步骤，请按 3D 图和装入明细现场复核。</p>}
-          </div>
-          <div className="load-summary">
-            <h2>装入明细</h2>
+          </details>
+          <details className="load-summary inspector-details">
+            <summary>装入明细 <span>{cargoItems.length} 种货物 · {selected.metrics.loaded_pieces} 件</span></summary>
             {cargoItems.map((cargo) => (
               <div className="summary-row" key={cargo.id}>
                 <span><i aria-hidden="true" />{cargo.sku}</span>
@@ -229,14 +235,14 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
                 {(selected.unloaded_counts[cargo.id] ?? 0) > 0 && <em>余 {selected.unloaded_counts[cargo.id]} 件</em>}
               </div>
             ))}
-          </div>
+          </details>
           {warningGroups.length > 0 && <section className="result-notices" aria-label="方案提示">
             {warningGroups.map(({ severity, warnings }) => {
               const { title, Icon } = warningMeta[severity];
-              return <div className={`notice-group notice-group--${severity}`} key={severity}>
-                <h2><Icon size={16} />{title}</h2>
+              return <details className={`notice-group notice-group--${severity} inspector-details`} key={severity} open={severity === 'critical'}>
+                <summary><Icon size={16} />{title} <span>{warnings.length} 项</span></summary>
                 {warnings.map((warning) => <p className="result-warning" key={warning}>{warning}</p>)}
-              </div>;
+              </details>;
             })}
           </section>}
         </aside>
@@ -341,7 +347,7 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
             <h3>装载步骤（从柜门向柜内）</h3>
             <div className="print-steps">
               {loadingStepLabels(solution, cargoItems).length > 0
-                ? loadingStepLabels(solution, cargoItems).map((step) => <p key={step}>{step}</p>)
+                ? loadingStepLabels(solution, cargoItems).map((step, index) => <p key={`${index}:${step}`}>{step}</p>)
                 : <p>暂无区域步骤，请结合装载图现场复核。</p>}
             </div>
             {snapshots[solution.profile] && <img className="print-snapshot" src={snapshots[solution.profile]} alt={`${profileDisplayName[solution.profile]}三维装柜布局`} />}
