@@ -1,5 +1,26 @@
 import { orientationsFor, validateCargo } from "./cargo";
-import type { AIModelConfig, CargoInput, ContainerSpec, PackResponse, SolutionProfile } from "../types";
+import type { AIModelConfig, CargoInput, ContainerSpec, LayoutReviewResponse, PackResponse, Placement, SolutionProfile } from "../types";
+
+function cargoPayload(cargoItems: CargoInput[]) {
+  return cargoItems.map((item) => ({
+    id: item.id,
+    sku: item.sku.trim(),
+    name: item.name.trim() || item.sku.trim(),
+    kind: item.kind,
+    length_mm: Math.round(item.length_cm * 10),
+    width_mm: Math.round(item.width_cm * 10),
+    height_mm: Math.round(item.height_cm * 10),
+    weight_g: Math.round(item.weight_kg! * 1000),
+    quantity: item.quantity,
+    allowed_orientations: orientationsFor(item.orientation_mode),
+    stackable: item.stackable,
+    max_layers: item.stackable ? item.max_layers : 1,
+    max_top_load_g: item.stackable || item.kind === "pallet" ? Math.round(item.max_top_load_kg * 1000) : 0,
+    fragile: item.fragile,
+    must_load: item.must_load,
+    unload_order: item.unload_order ?? 0,
+  }));
+}
 
 async function readJsonResponse<T>(response: Response, context: string): Promise<T> {
   const body = await response.text();
@@ -49,27 +70,7 @@ export async function packOrder(
       item_gap_mm: Math.round(itemGapCm * 10),
       preferred_profile: preferredProfile,
       locked_placements: lockedPlacements,
-      cargo_items: cargoItems.map((item) => ({
-        id: item.id,
-        sku: item.sku.trim(),
-        name: item.name.trim() || item.sku.trim(),
-        kind: item.kind,
-        length_mm: Math.round(item.length_cm * 10),
-        width_mm: Math.round(item.width_cm * 10),
-        height_mm: Math.round(item.height_cm * 10),
-        weight_g: Math.round(item.weight_kg! * 1000),
-        quantity: item.quantity,
-        allowed_orientations: orientationsFor(item.orientation_mode),
-        stackable: item.stackable,
-        max_layers: item.stackable ? item.max_layers : 1,
-        max_top_load_g:
-          item.stackable || item.kind === "pallet"
-            ? Math.round(item.max_top_load_kg * 1000)
-            : 0,
-        fragile: item.fragile,
-        must_load: item.must_load,
-        unload_order: item.unload_order ?? 0,
-      })),
+      cargo_items: cargoPayload(cargoItems),
     }),
   });
   const payload = await readJsonResponse<PackResponse & { error?: { code?: string; message?: string; hint?: string } }>(response, "装柜服务返回了无效响应");
@@ -85,6 +86,22 @@ export async function packOrder(
     }
     throw new Error(hint ? `${message}\n${hint}` : message);
   }
+  return payload;
+}
+
+export async function reviewLayout(
+  container: ContainerSpec,
+  cargoItems: CargoInput[],
+  placements: Placement[],
+  itemGapCm: number,
+): Promise<LayoutReviewResponse> {
+  const response = await fetch("/api/v1/layout/review", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ container, item_gap_mm: Math.round(itemGapCm * 10), cargo_items: cargoPayload(cargoItems), placements }),
+  });
+  const payload = await readJsonResponse<LayoutReviewResponse & { error?: { message?: string } }>(response, "布局检查返回了无效响应");
+  if (!response.ok) throw new Error(payload.error?.message ?? "布局检查失败，请稍后重试");
   return payload;
 }
 

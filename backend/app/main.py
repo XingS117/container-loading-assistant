@@ -25,6 +25,7 @@ from .ai_strategy import (
     verify_ai_connection_diagnostic,
 )
 from .packing import PackingFailure, ai_coordinate_profiles_applied, pack_order
+from .layout_review import LayoutReview, LayoutReviewRequest, review_layout
 
 
 app = FastAPI(title="装柜方案助手", version="0.1.0")
@@ -44,7 +45,7 @@ pack_slots = threading.BoundedSemaphore(2)
 
 @app.middleware("http")
 async def request_guard(request: Request, call_next):
-    if request.url.path in {"/api/v1/pack", "/api/v1/ai/test"}:
+    if request.url.path in {"/api/v1/pack", "/api/v1/ai/test", "/api/v1/layout/review"}:
         content_length = request.headers.get("content-length")
         try:
             declared_length = int(content_length) if content_length else 0
@@ -163,6 +164,11 @@ def health() -> dict[str, str]:
 @app.get("/api/v1/container-presets", response_model=list[ContainerSpec])
 def container_presets() -> list[ContainerSpec]:
     return CONTAINER_PRESETS
+
+
+@app.post("/api/v1/layout/review", response_model=LayoutReview)
+def layout_review(request: LayoutReviewRequest) -> LayoutReview:
+    return review_layout(request)
 
 
 async def run_pack_calculation(request: PackRequest) -> PackResponse:

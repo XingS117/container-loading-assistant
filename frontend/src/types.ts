@@ -133,3 +133,10 @@ export interface PackResponse {
   recommended_profile?: SolutionProfile;
   ai_strategy?: AIStrategyStatus;
 }
+
+export interface LayoutReviewResponse {
+  valid: boolean;
+  errors: Array<{ code: string; message: string; placement_ids: string[] }>;
+  metrics: SolutionMetrics | null;
+  zones: Zone[];
+}

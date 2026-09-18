@@ -2,10 +2,9 @@ import { AlertTriangle, ArrowLeft, CheckCircle2, CircleX, Info, Printer, Refresh
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { LoadVisualizer, StaticLayout } from "./LoadVisualizer";
+import { LayoutWorkbench } from "./LayoutWorkbench";
 import type { CargoInput, ContainerSpec, PackResponse, PackingSolution, SolutionProfile } from "../types";
 import { trackAnalyticsEvent } from "../lib/analytics";
-import { movePlacement, rotateCargoPlacements, swapCargoPlacements } from "../lib/layoutEdit";
-import { recalculateMetrics } from "../lib/layoutMetrics";
 
 interface Props {
   response: PackResponse;
@@ -15,6 +14,7 @@ interface Props {
   onBack: () => void;
   onRecalculate: (container: ContainerSpec, lockedPlacements?: import("../types").Placement[]) => Promise<void>;
   recalculating: boolean;
+  itemGapCm?: number;
 }
 
 const profileDisplayName: Record<SolutionProfile, string> = {
@@ -85,27 +85,27 @@ export function recommendProfile(response: PackResponse): SolutionProfile {
   return "high_fill";
 }
 
-export function SolutionWorkspace({ response, container, presets, cargoItems, onBack, onRecalculate, recalculating }: Props) {
-  const [selectedProfile, setSelectedProfile] = useState<SolutionProfile>(() => recommendProfile(response));
+export function SolutionWorkspace({ response: originalResponse, container, presets, cargoItems, onBack, onRecalculate, recalculating, itemGapCm = 0 }: Props) {
+  const [selectedProfile, setSelectedProfile] = useState<SolutionProfile>(() => recommendProfile(originalResponse));
   const [selectedCargoId, setSelectedCargoId] = useState<string | null>(null);
   const [lockedCargoIds, setLockedCargoIds] = useState<Set<string>>(new Set());
-  const [editedPlacements, setEditedPlacements] = useState(response.solutions[0]?.placements ?? []);
   const [editMessage, setEditMessage] = useState<string | null>(null);
-  const [editedCargoIds, setEditedCargoIds] = useState<Set<string>>(new Set());
   const [feedback, setFeedback] = useState<"accepted" | "needs_adjustment" | null>(null);
   const [adjustmentOpen, setAdjustmentOpen] = useState(false);
   const [adjustmentTopics, setAdjustmentTopics] = useState<string[]>([]);
   const [adjustmentNote, setAdjustmentNote] = useState("");
   const [adjustmentSubmitted, setAdjustmentSubmitted] = useState(false);
-  const [swapSourceCargoId, setSwapSourceCargoId] = useState<string | null>(null);
   const [snapshots, setSnapshots] = useState<Partial<Record<SolutionProfile, string>>>({});
   const [recalculateContainerId, setRecalculateContainerId] = useState(container.id);
   const [recalculateError, setRecalculateError] = useState<string | null>(null);
-  const selected = response.solutions.find((solution) => solution.profile === selectedProfile) ?? response.solutions[0];
-  const editedSelected = selected === response.solutions[0] ? { ...selected, placements: editedPlacements, metrics: editedCargoIds.size > 0 ? recalculateMetrics(container, cargoItems, editedPlacements, selected.metrics.loading_steps, selected.metrics.cargo_zones) : selected.metrics } : selected;
+  const [workbenchOpen, setWorkbenchOpen] = useState(false);
+  const [solutionOverrides, setSolutionOverrides] = useState<Partial<Record<SolutionProfile, PackingSolution>>>({});
+  const response = { ...originalResponse, solutions: originalResponse.solutions.map(s => solutionOverrides[s.profile] ?? s) };
+  const baseSelected = response.solutions.find((solution) => solution.profile === selectedProfile) ?? response.solutions[0];
+  const selected = solutionOverrides[baseSelected.profile] ?? baseSelected;
   const resetEdits = () => {
-    setEditedPlacements(response.solutions[0]?.placements ?? []);
-    setEditedCargoIds(new Set());
+    setSolutionOverrides(current => { const next = { ...current }; delete next[selectedProfile]; return next; });
+    setSnapshots(current => ({ ...current, [selectedProfile]: undefined }));
     setEditMessage("已恢复计算生成的原始布局");
   };
   const cargoById = Object.fromEntries(cargoItems.map((item) => [item.id, item]));
@@ -119,8 +119,10 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
     })).filter((group) => group.warnings.length > 0)
   ), [selected.warnings]);
   useEffect(() => {
-    setSelectedProfile(recommendProfile(response));
-  }, [response.request_id]);
+    setSelectedProfile(recommendProfile(originalResponse));
+    setSolutionOverrides({}); setSnapshots({}); setLockedCargoIds(new Set());
+    setWorkbenchOpen(false); setEditMessage(null); setFeedback(null);
+  }, [originalResponse]);
   const handleSnapshot = useCallback((dataUrl: string) => {
     setSnapshots((current) => ({ ...current, [selectedProfile]: dataUrl }));
   }, [selectedProfile]);
@@ -143,16 +145,18 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
 
   return (
     <main className="results-page">
+      {workbenchOpen && <LayoutWorkbench solution={selected} container={container} cargoItems={cargoItems} itemGapCm={itemGapCm} initialLockedCargoIds={lockedCargoIds} onClose={() => setWorkbenchOpen(false)} onApply={(nextSolution, locks) => { setSolutionOverrides((current) => ({ ...current, [nextSolution.profile]: nextSolution })); setLockedCargoIds(locks); setSnapshots(current => ({ ...current, [nextSolution.profile]: undefined })); setWorkbenchOpen(false); setEditMessage("布局已应用，指标与安全复核结果已更新"); trackAnalyticsEvent("pack_layout_workbench_applied", { profile: nextSolution.profile }); }} />}
       <header className="result-toolbar no-print">
         <button type="button" className="text-button" onClick={onBack}><ArrowLeft size={17} /> 修改货物</button>
         <div><span className="eyebrow">计算结果 · {response.request_id}</span><h1>方案比较</h1></div>
         <div className="result-actions">
+          <button type="button" className="primary-outline-button" onClick={() => setWorkbenchOpen(true)}>编辑布局</button>
           <label className="recalculate-control"><span className="visually-hidden">重算柜型</span><select aria-label="重算柜型" value={recalculateContainerId} onChange={(event) => setRecalculateContainerId(event.target.value)} disabled={recalculating}>{recalculateContainers.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><button type="button" className="primary-outline-button recalculate-button" title="确认重算" onClick={handleRecalculate} disabled={recalculating}><RefreshCw className={recalculating ? "spin" : undefined} size={17} /><span>{recalculating ? "正在重算" : "确认重算"}</span></button></label>
           <button type="button" className="primary-outline-button" onClick={() => { trackAnalyticsEvent("pack_export_print", { profile: selectedProfile }); window.print(); }}><Printer size={17} /> 打印 / PDF</button>
         </div>
       </header>
       {recalculateError && <p className="recalculate-error" role="alert">{recalculateError}</p>}
-      {editedCargoIds.size > 0 && <div className="edit-summary no-print" role="status"><strong>存在人工调整</strong><span>已调整 {editedCargoIds.size} 种货物。当前调整已通过边界和碰撞校验，尚未重新计算整体指标。</span><button type="button" onClick={resetEdits}>恢复原始布局</button></div>}
+      {solutionOverrides[selectedProfile] && <div className="edit-summary no-print" role="status"><strong>当前方案已人工调整</strong><span>布局与指标已通过后端规则复核；打印使用本次应用的布局。</span><button type="button" onClick={resetEdits}>恢复原始布局</button></div>}
       <div className="solution-feedback no-print" role="group" aria-label="方案反馈">
         <span>这个方案对你有帮助吗？</span>
         <button type="button" className={feedback === "accepted" ? "is-selected" : ""} onClick={() => { setFeedback("accepted"); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "accepted" }); }}>满意</button>
@@ -171,11 +175,11 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
         <textarea aria-label="补充调整要求" placeholder="例如：把深绿色货物向中间集中，数量少的货物放两侧" value={adjustmentNote} onChange={(event) => setAdjustmentNote(event.target.value)} rows={3} />
         <div className="adjustment-actions">
           <button type="button" className="primary-outline-button" onClick={() => { setAdjustmentSubmitted(true); trackAnalyticsEvent("pack_solution_adjustment_submitted", { profile: selectedProfile, topics: adjustmentTopics.join("|") || "none", has_note: Boolean(adjustmentNote.trim()) }); }}>提交调整说明</button>
-          <button type="button" className="text-button" onClick={() => document.querySelector(".workspace-grid")?.scrollIntoView({ behavior: "smooth", block: "start" })}>进入人工调整</button>
+          <button type="button" className="text-button" onClick={() => setWorkbenchOpen(true)}>进入人工调整</button>
           <button type="button" className="text-button" onClick={handleRecalculate} disabled={recalculating}>重新计算</button>
           <button type="button" className="text-button" onClick={() => setAdjustmentOpen(false)}>收起</button>
         </div>
-        {adjustmentSubmitted && <p className="adjustment-confirmation" role="status">调整说明已记录。当前布局未改变；如需应用，请使用人工调整或重新计算。</p>}
+        {adjustmentSubmitted && <p className="adjustment-confirmation" role="status">调整说明已记录。当前布局未改变；说明仅暂存本页，文字尚未发送给算法。请进入人工调整应用具体位置。</p>}
       </section>}
       {aiStrategy && <section className={`ai-strategy-status ai-strategy-status--${aiStrategy.status} no-print`} aria-label="AI 策略状态" role="status" aria-live="polite">
         <Sparkles size={18} aria-hidden="true" />
@@ -198,7 +202,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
       </section>}
 
       <section className="solution-tabs" aria-label="装柜方案">
-        {response.solutions.map((solution) => {
+        {response.solutions.map((baseSolution) => { const solution = solutionOverrides[baseSolution.profile] ?? baseSolution;
           const primaryValue = solution.profile === "high_fill"
             ? `${solution.metrics.volume_utilization_pct}%`
             : solution.profile === "stable"
@@ -219,13 +223,9 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
         <h2>方案指标对比</h2>
         <div className="comparison-table-wrap">
           <table className="comparison-table">
-            <thead><tr><th>指标</th>{response.solutions.map((solution) => <th key={solution.profile}>{profileDisplayName[solution.profile]}{recommended === solution.profile ? " · 推荐" : ""}</th>)}</tr></thead>
+            <thead><tr><th>指标</th>{response.solutions.map((baseSolution) => { const solution = solutionOverrides[baseSolution.profile] ?? baseSolution; return <th key={solution.profile}>{profileDisplayName[solution.profile]}{recommended === solution.profile ? " · 推荐" : ""}</th>; })}</tr></thead>
             <tbody>
-              <tr><th>装入件数</th>{response.solutions.map((solution) => <td key={solution.profile}>{solution.metrics.loaded_pieces} 件</td>)}</tr>
-              <tr><th>体积利用率</th>{response.solutions.map((solution) => <td key={solution.profile}>{solution.metrics.volume_utilization_pct}%</td>)}</tr>
-              <tr><th>前后偏差</th>{response.solutions.map((solution) => <td key={solution.profile}>{solution.metrics.length_imbalance_pct}%</td>)}</tr>
-              <tr><th>底层最大空隙</th>{response.solutions.map((solution) => <td key={solution.profile}>{solution.metrics.floor_largest_gap_mm ?? 0} mm</td>)}</tr>
-              <tr><th>装载步数</th>{response.solutions.map((solution) => <td key={solution.profile}>{solution.metrics.loading_steps} 步</td>)}</tr>
+              {(["loaded_pieces", "volume_utilization_pct", "length_imbalance_pct", "floor_largest_gap_mm", "loading_steps"] as const).map((metric, index) => <tr key={metric}><th>{["装入件数", "体积利用率", "前后偏差", "底层最大空隙", "装载步数"][index]}</th>{response.solutions.map(solution => <td key={solution.profile}>{solution.metrics[metric] ?? 0}{[" 件", "%", "%", " mm", " 步"][index]}</td>)}</tr>)}
             </tbody>
           </table>
         </div>
@@ -239,7 +239,7 @@ export function SolutionWorkspace({ response, container, presets, cargoItems, on
 
       <section className="workspace-grid">
         {editMessage && <p className="edit-message" role="status">{editMessage}</p>}
-        <LoadVisualizer container={container} solution={editedSelected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={(cargoId) => { setSelectedCargoId(cargoId); if (cargoId && selected.profile === "high_fill") setSwapSourceCargoId(cargoId); }} onSnapshot={handleSnapshot} lockedCargoIds={lockedCargoIds} swapSourceCargoId={swapSourceCargoId} onMovePlacement={(placementId, x_mm, y_mm) => { if (selected.profile !== "high_fill") return; const result = movePlacement(editedSelected.placements, placementId, x_mm, y_mm, container, lockedCargoIds); setEditMessage(result.error ?? "货物位置已调整，指标已重新计算"); if (!result.error) { const moved = editedSelected.placements.find((item) => item.id === placementId); setEditedPlacements(result.placements); if (moved) setEditedCargoIds((current) => new Set(current).add(moved.cargo_id)); trackAnalyticsEvent("pack_layout_edited", { action: "move" }); } }} onSwapCargo={(cargoId) => { if (!swapSourceCargoId || selected.profile !== "high_fill") return; const result = swapCargoPlacements(editedSelected.placements, swapSourceCargoId, cargoId, lockedCargoIds); setEditMessage(result.error ?? "货物位置已交换，指标已重新计算"); if (!result.error) { setEditedPlacements(result.placements); setEditedCargoIds((current) => new Set([...current, swapSourceCargoId, cargoId])); trackAnalyticsEvent("pack_layout_edited", { action: "swap" }); setSwapSourceCargoId(null); } }} onToggleLockCargo={(cargoId) => setLockedCargoIds((current) => { const next = new Set(current); if (next.has(cargoId)) next.delete(cargoId); else next.add(cargoId); return next; })} onRotateCargo={(cargoId) => { const cargo = cargoItems.find((item) => item.id === cargoId); if (!cargo) return; if (selected.profile !== "high_fill") { setEditMessage("当前版本先支持在装载率优先方案中编辑，其他方案请重新计算后复核"); return; } const result = rotateCargoPlacements(editedSelected.placements, cargo, container, lockedCargoIds); setEditMessage(result.error ?? `${cargo.sku} 已旋转，布局通过边界和碰撞校验`); if (!result.error) { setEditedPlacements(result.placements); setEditedCargoIds((current) => new Set(current).add(cargoId)); trackAnalyticsEvent("pack_layout_edited", { action: "rotate", cargo_id: cargoId }); } }} />
+        <LoadVisualizer container={container} solution={selected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={setSelectedCargoId} onSnapshot={handleSnapshot} />
         <aside className="result-inspector">
           <div className="metric-strip">
             <div><span>体积利用率</span><strong>{selected.metrics.volume_utilization_pct}%</strong></div>

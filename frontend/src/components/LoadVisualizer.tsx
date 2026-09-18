@@ -2,6 +2,7 @@ import { Box, DoorOpen, Layers3, Pause, Play, RectangleHorizontal, ScanLine } fr
 import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
+import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 
 import type { CargoInput, ContainerSpec, PackingSolution, Placement, Zone } from "../types";
 
@@ -19,7 +20,12 @@ interface Props {
   onRotateCargo?: (cargoId: string) => void;
   onSwapCargo?: (cargoId: string) => void;
   swapSourceCargoId?: string | null;
-  onMovePlacement?: (placementId: string, x_mm: number, y_mm: number) => void;
+  onMovePlacement?: (placementId: string, x_mm: number, y_mm: number, z_mm?: number) => void;
+  selectedPlacementId?: string | null;
+  onSelectPlacement?: (id: string | null) => void;
+  editing?: boolean;
+  hideLegend?: boolean;
+  invalidPlacementIds?: string[];
 }
 
 const PALETTE = ["#0b8f79", "#df8b2f", "#3375b8", "#c6534d", "#6d6eb5", "#568b48", "#b15888", "#4b8996", "#9c6a3c", "#78818c"];
@@ -35,7 +41,7 @@ interface MeshGroup {
   matrices: THREE.Matrix4[];
 }
 
-function ThreeScene({ container, placements, visibleStep, colors, selectedCargoId, onSelectCargo, onSnapshot, onUnavailable }: {
+function ThreeScene({ container, placements, visibleStep, colors, selectedCargoId, onSelectCargo, onSnapshot, onUnavailable, selectedPlacementId, onSelectPlacement, onMovePlacement, editing, lockedCargoIds, invalidPlacementIds }: {
   container: ContainerSpec;
   placements: Placement[];
   visibleStep: number;
@@ -44,6 +50,12 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
   onSelectCargo?: (cargoId: string | null) => void;
   onSnapshot?: (dataUrl: string) => void;
   onUnavailable?: () => void;
+  selectedPlacementId?: string | null;
+  onSelectPlacement?: (id: string | null) => void;
+  onMovePlacement?: Props["onMovePlacement"];
+  editing?: boolean;
+  lockedCargoIds?: Set<string>;
+  invalidPlacementIds?: string[];
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const groupsRef = useRef<MeshGroup[]>([]);
@@ -51,6 +63,10 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
   const onSelectRef = useRef(onSelectCargo);
   const onSnapshotRef = useRef(onSnapshot);
   const onUnavailableRef = useRef(onUnavailable);
+  const editRef = useRef({ selectedPlacementId, onSelectPlacement, onMovePlacement, editing, lockedCargoIds, invalidPlacementIds });
+  editRef.current = { selectedPlacementId, onSelectPlacement, onMovePlacement, editing, lockedCargoIds, invalidPlacementIds };
+  const transformRef = useRef<{ control: TransformControls; proxy: THREE.Mesh; scale: number } | null>(null);
+  const viewRef = useRef<{ position: THREE.Vector3; target: THREE.Vector3 } | null>(null);
 
   useEffect(() => { onSelectRef.current = onSelectCargo; }, [onSelectCargo]);
   useEffect(() => { onSnapshotRef.current = onSnapshot; }, [onSnapshot]);
@@ -100,6 +116,33 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
     controls.target.set(0, 0, 0);
     controls.minDistance = 4;
     controls.maxDistance = 32;
+    if (viewRef.current) { camera.position.copy(viewRef.current.position); controls.target.copy(viewRef.current.target); }
+
+    const proxy = new THREE.Mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshBasicMaterial({ color: 0xe8aa3b, transparent: true, opacity: 0.5, wireframe: true, depthTest: false }));
+    proxy.visible = false;
+    scene.add(proxy);
+    const transform = new TransformControls(camera, renderer.domElement);
+    transform.setMode("translate");
+    transform.setTranslationSnap(10 * scale);
+    scene.add(transform.getHelper());
+    transformRef.current = { control: transform, proxy, scale };
+    let start: THREE.Vector3 | null = null;
+    transform.addEventListener("mouseDown", () => { start = proxy.position.clone(); });
+    transform.addEventListener("dragging-changed", event => { controls.enabled = !event.value; });
+    transform.addEventListener("mouseUp", () => {
+      const item = placements.find(p => p.id === editRef.current.selectedPlacementId);
+      if (item && start && start.distanceTo(proxy.position) > 0.0001) {
+        editRef.current.onMovePlacement?.(item.id,
+          Math.round(proxy.position.x / scale + container.inner_length_mm / 2 - item.length_mm / 2),
+          Math.round(proxy.position.z / scale + container.inner_width_mm / 2 - item.width_mm / 2),
+          Math.round(proxy.position.y / scale + container.inner_height_mm / 2 - item.height_mm / 2));
+      }
+      start = null;
+    });
+    const cancelDrag = () => { if (start) proxy.position.copy(start); start = null; transform.reset(); controls.enabled = true; };
+    const escapeDrag = (event: KeyboardEvent) => { if (event.key === "Escape") cancelDrag(); };
+    renderer.domElement.addEventListener("pointercancel", cancelDrag);
+    window.addEventListener("keydown", escapeDrag);
 
     scene.add(new THREE.HemisphereLight(0xffffff, 0x7c8981, 2.4));
     const light = new THREE.DirectionalLight(0xffffff, 2.7);
@@ -185,12 +228,16 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
     const raycaster = new THREE.Raycaster();
     const pointer = new THREE.Vector2();
     const handlePointer = (event: PointerEvent) => {
+      if (transform.axis || transform.dragging) return;
       const bounds = renderer.domElement.getBoundingClientRect();
       pointer.x = ((event.clientX - bounds.left) / bounds.width) * 2 - 1;
       pointer.y = -((event.clientY - bounds.top) / bounds.height) * 2 + 1;
       raycaster.setFromCamera(pointer, camera);
       const hit = raycaster.intersectObjects(cargoMeshes)[0];
-      onSelectRef.current?.(hit ? String(hit.object.userData.cargoId) : null);
+      if (editRef.current.onSelectPlacement) {
+        const group = groupsRef.current.find(g => g.mesh === hit?.object);
+        editRef.current.onSelectPlacement(group && hit.instanceId !== undefined ? group.placements[hit.instanceId]?.id ?? null : null);
+      } else onSelectRef.current?.(hit ? String(hit.object.userData.cargoId) : null);
     };
     renderer.domElement.addEventListener("pointerdown", handlePointer);
 
@@ -218,6 +265,13 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
     rendererRef.current = { renderer, scene, camera };
 
     return () => {
+      viewRef.current = { position: camera.position.clone(), target: controls.target.clone() };
+      transform.detach();
+      scene.remove(transform.getHelper());
+      transform.dispose();
+      transformRef.current = null;
+      renderer.domElement.removeEventListener("pointercancel", cancelDrag);
+      window.removeEventListener("keydown", escapeDrag);
       cancelAnimationFrame(frame);
       observer?.disconnect();
       if (!observer) window.removeEventListener("resize", resize);
@@ -240,6 +294,28 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
   }, [container, placements, colors]);
 
   useEffect(() => {
+    const state = transformRef.current;
+    if (!state) return;
+    const p = placements.find(item => item.id === selectedPlacementId);
+    if (!p || !editing || lockedCargoIds?.has(p.cargo_id)) {
+      state.control.detach(); state.proxy.visible = false; return;
+    }
+    state.proxy.position.set((p.x_mm + p.length_mm / 2 - container.inner_length_mm / 2) * state.scale,
+      (p.z_mm + p.height_mm / 2 - container.inner_height_mm / 2) * state.scale,
+      (p.y_mm + p.width_mm / 2 - container.inner_width_mm / 2) * state.scale);
+    state.proxy.scale.set(p.length_mm * state.scale, p.height_mm * state.scale, p.width_mm * state.scale);
+    state.proxy.visible = true;
+    state.control.attach(state.proxy);
+  }, [selectedPlacementId, editing, placements, lockedCargoIds, container]);
+
+  useEffect(() => {
+    groupsRef.current.forEach(group => {
+      group.placements.forEach((p, i) => group.mesh.setColorAt(i, new THREE.Color(invalidPlacementIds?.includes(p.id) ? "#ec5143" : p.id === selectedPlacementId ? "#f2ca70" : "#ffffff")));
+      if (group.mesh.instanceColor) group.mesh.instanceColor.needsUpdate = true;
+    });
+  }, [invalidPlacementIds, selectedPlacementId, placements]);
+
+  useEffect(() => {
     const hiddenMatrix = new THREE.Matrix4().makeScale(0, 0, 0);
     groupsRef.current.forEach((group) => {
       group.placements.forEach((placement, index) => {
@@ -255,7 +331,7 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
       state.renderer.render(state.scene, state.camera);
       try { onSnapshotRef.current?.(state.renderer.domElement.toDataURL("image/png")); } catch { /* Browser may block canvas export. */ }
     }
-  }, [visibleStep]);
+  }, [visibleStep, placements]);
 
   useEffect(() => {
     groupsRef.current.forEach((group) => {
@@ -266,12 +342,12 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
       material.opacity = dimmed ? 0.2 : 0.92;
       material.needsUpdate = true;
     });
-  }, [selectedCargoId]);
+  }, [selectedCargoId, placements]);
 
   return <div className="three-scene" ref={hostRef} />;
 }
 
-export function StaticLayout({ mode, container, placements, zones, cargoItems, selectedCargoId, onSelectCargo, onMovePlacement, testId = "layout-svg", compact }: {
+export function StaticLayout({ mode, container, placements, zones, cargoItems, selectedCargoId, onSelectCargo, onMovePlacement, testId = "layout-svg", compact, onSelectPlacement, selectedPlacementId, lockedCargoIds, invalidPlacementIds }: {
   mode: Exclude<ViewMode, "3d">;
   container: ContainerSpec;
   placements: Placement[];
@@ -282,7 +358,13 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
   onMovePlacement?: (placementId: string, x_mm: number, y_mm: number) => void;
   testId?: string;
   compact?: boolean;
+  onSelectPlacement?: Props["onSelectPlacement"];
+  selectedPlacementId?: string | null;
+  lockedCargoIds?: Set<string>;
+  invalidPlacementIds?: string[];
 }) {
+  const drag = useRef<{ id: string; x: number; y: number; clientX: number; clientY: number } | null>(null);
+  const [preview, setPreview] = useState<{ id: string; dx: number; dy: number } | null>(null);
   const colors = cargoColorMap(cargoItems);
   const cargoById = Object.fromEntries(cargoItems.map((cargo) => [cargo.id, cargo]));
   const isTop = mode === "top" || mode === "layers";
@@ -305,8 +387,33 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
         const height = isTop ? placement.width_mm : placement.height_mm;
         const dimmed = selectedCargoId != null && selectedCargoId !== placement.cargo_id;
         return (
-            <g key={placement.id} onClick={() => onSelectCargo?.(placement.cargo_id)} onPointerUp={(event) => { if (!onMovePlacement || compact || mode !== "top") return; const svg = event.currentTarget.ownerSVGElement; if (!svg) return; const point = svg.createSVGPoint(); point.x = event.clientX; point.y = event.clientY; const transformed = point.matrixTransform(svg.getScreenCTM()?.inverse()); if (transformed) onMovePlacement(placement.id, Math.max(0, Math.round(transformed.x - width / 2)), Math.max(0, Math.round(transformed.y - height / 2))); }} className="layout-item" opacity={dimmed ? 0.2 : 1}>
-            <rect x={x} y={y} width={width} height={height} fill={colors[placement.cargo_id] ?? "#7b8680"} stroke="#173029" strokeWidth={Math.max(totalWidth, totalHeight) / 850} />
+            <g key={placement.id} onClick={() => onSelectPlacement ? onSelectPlacement(placement.id) : onSelectCargo?.(placement.cargo_id)}
+              transform={preview?.id === placement.id ? `translate(${preview.dx} ${preview.dy})` : undefined}
+              onPointerDown={event => {
+                if (!onMovePlacement || compact || mode !== "top" || lockedCargoIds?.has(placement.cargo_id)) return;
+                const svg = event.currentTarget.ownerSVGElement;
+                const matrix = svg?.getScreenCTM();
+                if (!svg || !matrix) return;
+                const point = svg.createSVGPoint(); point.x = event.clientX; point.y = event.clientY;
+                const origin = point.matrixTransform(matrix.inverse());
+                drag.current = { id: placement.id, x: origin.x, y: origin.y, clientX: event.clientX, clientY: event.clientY };
+                event.currentTarget.setPointerCapture(event.pointerId);
+              }}
+              onPointerMove={event => {
+                if (drag.current?.id !== placement.id) return;
+                const svg = event.currentTarget.ownerSVGElement; const matrix = svg?.getScreenCTM();
+                if (!svg || !matrix) return;
+                const point = svg.createSVGPoint(); point.x = event.clientX; point.y = event.clientY;
+                const dest = point.matrixTransform(matrix.inverse());
+                setPreview({ id: placement.id, dx: Math.round((dest.x - drag.current.x) / 10) * 10, dy: Math.round((dest.y - drag.current.y) / 10) * 10 });
+              }}
+              onPointerCancel={() => { drag.current = null; setPreview(null); }}
+              onPointerUp={event => {
+                const origin = drag.current;
+                if (origin?.id === placement.id && preview?.id === placement.id && Math.hypot(event.clientX - origin.clientX, event.clientY - origin.clientY) > 4) onMovePlacement?.(placement.id, placement.x_mm + preview.dx, placement.y_mm + preview.dy);
+                drag.current = null; setPreview(null);
+              }} className="layout-item" opacity={dimmed ? 0.2 : 1}>
+            <rect x={x} y={y} width={width} height={height} fill={invalidPlacementIds?.includes(placement.id) ? "#dc463d" : colors[placement.cargo_id] ?? "#7b8680"} stroke={selectedPlacementId === placement.id ? "#f0b22b" : "#173029"} strokeWidth={Math.max(totalWidth, totalHeight) / (selectedPlacementId === placement.id ? 220 : 850)} />
             {!compact && width > fontSize * 3 && height > fontSize * 1.5 && <text x={x + width / 2} y={y + height / 2} dominantBaseline="middle" textAnchor="middle" fontSize={fontSize} fill="white">{cargoById[placement.cargo_id]?.sku ?? placement.cargo_id}</text>}
           </g>
         );
@@ -328,7 +435,7 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
   );
 }
 
-export function LoadVisualizer({ container, solution, cargoItems, selectedCargoId, onSelectCargo, onSnapshot, lockedCargoIds, onToggleLockCargo, onRotateCargo, onSwapCargo, swapSourceCargoId, onMovePlacement }: Props) {
+export function LoadVisualizer({ container, solution, cargoItems, selectedCargoId, onSelectCargo, onSnapshot, lockedCargoIds, onToggleLockCargo, onRotateCargo, onSwapCargo, swapSourceCargoId, onMovePlacement, selectedPlacementId, onSelectPlacement, editing, hideLegend, invalidPlacementIds }: Props) {
   const [mode, setMode] = useState<ViewMode>("3d");
   const [threeUnavailable, setThreeUnavailable] = useState(false);
   const maxStep = Math.max(1, ...solution.placements.map((item) => item.step));
@@ -384,18 +491,18 @@ export function LoadVisualizer({ container, solution, cargoItems, selectedCargoI
       </div>
 
       <div className="visual-stage">
-        {mode === "3d" && !threeUnavailable ? <ThreeScene container={container} placements={solution.placements} visibleStep={step} colors={colors} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onSnapshot={onSnapshot} onUnavailable={handleThreeUnavailable} /> : (
+        {mode === "3d" && !threeUnavailable ? <ThreeScene container={container} placements={solution.placements} visibleStep={step} colors={colors} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onSnapshot={onSnapshot} onUnavailable={handleThreeUnavailable} selectedPlacementId={selectedPlacementId} onSelectPlacement={onSelectPlacement} onMovePlacement={onMovePlacement} editing={editing} lockedCargoIds={lockedCargoIds} invalidPlacementIds={invalidPlacementIds} /> : (
           <>
             {threeUnavailable && mode === "top" && <div className="visual-fallback" role="status" aria-live="polite">当前设备不支持 3D，已自动切换为二维俯视图。</div>}
-            <StaticLayout mode={mode === "3d" ? "top" : mode} container={container} placements={visible} zones={solution.zones} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onMovePlacement={onMovePlacement} />
+            <StaticLayout mode={mode === "3d" ? "top" : mode} container={container} placements={visible} zones={solution.zones} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onSelectPlacement={onSelectPlacement} selectedPlacementId={selectedPlacementId} lockedCargoIds={lockedCargoIds} invalidPlacementIds={invalidPlacementIds} onMovePlacement={onMovePlacement} />
           </>
         )}
       </div>
 
       {mode === "layers" && layers.length > 0 && <label className="layer-control no-print"><span>层高 {(layers[layerIndex] / 10).toFixed(1)} cm</span><input aria-label="查看层高" type="range" min="0" max={Math.max(0, layers.length - 1)} value={layerIndex} onChange={(event) => setLayerIndex(Number(event.target.value))} /></label>}
-      <div className="cargo-legend no-print">
+      {!hideLegend && <div className="cargo-legend no-print">
         {cargoItems.map((cargo) => <span className="cargo-legend-item" key={cargo.id}><button type="button" className={selectedCargoId === cargo.id ? "is-active" : ""} onClick={() => onSelectCargo?.(selectedCargoId === cargo.id ? null : cargo.id)}><i style={{ background: colors[cargo.id] }} />{cargo.sku}</button><button type="button" className="cargo-lock-button" aria-label={`旋转 ${cargo.sku}`} onClick={() => onRotateCargo?.(cargo.id)}>旋转</button>{swapSourceCargoId && swapSourceCargoId !== cargo.id && <button type="button" className="cargo-lock-button" aria-label={`交换 ${cargo.sku}`} onClick={() => onSwapCargo?.(cargo.id)}>交换</button>}<button type="button" className={`cargo-lock-button ${lockedCargoIds?.has(cargo.id) ? "is-locked" : ""}`} aria-label={`${lockedCargoIds?.has(cargo.id) ? "解锁" : "锁定"} ${cargo.sku}`} onClick={() => onToggleLockCargo?.(cargo.id)}>{lockedCargoIds?.has(cargo.id) ? "已锁定" : "锁定"}</button></span>)}
-      </div>
+      </div>}
     </div>
   );
 }

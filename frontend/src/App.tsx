@@ -77,7 +77,7 @@ export default function App() {
     try {
       const requestContainer = { ...nextContainer, clearance_mm: Math.round(clearanceCm * 10) };
       const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig, preferredProfile, lockedPlacements);
-      setContainer(nextContainer);
+      setContainer(requestContainer);
       setResult(nextResult);
       trackAnalyticsEvent("pack_solutions_generated", { cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), recommended_profile: nextResult.recommended_profile ?? preferredProfile });
     } finally {
@@ -134,7 +134,7 @@ export default function App() {
   };
 
   if (result && container) {
-    return <SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} onBack={() => { trackAnalyticsEvent("pack_edit_input"); setResult(null); }} onRecalculate={calculateFor} recalculating={loading} />;
+    return <SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} itemGapCm={itemGapCm} onBack={() => { trackAnalyticsEvent("pack_edit_input"); setResult(null); }} onRecalculate={calculateFor} recalculating={loading} />;
   }
 
   if (showModelSettings) {
