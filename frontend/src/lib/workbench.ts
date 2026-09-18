@@ -47,8 +47,33 @@ export function constrainMove(placements: Placement[], id: string, position: [nu
   return moveDraft(placements, id, bounded, wholeCargo, locked);
 }
 
+function edgeSnapOffsets(group: Placement[], neighbors: Placement[], container: ContainerSpec, gap: number): [number, number][] {
+  const c = container.clearance_mm ?? 0;
+  const tolerance = Math.min(50, ...group.map(p => Math.min(p.length_mm, p.width_mm) / 4));
+  const xs = new Set<number>();
+  const ys = new Set<number>();
+  const add = (values: Set<number>, delta: number) => { if (Math.abs(delta) <= tolerance) values.add(delta); };
+  add(xs, c - Math.min(...group.map(p => p.x_mm)));
+  add(xs, container.inner_length_mm - c - Math.max(...group.map(p => p.x_mm + p.length_mm)));
+  add(ys, c - Math.min(...group.map(p => p.y_mm)));
+  add(ys, container.inner_width_mm - c - Math.max(...group.map(p => p.y_mm + p.width_mm)));
+  for (const p of group) for (const n of neighbors) {
+    const dx = Math.max(0, n.x_mm - p.x_mm - p.length_mm, p.x_mm - n.x_mm - n.length_mm);
+    const dy = Math.max(0, n.y_mm - p.y_mm - p.width_mm, p.y_mm - n.y_mm - n.width_mm);
+    if (dx > gap + tolerance || dy > gap + tolerance) continue;
+    for (const x of [n.x_mm - p.length_mm - gap, n.x_mm + n.length_mm + gap, n.x_mm, n.x_mm + n.length_mm - p.length_mm]) add(xs, x - p.x_mm);
+    for (const y of [n.y_mm - p.width_mm - gap, n.y_mm + n.width_mm + gap, n.y_mm, n.y_mm + n.width_mm - p.width_mm]) add(ys, y - p.y_mm);
+  }
+  // Try nearby alignments first, then one-axis snapping, then the unsnapped position.
+  const nearest = (values: Set<number>) => [...values].sort((a, b) => Math.abs(a) - Math.abs(b)).slice(0, 3);
+  const offsets = nearest(xs).flatMap(x => nearest(ys).map(y => [x, y] as [number, number]));
+  offsets.sort((a, b) => Math.hypot(...a) - Math.hypot(...b));
+  const singleAxis: [number, number][] = [...nearest(xs).map(x => [x, 0] as [number, number]), ...nearest(ys).map(y => [0, y] as [number, number])];
+  return [...offsets, ...singleAxis.sort((a, b) => Math.hypot(...a) - Math.hypot(...b)), [0, 0]];
+}
+
 // Relocation describes the final layout, not a physical path through intervening boxes.
-export function relocateDraft(placements: Placement[], id: string, position: [number, number], wholeCargo: boolean, locked: Set<string>, container: ContainerSpec, gap = 0): { placements: Placement[]; error: string | null } {
+export function relocateDraft(placements: Placement[], id: string, position: [number, number], wholeCargo: boolean, locked: Set<string>, container: ContainerSpec, gap = 0): { placements: Placement[]; error: string | null; snapped?: boolean } {
   const selected = placements.find(p => p.id === id);
   const fail = (error: string) => ({ placements, error });
   if (!selected || locked.has(selected.cargo_id)) return fail('该货物已锁定，不能搬移');
@@ -73,14 +98,21 @@ export function relocateDraft(placements: Placement[], id: string, position: [nu
     .sort((a, b) => Math.hypot(a.x_mm - position[0], a.y_mm - position[1]) - Math.hypot(b.x_mm - position[0], b.y_mm - position[1]))[0];
   const [x, y] = target ? [target.x_mm, target.y_mm] : position;
   const group = constrainMove(placements, id, [x, y, selected.z_mm], wholeCargo, locked, container).filter(p => moving.has(p.id));
-  const destination = group.find(p => p.id === id)!;
-  if (destination.x_mm === selected.x_mm && destination.y_mm === selected.y_mm) return { placements, error: null };
-  // A SKU group moves rigidly; all members share the same vertical displacement.
-  const dz = Math.max(...group.map(p => Math.max(floor, ...settled.filter(b => overlaps(p, b)).map(b => b.z_mm + b.height_mm)) - p.z_mm));
-  const byId = new Map([...settled, ...group.map(p => ({ ...p, z_mm: p.z_mm + dz }))].map(p => [p.id, p]));
-  const next = placements.map(p => byId.get(p.id)!);
-  const error = geometryError(next, container, gap);
-  return error ? fail(error) : { placements: next, error: null };
+  let error: string | null = null;
+  // A matching support surface takes priority over wall magnets to avoid overhang.
+  const offsets: [number, number][] = target ? [[0, 0]] : edgeSnapOffsets(group, settled, container, gap);
+  for (const [dx, dy] of offsets) {
+    const aligned = group.map(p => ({ ...p, x_mm: p.x_mm + dx, y_mm: p.y_mm + dy }));
+    const destination = aligned.find(p => p.id === id)!;
+    if (destination.x_mm === selected.x_mm && destination.y_mm === selected.y_mm) return { placements, error: null };
+    // A SKU group moves rigidly; all members share the same vertical displacement.
+    const dz = Math.max(...aligned.map(p => Math.max(floor, ...settled.filter(b => overlaps(p, b)).map(b => b.z_mm + b.height_mm)) - p.z_mm));
+    const byId = new Map([...settled, ...aligned.map(p => ({ ...p, z_mm: p.z_mm + dz }))].map(p => [p.id, p]));
+    const next = placements.map(p => byId.get(p.id)!);
+    error = geometryError(next, container, gap);
+    if (!error) return { placements: next, error: null, snapped: destination.x_mm !== bounded.x_mm || destination.y_mm !== bounded.y_mm };
+  }
+  return fail(error ?? '目标位置无法安全落位，已保留原位置');
 }
 
 export interface EditHistory {

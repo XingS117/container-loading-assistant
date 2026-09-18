@@ -4,6 +4,40 @@ import type { ContainerSpec, Placement } from '../types';
 
 const a: Placement = { id: 'a-0', cargo_id: 'a', instance_index: 0, x_mm: 100, y_mm: 100, z_mm: 0, length_mm: 600, width_mm: 400, height_mm: 400, rotation: 'LWH', weight_g: 18000, step: 1 };
 const box = { inner_length_mm: 3000, inner_width_mm: 2000, inner_height_mm: 2000, clearance_mm: 0 } as ContainerSpec;
+test('snaps to all cabinet walls while respecting clearance', () => {
+  const cabinet = { ...box, clearance_mm: 20 };
+  const p = { ...a, z_mm: 20 };
+  expect(relocateDraft([p], p.id, [45, 49], false, new Set(), cabinet).placements[0]).toMatchObject({ x_mm: 20, y_mm: 20, z_mm: 20 });
+  expect(relocateDraft([p], p.id, [2355, 1550], false, new Set(), cabinet).placements[0]).toMatchObject({ x_mm: 2380, y_mm: 1580 });
+});
+test('snaps beside different cargo with the configured gap and aligns its edge', () => {
+  const neighbor = { ...a, id: 'b', cargo_id: 'b', x_mm: 1400, y_mm: 600 };
+  const result = relocateDraft([a, neighbor], a.id, [755, 625], false, new Set(), box, 20);
+  expect(result.error).toBeNull();
+  expect(result.placements[0]).toMatchObject({ x_mm: 780, y_mm: 600, z_mm: 0 });
+  expect(result.snapped).toBe(true);
+  expect(result.placements[1]).toEqual(neighbor);
+  expect(relocateDraft([a, neighbor], a.id, [2025, 615], false, new Set(), box).placements[0]).toMatchObject({ x_mm: 2000, y_mm: 600 });
+  expect(relocateDraft([a, neighbor], a.id, [1420, 175], false, new Set(), box).placements[0]).toMatchObject({ x_mm: 1400, y_mm: 200 });
+  expect(relocateDraft([a, neighbor], a.id, [1410, 1040], false, new Set(), box).placements[0]).toMatchObject({ x_mm: 1400, y_mm: 1000 });
+});
+test('keeps intentional gaps and ignores distant alignment targets', () => {
+  expect(relocateDraft([a], a.id, [150, 160], false, new Set(), box).placements[0]).toMatchObject({ x_mm: 150, y_mm: 160 });
+  const distant = { ...a, id: 'b', cargo_id: 'b', x_mm: 1400, y_mm: 1500 };
+  expect(relocateDraft([a, distant], a.id, [1420, 200], false, new Set(), box).placements[0]).toMatchObject({ x_mm: 1420, y_mm: 200 });
+});
+test('snaps the outer edge of a whole group without changing its relative positions', () => {
+  const group = [a, { ...a, id: 'a-1', x_mm: 1000 }];
+  const result = relocateDraft(group, a.id, [1470, 25], true, new Set(), box);
+  expect(result.error).toBeNull();
+  expect(result.placements.map(p => [p.x_mm, p.y_mm])).toEqual([[1500, 0], [2400, 0]]);
+});
+test('does not snap an upper box away from complete support to a nearby wall', () => {
+  const support = { ...a, id: 'support', x_mm: 30, y_mm: 1000 };
+  const result = relocateDraft([a, support], a.id, [30, 1000], false, new Set(), box);
+  expect(result.error).toBeNull();
+  expect(result.placements[0]).toMatchObject({ x_mm: 30, y_mm: 1000, z_mm: 400 });
+});
 test('relocates an upper box to empty floor and settles the stack after extracting its bottom', () => {
   const stack = [a, { ...a, id: 'top', z_mm: 400 }];
   const upper = relocateDraft(stack, 'top', [1400, 100], false, new Set(), box);

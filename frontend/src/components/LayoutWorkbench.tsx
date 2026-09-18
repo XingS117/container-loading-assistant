@@ -90,7 +90,7 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
     const result = relocateDraft(placements, id, [x, y], wholeCargo, locked, container, itemGapCm * 10);
     if (result.error) { setActionError(result.error); return; }
     const count = result.placements.filter((p, i) => p.id !== id && !(wholeCargo && p.cargo_id === item.cargo_id) && p.z_mm !== placements[i].z_mm).length;
-    edit(result.placements, count ? `搬移完成，原货位 ${count} 件货物已向下归位；可撤销整次操作` : '已自动落在柜底或承载面，可撤销');
+    edit(result.placements, `${result.snapped ? '已吸附对齐；' : ''}${count ? `搬移完成，原货位 ${count} 件货物已向下归位；可撤销整次操作` : '已自动落在柜底或承载面，可撤销'}`);
   };
   const rotate = (rotation: Orientation) => {
     if (!selected || !cargo || locked.has(cargo.id) || !orientationsFor(cargo.orientation_mode).includes(rotation)) return;
@@ -134,7 +134,7 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
     <nav className="workbench-mode" aria-label="编辑操作">
       <button aria-pressed={!moving} onClick={() => setMoving(false)}>浏览 / 选择</button>
       <button aria-pressed={moving} onClick={() => setMoving(true)}>移动货物</button>
-      <span>{moving ? "拖动货物或箭头搬移，自动落地 / 吸附货垛；原货位上层自动向下归位。Esc 取消" : "点击货物选中；拖动空白处转视角，滚轮缩放"}</span>
+      <span>{moving ? "拖动自动贴边对齐并落位，保留设置间隙；原货位上层向下归位。Esc 取消" : "点击货物选中；拖动空白处转视角，滚轮缩放"}</span>
       <button className="workbench-panel-toggle" onClick={() => setPanel(panel === "cargo" ? null : "cargo")}>货物列表</button>
       <button className="workbench-panel-toggle" onClick={() => setPanel(panel === "inspect" ? null : "inspect")}>坐标 / 检查</button>
     </nav>
@@ -172,7 +172,7 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
             <button disabled={locked.has(cargo.id)} onClick={() => rotate(`${selected.rotation[1]}${selected.rotation[0]}${selected.rotation[2]}` as Orientation)}>水平旋转 90°</button>
             <button disabled={locked.has(cargo.id)} onClick={() => move(selected.id, selected.x_mm, selected.y_mm, container.clearance_mm ?? 0)}>放回底层</button>
           </div>
-          <small>方向以俯视图为准；步距为当前占用长/宽加间隙。拖动和平移自动落位，移开底层时原上层向下归位。精确坐标须有完整支撑。</small>
+          <small>靠近柜壁或相邻货物约 5cm 内自动吸附，小件范围相应缩小，保留设置间隙。步距为当前长/宽加间隙。移开底层时原上层向下归位；精确 XYZ 不吸附，须有完整支撑。</small>
           <div className="workbench-coordinates">{["X 柜长 cm", "Y 柜宽 cm", "Z 高度 cm"].map((label, i) => <label key={label}>{label}<input aria-label={label} type="number" step="1" value={position[i]} disabled={locked.has(cargo.id)} onChange={e => setPosition(p => p.map((v, j) => i === j ? e.target.value : v))} /></label>)}</div>
           <button disabled={locked.has(cargo.id)} onClick={() => {
             if (position.slice(0, 2).some(v => !v.trim() || !Number.isFinite(Number(v)))) { setActionError('请输入有效的 X、Y 坐标'); return; }
