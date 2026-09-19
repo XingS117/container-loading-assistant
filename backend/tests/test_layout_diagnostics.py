@@ -63,3 +63,11 @@ def test_every_solver_path_gets_assessment_and_fallback_is_labelled():
     assert all(s.assessment.status=='budget_fallback' for s in response.solutions)
     assert all(s.assessment.hard_constraints for s in response.solutions)
     assert response.recommendation_reason
+
+
+def test_door_working_reserve_is_reported_as_soft_goal_not_guaranteed_clearance():
+    req=request().model_copy(update={'door_buffer_mm':300})
+    solution=_build_solution(req,[],'high_fill',fixed_placements=[piece(0,x=3000)])
+    explain_solutions(req,[solution])
+    assert any('实际柜门预留 0mm' in message for message in solution.assessment.unmet_soft_goals)
+    assert any('预留操作空间' in message for message in [solution.assessment.limits])

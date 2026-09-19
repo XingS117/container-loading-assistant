@@ -130,6 +130,7 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
         deltas:{},tradeoffs:[],unmet_soft_goals:[...(!currentReview.diagnostics.complete?['复杂布局分析不完整，请结合分层图复核']:[]),
           ...(currentReview.diagnostics.large_void_count?[`仍有 ${currentReview.diagnostics.large_void_count} 处大空白`]:[]),
           ...(currentReview.metrics.length_imbalance_pct>10||currentReview.metrics.width_imbalance_pct>10?['前后或左右偏差仍超过 10%']:[]),
+          ...((container.inner_length_mm-Math.max(0,...finalPlacements.map(p=>p.x_mm+p.length_mm)))<300?['实际柜门预留不足默认目标 300mm，请现场复核操作空间']:[]),
           ...(Object.values(remaining).some(n=>n>0)?['仍有货物未装入，请安排后续装运']:[])]}:null,
       pros: ["人工调整已通过边界、碰撞、朝向、支撑和承重规则检查"],
       cons: ["几何校验不替代现场绑扎、运输动态稳定性和装卸可达性复核"],

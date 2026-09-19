@@ -8,6 +8,7 @@ GOALS = {'high_fill':'优先装入件数和体积利用率', 'stable':'优先完
 LIMITS = ('启发式方案，不保证全局最优。空白按同高度平面包围范围计算，含凹口和间隙；'
           '大空白阈值为 0.25 m²，不等于悬空或可继续装货空间。连续率为各上层平面最大相连区域面积占比的最小值。'
           '搬运距离按每件从柜门到纵向中心往返估算，不含绕行/举升，不代表实测工时。'
+          '柜门通行尺寸为硬约束，预留操作空间为软目标，实际不足时另行提示。'
           '仍须现场复核包装强度、绑扎与装卸可达性。')
 
 
@@ -153,8 +154,11 @@ def explain_solutions(request, solutions, status='heuristic'):
         missing=sum(solution.unloaded_counts.values())
         if missing:
             unmet.append(f'订单仍有 {missing} 件未装入')
+        reserve=request.container.inner_length_mm-max((p.x_mm+p.length_mm for p in solution.placements),default=0)
+        if reserve<request.door_buffer_mm:
+            unmet.append(f'实际柜门预留 {reserve}mm，小于目标 {request.door_buffer_mm}mm，请现场复核操作空间')
         solution.assessment=SolutionAssessment(status=status,goal=GOALS[solution.profile],diagnostics=d,
-            hard_constraints=['边界/碰撞/允许朝向','货物原尺寸及重量不变','完整支撑/叠放层数/承重','间隙/柜门/总载重/必装'],
+            hard_constraints=['边界/碰撞/允许朝向','货物原尺寸及重量不变','完整支撑/叠放层数/承重','间隙/柜门通行尺寸/总载重/必装'],
             unmet_soft_goals=unmet,limits=LIMITS)
     if high is None:
         return
