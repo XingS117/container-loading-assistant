@@ -165,6 +165,9 @@ export interface AIStrategyStatus {
 }
 
 export interface PackResponse {
+  analytics_attempt_id?: string;
+  analytics_input_id?: string;
+  analytics_is_example?: boolean;
   request_id: string;
   solutions: PackingSolution[];
   recommended_profile?: SolutionProfile;

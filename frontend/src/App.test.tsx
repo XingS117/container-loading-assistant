@@ -209,6 +209,34 @@ test('focuses an invalid cargo field and prevents submission', async () => {
   expect(screen.getByRole('button', {name:'生成装柜方案'})).toBeDisabled();
 });
 
+test('links input, result actions and retries to distinct calculation attempts', async () => {
+  vi.spyOn(globalThis,'fetch').mockResolvedValueOnce(new Response(JSON.stringify([preset])))
+    .mockResolvedValueOnce(new Response(JSON.stringify(response)))
+    .mockResolvedValueOnce(new Response('{}',{status:504}));
+  const track=vi.spyOn(analytics,'trackAnalyticsEvent');
+  vi.spyOn(window,'print').mockImplementation(()=>undefined);
+  render(<App/>);
+  await screen.findByRole('button',{name:/20GP/});
+  await userEvent.click(screen.getByRole('button',{name:'生成装柜方案'}));
+  await screen.findByText('方案比较');
+  await userEvent.click(screen.getByRole('button',{name:'满意'}));
+  await userEvent.click(screen.getByRole('button',{name:'打印 / PDF'}));
+  const calls=(event:string)=>track.mock.calls.filter(([name])=>name===event).map(([,data])=>data!);
+  const first=calls('pack_calculation_started')[0];
+  expect(calls('pack_input_started')).toHaveLength(1);
+  expect(calls('pack_input_completed')).toHaveLength(1);
+  expect(calls('pack_input_completed')[0].input_id).toBe(calls('pack_input_started')[0].input_id);
+  for(const name of ['pack_solutions_generated','pack_solution_feedback','pack_export_print']) expect(calls(name)[0].attempt_id).toBe(first.attempt_id);
+  expect(loadSavedOrders()[0].response?.analytics_attempt_id).toBe(first.attempt_id);
+  await userEvent.click(screen.getByRole('button',{name:'确认重算'}));
+  await screen.findByText(/本次计算等待超时/);
+  const second=calls('pack_calculation_started')[1];
+  expect(second.attempt_id).not.toBe(first.attempt_id);
+  expect(calls('pack_calculation_timeout')[0].attempt_id).toBe(second.attempt_id);
+  expect(calls('pack_calculation_failed')[0].attempt_id).toBe(second.attempt_id);
+  expect(calls('pack_input_completed')).toHaveLength(1);
+});
+
 test('keeps the current order when Excel has errors and previews a valid replacement', async () => {
   vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([preset]), {status:200}));
   const read = vi.spyOn(excel, 'readCargoExcelReport').mockResolvedValueOnce({rows:[], issues:[{row:4,column:'单重(kg)',message:'必须大于 0'}], conversions:[], rowCount:1})

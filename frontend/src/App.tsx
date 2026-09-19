@@ -28,6 +28,7 @@ interface Draft {
   activeSavedId?: string | null;
   orderName?: string;
   preferredProfile?: SolutionProfile;
+  isExample?: boolean;
 }
 
 function loadDraft(): Partial<Draft> {
@@ -61,6 +62,7 @@ export default function App() {
   const [aiConfig, setAIConfig] = useState<AIModelConfig>(loadAIConfig);
   const [showModelSettings, setShowModelSettings] = useState(false);
   const [result, setResult] = useState<PackResponse | null>(boot.restored?.response ?? null);
+  const [restoredResult,setRestoredResult] = useState(Boolean(boot.restored?.response));
   const [loading, setLoading] = useState(false);
   const calculationPending = useRef(false);
   const [progress, setProgress] = useState<{phase: CalculationPhase; startedAt: number} | null>(null);
@@ -70,6 +72,8 @@ export default function App() {
   const [importReport, setImportReport] = useState<ExcelReport | null>(null);
   const [importing, setImporting] = useState(false);
   const [exampleLoaded, setExampleLoaded] = useState(false);
+  const inputFlow = useRef({id:crypto.randomUUID(),opened:false,completed:false});
+  const [isExample,setIsExample] = useState(boot.restored?.response?.analytics_is_example ?? boot.draft.isExample ?? !boot.draft.cargoItems?.length);
   const cargoValidationError = validateCargo(cargoItems);
   const cargoValidationIssues = validateCargoIssues(cargoItems);
   const settingsError = validateCalculationSettings(container, itemGapCm, clearanceCm);
@@ -78,6 +82,14 @@ export default function App() {
     const input = Array.from(inputs ?? []).find(el => el.getAttribute('aria-label')?.startsWith(field === '货物代号' ? '货物代号或名称 ' : `${field} `));
     input?.scrollIntoView?.({ block: 'center', behavior: 'smooth' }); input?.focus();
   };
+
+  useEffect(() => {
+    if (result) { inputFlow.current={id:crypto.randomUUID(),opened:false,completed:false}; return; }
+    if (container && !showModelSettings && !inputFlow.current.opened) {
+      inputFlow.current.opened=true;
+      trackAnalyticsEvent('pack_input_started',{input_id:inputFlow.current.id,source:boot.draft.cargoItems?.length?'draft':'new',is_example:isExample});
+    }
+  },[result,container,showModelSettings]);
 
   useEffect(() => {
     getContainerPresets()
@@ -93,10 +105,10 @@ export default function App() {
 
   useEffect(() => {
     if (!container) return;
-    const nextDraft: Draft = { containerId: container.id, container, cargoItems, itemGapCm, clearanceCm, activeSavedId, orderName, preferredProfile };
+    const nextDraft: Draft = { containerId: container.id, container, cargoItems, itemGapCm, clearanceCm, activeSavedId, orderName, preferredProfile, isExample };
     try { localStorage.setItem(STORAGE_KEY, JSON.stringify(nextDraft)); setDraftError(''); }
     catch { setDraftError('草稿及自动恢复位置未保存，请释放本机空间；当前页面仍可使用。'); }
-  }, [container, cargoItems, itemGapCm, clearanceCm, activeSavedId, orderName, preferredProfile]);
+  }, [container, cargoItems, itemGapCm, clearanceCm, activeSavedId, orderName, preferredProfile, isExample]);
 
   const persistOrder = (nextContainer: ContainerSpec, nextResult: PackResponse | undefined, nextWorkspace: SavedWorkspace | undefined, source: SavedOrder['source']) => {
     try {
@@ -129,25 +141,34 @@ export default function App() {
     calculationPending.current = true;
     const startedAt = Date.now();
     const mode = result ? 'recalculate' : 'initial';
+    const attemptId=crypto.randomUUID();
+    const context={attempt_id:attemptId,input_id:result?.analytics_input_id ?? inputFlow.current.id,is_example:isExample};
+    if (mode==='initial' && !inputFlow.current.completed) {
+      inputFlow.current.completed=true;
+      trackAnalyticsEvent('pack_input_completed',{...context,cargo_types:cargoItems.length,pieces:cargoItems.reduce((sum,item)=>sum+item.quantity,0),preferred_profile:preferredProfile});
+    }
+    let lastPhase: CalculationPhase='submitting';
     setProgress({phase:'submitting', startedAt});
     setCalculationFailed(false);
     setLoading(true);
     setError(null);
-    trackAnalyticsEvent("pack_calculation_started", { mode, cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), preferred_profile: preferredProfile });
+    trackAnalyticsEvent("pack_calculation_started", { ...context, mode, cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), preferred_profile: preferredProfile });
     try {
       const requestContainer = { ...nextContainer, clearance_mm: Math.round(clearanceCm * 10) };
-      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig, preferredProfile, lockedPlacements, phase => setProgress({phase, startedAt}));
+      const nextResult = {...await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig, preferredProfile, lockedPlacements, phase => {if(phase!=='reading')lastPhase=phase;setProgress({phase, startedAt});}),analytics_attempt_id:attemptId,analytics_input_id:context.input_id,analytics_is_example:isExample};
       if (!nextResult.solutions.length) throw new CalculationError('服务未返回装柜方案，清单和原方案已保留，请稍后重试。', 'service', 'EMPTY_SOLUTIONS');
       setContainer(requestContainer);
       const nextWorkspace: SavedWorkspace = {selectedProfile:recommendProfile(nextResult),solutionOverrides:{},lockedCargoIds:[]};
       setWorkspace(nextWorkspace);
       setWorkspaceKey(key => key + 1);
       setResult(nextResult);
+      setRestoredResult(false);
       persistOrder(requestContainer,nextResult,nextWorkspace,'calculation');
-      trackAnalyticsEvent("pack_solutions_generated", { mode, elapsed_ms: Date.now() - startedAt, cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), recommended_profile: nextResult.recommended_profile ?? preferredProfile });
+      trackAnalyticsEvent("pack_solutions_generated", { ...context, mode, elapsed_ms: Date.now() - startedAt, cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), recommended_profile: nextResult.recommended_profile ?? preferredProfile,budget_fallback:nextResult.solutions.some(s=>s.assessment?.status==='budget_fallback') });
     } catch (reason) {
       setCalculationFailed(true);
-      trackAnalyticsEvent('pack_calculation_failed', { mode, elapsed_ms: Date.now() - startedAt, category: reason instanceof CalculationError ? reason.category : 'service', reason: reason instanceof CalculationError ? reason.code : 'UNKNOWN' });
+      trackAnalyticsEvent('pack_calculation_failed', { ...context, mode, elapsed_ms: Date.now() - startedAt, category: reason instanceof CalculationError ? reason.category : 'service', reason: reason instanceof CalculationError ? reason.code : 'UNKNOWN',last_phase:lastPhase });
+      if(reason instanceof CalculationError && reason.category==='timeout') trackAnalyticsEvent('pack_calculation_timeout',{...context,mode,elapsed_ms:Date.now()-startedAt,reason:reason.code,last_phase:lastPhase});
       throw reason;
     } finally {
       calculationPending.current = false;
@@ -182,6 +203,8 @@ export default function App() {
     );
     if (hintedContainer) setContainer(hintedContainer);
     setCargoItems(cloneCargoPreset(preset));
+    setIsExample(true);
+    setExampleLoaded(false);
     trackAnalyticsEvent("cargo_preset_loaded", { preset: preset.id });
     setResult(null);
     setActiveSavedId(null); setWorkspace(undefined);
@@ -200,6 +223,7 @@ export default function App() {
     try { localStorage.removeItem(STORAGE_KEY); } catch { setDraftError('无法清除本机草稿，当前页面已重置。'); }
     setActiveSavedId(null); setWorkspace(undefined);
     setCargoItems([createCargo("SKU-001")]);
+    setIsExample(true);
     setContainer(presets[0] ?? null);
     setItemGapCm(0);
     setClearanceCm(0);
@@ -212,6 +236,8 @@ export default function App() {
   };
 
   const restoreOrder = (order: SavedOrder, copy: boolean) => {
+    setIsExample(order.response?.analytics_is_example ?? false);
+    setRestoredResult(!copy && Boolean(order.response)); setExampleLoaded(false);
     setContainer(order.container); setCargoItems(order.cargoItems); setItemGapCm(order.itemGapCm); setClearanceCm(order.clearanceCm);
     setPreferredProfile(order.preferredProfile ?? 'high_fill'); setOrderName(copy ? `${order.name} 副本` : order.name);
     setResult(copy ? null : order.response ?? null); setWorkspace(copy ? undefined : order.workspace); setWorkspaceKey(key => key + 1);
@@ -230,7 +256,7 @@ export default function App() {
   const historyPanel = <OrderHistory orders={savedOrders} name={orderName} onNameChange={setOrderName} onSave={saveCurrentOrder} onRestore={restoreOrder} onDelete={removeOrder} hasResult={Boolean(result)} message={[historyMessage,draftError].filter(Boolean).join(' ')} />;
 
   if (result && container) {
-    return <><fieldset className="calculation-fields" disabled={loading} aria-busy={loading}><SolutionWorkspace key={workspaceKey} response={result} container={container} presets={presets} cargoItems={cargoItems} itemGapCm={itemGapCm} initialWorkspace={workspace} onWorkspaceChange={workspaceChanged} historyPanel={historyPanel} onBack={() => { trackAnalyticsEvent("pack_edit_input"); setResult(null); setActiveSavedId(null); setWorkspace(undefined); setCalculationFailed(false); }} onRecalculate={calculateFor} recalculating={loading} /></fieldset>{progress && <CalculationProgress {...progress} />}</>;
+    return <><fieldset className="calculation-fields" disabled={loading} aria-busy={loading}><SolutionWorkspace key={workspaceKey} response={result} container={container} presets={presets} cargoItems={cargoItems} itemGapCm={itemGapCm} initialWorkspace={workspace} restored={restoredResult} onWorkspaceChange={workspaceChanged} historyPanel={historyPanel} onBack={() => { trackAnalyticsEvent("pack_edit_input",{attempt_id:result.analytics_attempt_id ?? 'legacy',is_example:isExample}); setResult(null); setActiveSavedId(null); setWorkspace(undefined); setCalculationFailed(false); }} onRecalculate={calculateFor} recalculating={loading} /></fieldset>{progress && <CalculationProgress {...progress} />}</>;
   }
 
   if (showModelSettings) {
@@ -266,7 +292,7 @@ export default function App() {
         {historyPanel}
         <CargoTable
           rows={cargoItems}
-          onChange={setCargoItems}
+          onChange={rows=>{setCargoItems(rows);if(!exampleLoaded)setIsExample(false);}}
           onLoadPreset={loadPreset}
           onDownloadTemplate={() => downloadCargoTemplate().catch((reason: Error) => setError(reason.message))}
           onImportFile={(file) => {
@@ -290,6 +316,7 @@ export default function App() {
             <p>{importReport.rows.length} 种货物，共 {importReport.rows.reduce((sum, row) => sum + row.quantity, 0)} 件；尺寸统一为 cm，重量统一为 kg。</p>
             <button className="primary-outline-button" onClick={() => {
               setCargoItems(importReport.rows.map((row, index) => ({ ...row, id: `cargo_import_${Date.now()}_${index}` })));
+              setIsExample(false); setExampleLoaded(false);
               trackAnalyticsEvent('cargo_excel_imported', { cargo_types: importReport.rows.length, pieces: importReport.rows.reduce((sum, row) => sum + row.quantity, 0) });
               setImportReport(null); setError(null);
             }}>应用导入并替换清单</button>

@@ -13,3 +13,5 @@
 - 控制台的查询连接错误由上述故障注入产生；除此只有开发 favicon 404。截图位于 ignored output/playwright/job-*.png。
 
 短请求解决代理等待链路，并不保证任意复杂订单总能求得最优。算法仍有预算内安全备选、明确失败和原方案保留机制。
+
+上线：a39e869 已推送并部署，备份 `/data/packing-assistant/backups/before-a39e869.tar.gz`。健康检查正常，JS `index-MsImmjMe.js` 与本地 SHA256 一致。真实生产浏览器默认测试单 POST 返回 202（约 74ms），约 2.62s 取到三方案，三个打印面板完整；观察到 ai、complete 查询状态。

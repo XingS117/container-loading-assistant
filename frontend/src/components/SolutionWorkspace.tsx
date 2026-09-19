@@ -7,7 +7,7 @@ import { LoadingWorksheet } from "./LoadingWorksheet";
 import { SolutionAssessmentPanel } from './SolutionAssessment';
 import type { LayoutRegion } from '../types';
 import type { CargoInput, ContainerSpec, PackResponse, PackingSolution, SolutionProfile } from "../types";
-import { trackAnalyticsEvent } from "../lib/analytics";
+import { trackAnalyticsEvent as trackEvent } from "../lib/analytics";
 import type { SavedWorkspace } from '../lib/orderHistory';
 
 interface Props {
@@ -22,6 +22,7 @@ interface Props {
   initialWorkspace?: SavedWorkspace;
   onWorkspaceChange?: (workspace: SavedWorkspace, reason: 'selection' | 'adjustment' | 'restore') => void;
   historyPanel?: ReactNode;
+  restored?: boolean;
 }
 
 const profileDisplayName: Record<SolutionProfile, string> = {
@@ -98,7 +99,11 @@ export function recommendProfile(response: PackResponse): SolutionProfile {
   return "high_fill";
 }
 
-export function SolutionWorkspace({ response: originalResponse, container, presets, cargoItems, onBack, onRecalculate, recalculating, itemGapCm = 0, initialWorkspace, onWorkspaceChange, historyPanel }: Props) {
+export function SolutionWorkspace({ response: originalResponse, container, presets, cargoItems, onBack, onRecalculate, recalculating, itemGapCm = 0, initialWorkspace, onWorkspaceChange, historyPanel, restored=false }: Props) {
+  const trackAnalyticsEvent=(name:string,data:Record<string,string|number|boolean>)=>trackEvent(name,{
+    attempt_id:originalResponse.analytics_attempt_id ?? 'legacy',input_id:originalResponse.analytics_input_id ?? 'legacy',
+    is_example:originalResponse.analytics_is_example ?? false,source:restored?'history':'current',...data,
+  });
   const [selectedProfile, setSelectedProfile] = useState<SolutionProfile>(() => initialWorkspace?.selectedProfile ?? recommendProfile(originalResponse));
   const [selectedCargoId, setSelectedCargoId] = useState<string | null>(null);
   const [lockedCargoIds, setLockedCargoIds] = useState<Set<string>>(new Set(initialWorkspace?.lockedCargoIds));
@@ -115,6 +120,7 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
   const [focusedRegion,setFocusedRegion] = useState<LayoutRegion|null>(null);
   const [solutionOverrides, setSolutionOverrides] = useState<Partial<Record<SolutionProfile, PackingSolution>>>(initialWorkspace?.solutionOverrides ?? {});
   useEffect(()=>setFocusedRegion(null),[selectedProfile,originalResponse,solutionOverrides]);
+  useEffect(()=>{setFeedback(null);setAdjustmentOpen(false);setAdjustmentSubmitted(false);setAdjustmentTopics([]);setAdjustmentNote('');},[selectedProfile,originalResponse]);
   const response = { ...originalResponse, solutions: originalResponse.solutions.map(s => solutionOverrides[s.profile] ?? s) };
   const baseSelected = response.solutions.find((solution) => solution.profile === selectedProfile) ?? response.solutions[0];
   const selected = solutionOverrides[baseSelected.profile] ?? baseSelected;
@@ -163,14 +169,14 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
 
   return (
     <main className="results-page">
-      {workbenchOpen && <LayoutWorkbench solution={selected} container={container} cargoItems={cargoItems} itemGapCm={itemGapCm} initialLockedCargoIds={lockedCargoIds} onClose={() => setWorkbenchOpen(false)} onApply={(nextSolution, locks) => { const next = { ...solutionOverrides, [nextSolution.profile]: nextSolution }; setSolutionOverrides(next); setLockedCargoIds(locks); onWorkspaceChange?.({selectedProfile,solutionOverrides:next,lockedCargoIds:[...locks]},'adjustment'); setSnapshots(current => ({ ...current, [nextSolution.profile]: undefined })); setWorkbenchOpen(false); setEditMessage("布局已应用，指标与安全复核结果已更新"); trackAnalyticsEvent("pack_layout_workbench_applied", { profile: nextSolution.profile }); }} />}
+      {workbenchOpen && <LayoutWorkbench solution={selected} container={container} cargoItems={cargoItems} itemGapCm={itemGapCm} initialLockedCargoIds={lockedCargoIds} onClose={() => setWorkbenchOpen(false)} onApply={(nextSolution, locks) => { const next = { ...solutionOverrides, [nextSolution.profile]: nextSolution }; setSolutionOverrides(next); setLockedCargoIds(locks); onWorkspaceChange?.({selectedProfile,solutionOverrides:next,lockedCargoIds:[...locks]},'adjustment'); setSnapshots(current => ({ ...current, [nextSolution.profile]: undefined })); setWorkbenchOpen(false); setEditMessage("布局已应用，指标与安全复核结果已更新"); const before=new Map(selected.placements.map(p=>[p.id,p])); trackAnalyticsEvent("pack_layout_workbench_applied", { profile: nextSolution.profile,loaded_pieces:nextSolution.metrics.loaded_pieces,removed_pieces:Math.max(0,selected.metrics.loaded_pieces-nextSolution.metrics.loaded_pieces),moved_pieces:nextSolution.placements.filter(p=>{const old=before.get(p.id);return old&&(old.x_mm!==p.x_mm||old.y_mm!==p.y_mm||old.z_mm!==p.z_mm||old.rotation!==p.rotation);}).length }); }} />}
       <header className="result-toolbar no-print">
         <button type="button" className="text-button" onClick={onBack}><ArrowLeft size={17} /> 修改货物</button>
         <div><span className="eyebrow">计算结果 · {response.request_id}</span><h1>方案比较</h1></div>
         <div className="result-actions">
           <button type="button" className="primary-outline-button" onClick={() => setWorkbenchOpen(true)}>编辑布局</button>
           <label className="recalculate-control"><span className="visually-hidden">重算柜型</span><select aria-label="重算柜型" value={recalculateContainerId} onChange={(event) => setRecalculateContainerId(event.target.value)} disabled={recalculating}>{recalculateContainers.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select><button type="button" className="primary-outline-button recalculate-button" title="确认重算" onClick={handleRecalculate} disabled={recalculating}><RefreshCw className={recalculating ? "spin" : undefined} size={17} /><span>{recalculating ? "正在重算" : "确认重算"}</span></button></label>
-          <button type="button" className="primary-outline-button" onClick={() => { trackAnalyticsEvent("pack_export_print", { profile: selectedProfile }); window.print(); }}><Printer size={17} /> 打印 / PDF</button>
+          <button type="button" className="primary-outline-button" onClick={() => { trackAnalyticsEvent("pack_export_print", { profile: selectedProfile,adjusted:Boolean(solutionOverrides[selectedProfile]) }); window.print(); }}><Printer size={17} /> 打印 / PDF</button>
         </div>
       </header>
       {historyPanel}
@@ -270,8 +276,8 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
 
       <div className="solution-feedback no-print" role="group" aria-label="方案反馈">
         <span>这个方案对你有帮助吗？</span>
-        <button type="button" className={feedback === "accepted" ? "is-selected" : ""} onClick={() => { setFeedback("accepted"); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "accepted" }); }}>满意</button>
-        <button type="button" className={feedback === "needs_adjustment" ? "is-selected" : ""} onClick={() => { setFeedback("needs_adjustment"); setAdjustmentOpen(true); setAdjustmentSubmitted(false); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "needs_adjustment" }); }}>需要调整</button>
+        <button type="button" className={feedback === "accepted" ? "is-selected" : ""} onClick={() => { setFeedback("accepted"); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "accepted",adjusted:Boolean(solutionOverrides[selectedProfile]) }); }}>满意</button>
+        <button type="button" className={feedback === "needs_adjustment" ? "is-selected" : ""} onClick={() => { setFeedback("needs_adjustment"); setAdjustmentOpen(true); setAdjustmentSubmitted(false); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "needs_adjustment",adjusted:Boolean(solutionOverrides[selectedProfile]) }); }}>需要调整</button>
       </div>
       {adjustmentOpen && <section className="adjustment-panel no-print" aria-label="方案调整说明">
         <div>
