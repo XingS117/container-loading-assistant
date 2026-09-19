@@ -1,0 +1,154 @@
+{
+  "id": "historical-six-sku",
+  "source": {
+    "kind": "historical_reproduction",
+    "evidence": "Existing local reproduction input _temp/user-case-40hq.json; also covered by backend/tests/test_packing.py six_sku_pallet_request.",
+    "limitations": [
+      "Original collection method and actual shipment weights have not been independently verified.",
+      "No field-approved reference layout or acceptance record."
+    ]
+  },
+  "acceptance": "unreviewed",
+  "request": {
+    "container": {
+      "id": "container",
+      "name": "container",
+      "inner_length_mm": 12032,
+      "inner_width_mm": 2352,
+      "inner_height_mm": 2698,
+      "door_width_mm": 2340,
+      "door_height_mm": 2585,
+      "max_payload_g": 28600000,
+      "clearance_mm": 0
+    },
+    "cargo_items": [
+      {
+        "id": "sku-01",
+        "sku": "sku-01",
+        "name": "sku-01",
+        "kind": "pallet",
+        "length_mm": 700,
+        "width_mm": 700,
+        "height_mm": 1100,
+        "weight_g": 300000,
+        "quantity": 15,
+        "allowed_orientations": [
+          "LWH"
+        ],
+        "stackable": true,
+        "max_layers": 2,
+        "max_top_load_g": 500000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-02",
+        "sku": "sku-02",
+        "name": "sku-02",
+        "kind": "pallet",
+        "length_mm": 850,
+        "width_mm": 750,
+        "height_mm": 1000,
+        "weight_g": 400000,
+        "quantity": 20,
+        "allowed_orientations": [
+          "LWH"
+        ],
+        "stackable": true,
+        "max_layers": 2,
+        "max_top_load_g": 500000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-03",
+        "sku": "sku-03",
+        "name": "sku-03",
+        "kind": "pallet",
+        "length_mm": 1000,
+        "width_mm": 800,
+        "height_mm": 750,
+        "weight_g": 350000,
+        "quantity": 8,
+        "allowed_orientations": [
+          "LWH"
+        ],
+        "stackable": true,
+        "max_layers": 2,
+        "max_top_load_g": 500000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-04",
+        "sku": "sku-04",
+        "name": "sku-04",
+        "kind": "pallet",
+        "length_mm": 1100,
+        "width_mm": 900,
+        "height_mm": 1200,
+        "weight_g": 450000,
+        "quantity": 3,
+        "allowed_orientations": [
+          "LWH"
+        ],
+        "stackable": true,
+        "max_layers": 1,
+        "max_top_load_g": 500000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-05",
+        "sku": "sku-05",
+        "name": "sku-05",
+        "kind": "pallet",
+        "length_mm": 880,
+        "width_mm": 950,
+        "height_mm": 880,
+        "weight_g": 360000,
+        "quantity": 5,
+        "allowed_orientations": [
+          "LWH"
+        ],
+        "stackable": true,
+        "max_layers": 1,
+        "max_top_load_g": 500000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-06",
+        "sku": "sku-06",
+        "name": "sku-06",
+        "kind": "pallet",
+        "length_mm": 1300,
+        "width_mm": 1000,
+        "height_mm": 1220,
+        "weight_g": 480000,
+        "quantity": 3,
+        "allowed_orientations": [
+          "LWH"
+        ],
+        "stackable": true,
+        "max_layers": 2,
+        "max_top_load_g": 500000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      }
+    ],
+    "preferred_profile": "high_fill",
+    "locked_placements": [],
+    "item_gap_mm": 0,
+    "door_buffer_mm": 300,
+    "enable_interstack": true,
+    "support_coverage_min": 0.7,
+    "overhang_ratio_max": 0.2
+  }
+}

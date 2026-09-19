@@ -1,0 +1,663 @@
+{
+  "id": "stress-30-sku",
+  "source": {
+    "kind": "synthetic",
+    "evidence": "backend/tests/test_large_order.py test_30_sku_order_finishes_within_service_budget",
+    "limitations": [
+      "Synthetic capacity and runtime regression; no customer or field acceptance."
+    ]
+  },
+  "acceptance": "unreviewed",
+  "request": {
+    "container": {
+      "id": "container",
+      "name": "container",
+      "inner_length_mm": 12032,
+      "inner_width_mm": 2352,
+      "inner_height_mm": 2698,
+      "door_width_mm": 2340,
+      "door_height_mm": 2585,
+      "max_payload_g": 28600000,
+      "clearance_mm": 0
+    },
+    "cargo_items": [
+      {
+        "id": "sku-01",
+        "sku": "sku-01",
+        "name": "sku-01",
+        "kind": "pallet",
+        "length_mm": 300,
+        "width_mm": 280,
+        "height_mm": 250,
+        "weight_g": 8000,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": false,
+        "max_layers": 1,
+        "max_top_load_g": 0,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-02",
+        "sku": "sku-02",
+        "name": "sku-02",
+        "kind": "carton",
+        "length_mm": 350,
+        "width_mm": 340,
+        "height_mm": 290,
+        "weight_g": 8500,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-03",
+        "sku": "sku-03",
+        "name": "sku-03",
+        "kind": "carton",
+        "length_mm": 400,
+        "width_mm": 400,
+        "height_mm": 330,
+        "weight_g": 9000,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-04",
+        "sku": "sku-04",
+        "name": "sku-04",
+        "kind": "carton",
+        "length_mm": 450,
+        "width_mm": 280,
+        "height_mm": 370,
+        "weight_g": 9500,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-05",
+        "sku": "sku-05",
+        "name": "sku-05",
+        "kind": "carton",
+        "length_mm": 300,
+        "width_mm": 340,
+        "height_mm": 410,
+        "weight_g": 10000,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-06",
+        "sku": "sku-06",
+        "name": "sku-06",
+        "kind": "carton",
+        "length_mm": 350,
+        "width_mm": 400,
+        "height_mm": 250,
+        "weight_g": 10500,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-07",
+        "sku": "sku-07",
+        "name": "sku-07",
+        "kind": "carton",
+        "length_mm": 400,
+        "width_mm": 280,
+        "height_mm": 290,
+        "weight_g": 11000,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-08",
+        "sku": "sku-08",
+        "name": "sku-08",
+        "kind": "carton",
+        "length_mm": 450,
+        "width_mm": 340,
+        "height_mm": 330,
+        "weight_g": 11500,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-09",
+        "sku": "sku-09",
+        "name": "sku-09",
+        "kind": "carton",
+        "length_mm": 300,
+        "width_mm": 400,
+        "height_mm": 370,
+        "weight_g": 12000,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-10",
+        "sku": "sku-10",
+        "name": "sku-10",
+        "kind": "carton",
+        "length_mm": 350,
+        "width_mm": 280,
+        "height_mm": 410,
+        "weight_g": 12500,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-11",
+        "sku": "sku-11",
+        "name": "sku-11",
+        "kind": "carton",
+        "length_mm": 400,
+        "width_mm": 340,
+        "height_mm": 250,
+        "weight_g": 13000,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-12",
+        "sku": "sku-12",
+        "name": "sku-12",
+        "kind": "pallet",
+        "length_mm": 450,
+        "width_mm": 400,
+        "height_mm": 290,
+        "weight_g": 13500,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": false,
+        "max_layers": 1,
+        "max_top_load_g": 0,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-13",
+        "sku": "sku-13",
+        "name": "sku-13",
+        "kind": "carton",
+        "length_mm": 300,
+        "width_mm": 280,
+        "height_mm": 330,
+        "weight_g": 14000,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-14",
+        "sku": "sku-14",
+        "name": "sku-14",
+        "kind": "carton",
+        "length_mm": 350,
+        "width_mm": 340,
+        "height_mm": 370,
+        "weight_g": 14500,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-15",
+        "sku": "sku-15",
+        "name": "sku-15",
+        "kind": "carton",
+        "length_mm": 400,
+        "width_mm": 400,
+        "height_mm": 410,
+        "weight_g": 15000,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-16",
+        "sku": "sku-16",
+        "name": "sku-16",
+        "kind": "carton",
+        "length_mm": 450,
+        "width_mm": 280,
+        "height_mm": 250,
+        "weight_g": 15500,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-17",
+        "sku": "sku-17",
+        "name": "sku-17",
+        "kind": "carton",
+        "length_mm": 300,
+        "width_mm": 340,
+        "height_mm": 290,
+        "weight_g": 16000,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-18",
+        "sku": "sku-18",
+        "name": "sku-18",
+        "kind": "carton",
+        "length_mm": 350,
+        "width_mm": 400,
+        "height_mm": 330,
+        "weight_g": 16500,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-19",
+        "sku": "sku-19",
+        "name": "sku-19",
+        "kind": "carton",
+        "length_mm": 400,
+        "width_mm": 280,
+        "height_mm": 370,
+        "weight_g": 17000,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-20",
+        "sku": "sku-20",
+        "name": "sku-20",
+        "kind": "carton",
+        "length_mm": 450,
+        "width_mm": 340,
+        "height_mm": 410,
+        "weight_g": 17500,
+        "quantity": 167,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-21",
+        "sku": "sku-21",
+        "name": "sku-21",
+        "kind": "carton",
+        "length_mm": 300,
+        "width_mm": 400,
+        "height_mm": 250,
+        "weight_g": 18000,
+        "quantity": 166,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-22",
+        "sku": "sku-22",
+        "name": "sku-22",
+        "kind": "carton",
+        "length_mm": 350,
+        "width_mm": 280,
+        "height_mm": 290,
+        "weight_g": 18500,
+        "quantity": 166,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-23",
+        "sku": "sku-23",
+        "name": "sku-23",
+        "kind": "pallet",
+        "length_mm": 400,
+        "width_mm": 340,
+        "height_mm": 330,
+        "weight_g": 19000,
+        "quantity": 166,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": false,
+        "max_layers": 1,
+        "max_top_load_g": 0,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-24",
+        "sku": "sku-24",
+        "name": "sku-24",
+        "kind": "carton",
+        "length_mm": 450,
+        "width_mm": 400,
+        "height_mm": 370,
+        "weight_g": 19500,
+        "quantity": 166,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-25",
+        "sku": "sku-25",
+        "name": "sku-25",
+        "kind": "carton",
+        "length_mm": 300,
+        "width_mm": 280,
+        "height_mm": 410,
+        "weight_g": 20000,
+        "quantity": 166,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-26",
+        "sku": "sku-26",
+        "name": "sku-26",
+        "kind": "carton",
+        "length_mm": 350,
+        "width_mm": 340,
+        "height_mm": 250,
+        "weight_g": 20500,
+        "quantity": 166,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-27",
+        "sku": "sku-27",
+        "name": "sku-27",
+        "kind": "carton",
+        "length_mm": 400,
+        "width_mm": 400,
+        "height_mm": 290,
+        "weight_g": 21000,
+        "quantity": 166,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-28",
+        "sku": "sku-28",
+        "name": "sku-28",
+        "kind": "carton",
+        "length_mm": 450,
+        "width_mm": 280,
+        "height_mm": 330,
+        "weight_g": 21500,
+        "quantity": 166,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-29",
+        "sku": "sku-29",
+        "name": "sku-29",
+        "kind": "carton",
+        "length_mm": 300,
+        "width_mm": 340,
+        "height_mm": 370,
+        "weight_g": 22000,
+        "quantity": 166,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      },
+      {
+        "id": "sku-30",
+        "sku": "sku-30",
+        "name": "sku-30",
+        "kind": "carton",
+        "length_mm": 350,
+        "width_mm": 400,
+        "height_mm": 410,
+        "weight_g": 22500,
+        "quantity": 166,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 6,
+        "max_top_load_g": 200000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      }
+    ],
+    "preferred_profile": "high_fill",
+    "locked_placements": [],
+    "item_gap_mm": 5,
+    "door_buffer_mm": 300,
+    "enable_interstack": true,
+    "support_coverage_min": 0.7,
+    "overhang_ratio_max": 0.2
+  }
+}

@@ -1,0 +1,54 @@
+{
+  "id": "stress-5000-cartons",
+  "source": {
+    "kind": "synthetic",
+    "evidence": "backend/tests/test_large_order.py test_5000_small_boxes_finish_within_service_budget",
+    "limitations": [
+      "Synthetic capacity and runtime regression; no customer or field acceptance."
+    ]
+  },
+  "acceptance": "unreviewed",
+  "request": {
+    "container": {
+      "id": "container",
+      "name": "container",
+      "inner_length_mm": 5898,
+      "inner_width_mm": 2352,
+      "inner_height_mm": 2393,
+      "door_width_mm": 2340,
+      "door_height_mm": 2280,
+      "max_payload_g": 28200000,
+      "clearance_mm": 0
+    },
+    "cargo_items": [
+      {
+        "id": "sku-01",
+        "sku": "sku-01",
+        "name": "sku-01",
+        "kind": "carton",
+        "length_mm": 100,
+        "width_mm": 100,
+        "height_mm": 100,
+        "weight_g": 1000,
+        "quantity": 5000,
+        "allowed_orientations": [
+          "LWH",
+          "WLH"
+        ],
+        "stackable": true,
+        "max_layers": 20,
+        "max_top_load_g": 30000,
+        "fragile": false,
+        "must_load": false,
+        "unload_order": 0
+      }
+    ],
+    "preferred_profile": "high_fill",
+    "locked_placements": [],
+    "item_gap_mm": 0,
+    "door_buffer_mm": 300,
+    "enable_interstack": true,
+    "support_coverage_min": 0.7,
+    "overhang_ratio_max": 0.2
+  }
+}
