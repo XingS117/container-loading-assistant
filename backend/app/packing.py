@@ -29,6 +29,7 @@ from .models import (
 )
 from .validator import ValidationResult, validate_solution
 from .fixed_regions import FloorRect, subtract_rect
+from .loading_sequence import regenerate_loading_steps
 
 
 class PackingFailure(Exception):
@@ -1020,7 +1021,7 @@ def _pack_units_in_regions(
             if rect is None:
                 continue
             rotated = unit.length_mm != unit.width_mm and int(rect.width) == unit.width_mm + request.item_gap_mm and int(rect.height) == unit.length_mm + request.item_gap_mm
-            packed.append(PackedStack(unit=unit, x_mm=region.x - request.container.clearance_mm + int(rect.x), y_mm=region.y - request.container.clearance_mm + int(rect.y), rotated=rotated))
+            packed.append(PackedStack(unit=unit, x_mm=region.x + int(rect.x), y_mm=region.y + int(rect.y), rotated=rotated))
             break
     packed.sort(key=lambda stack: stack.unit.id)
     return packed
@@ -5169,7 +5170,8 @@ def _compute_zones(
 ) -> list[Zone]:
     tolerance = request.item_gap_mm + 1
     column_counts = Counter(
-        (placement.cargo_id, placement.x_mm, placement.y_mm)
+        (placement.cargo_id, placement.step, placement.x_mm, placement.y_mm,
+         placement.length_mm, placement.width_mm)
         for placement in placements
     )
     groups: dict[tuple[str, int], list[tuple[int, int, int, int, int]]] = defaultdict(list)
@@ -5188,7 +5190,7 @@ def _compute_zones(
         groups[key].append(
             (
                 *rect,
-                column_counts[(placement.cargo_id, placement.x_mm, placement.y_mm)],
+                column_counts[(*key, *rect)],
             )
         )
     zones: list[Zone] = []
@@ -5293,11 +5295,24 @@ def _build_solution(
     support_coverage_min: float = 1.0,
     overhang_ratio_max: float = 0.0,
     fixed_placements: list[Placement] | None = None,
-    instance_offsets: dict[str, int] | None = None,
 ) -> PackingSolution:
     generated = _expand_stacks(request, stacks, profile)
-    if instance_offsets:
-        generated = [item.model_copy(update={"instance_index": item.instance_index + instance_offsets.get(item.cargo_id, 0), "id": f"{item.cargo_id}-{item.instance_index + instance_offsets.get(item.cargo_id, 0)}"}) for item in generated]
+    if fixed_placements:
+        reserved = {(p.cargo_id, p.instance_index) for p in fixed_placements}
+        available = {
+            cargo.id: iter([i for i in range(cargo.quantity) if (cargo.id, i) not in reserved])
+            for cargo in request.cargo_items
+        }
+        used_ids = {p.id for p in fixed_placements}
+        remapped = []
+        for item in generated:
+            index = next(available[item.cargo_id])
+            placement_id = f"{item.cargo_id}-{index}"
+            while placement_id in used_ids:
+                placement_id += "-new"
+            used_ids.add(placement_id)
+            remapped.append(item.model_copy(update={"instance_index": index, "id": placement_id}))
+        generated = remapped
     placements = list(fixed_placements or []) + generated
     validation = validate_solution(
         request.container,
@@ -5309,6 +5324,8 @@ def _build_solution(
     )
     if not validation.valid:
         _raise_for_invalid_layout(validation)
+    if fixed_placements:
+        placements = regenerate_loading_steps(placements)
     loaded = Counter(item.cargo_id for item in placements)
     loaded_counts = {item.id: loaded[item.id] for item in request.cargo_items}
     unloaded_counts = {
@@ -6039,24 +6056,29 @@ def _fast_pack_order(request: PackRequest) -> PackResponse:
     return PackResponse(request_id=request_id, solutions=solutions, recommended_profile=request.preferred_profile)
 
 
-def _pack_order_with_locked_floor(request: PackRequest) -> PackResponse:
+def _pack_order_with_locked_layout(request: PackRequest) -> PackResponse:
     locked = request.locked_placements
     c = request.container.clearance_mm
-    if any(item.z_mm != c for item in locked):
-        raise PackingFailure("LOCKED_RECALCULATION_UNAVAILABLE", "暂只支持锁定柜底货物的局部重算", "请解锁高层货物后重试")
     locked_counts = Counter(item.cargo_id for item in locked)
     remaining_counts = {item.id: item.quantity - locked_counts[item.id] for item in request.cargo_items}
-    base = FloorRect(c, c, request.container.inner_length_mm - 2 * c, request.container.inner_width_mm - 2 * c)
-    regions = [base]
+    base = FloorRect(c, c, request.container.inner_length_mm - 2 * c - request.door_buffer_mm, request.container.inner_width_mm - 2 * c)
+    regions = [base] if base.length > 0 else []
+    gap = request.item_gap_mm
     for item in locked:
-        regions = [part for region in regions for part in subtract_rect(region, FloorRect(item.x_mm, item.y_mm, item.length_mm, item.width_mm))]
+        _check_packing_budget()
+        regions = [part for region in regions for part in subtract_rect(region, FloorRect(item.x_mm - gap, item.y_mm - gap, item.length_mm + 2 * gap, item.width_mm + 2 * gap))]
+    remaining_payload = request.container.max_payload_g - sum(p.weight_g for p in locked)
+    remaining_request = request.model_copy(update={
+        "container": request.container.model_copy(update={"max_payload_g": remaining_payload}),
+    })
     solutions: list[PackingSolution] = []
     for profile in PROFILE_NAMES:
-        profile_request = _request_for_profile(request, profile)
+        profile_request = _request_for_profile(remaining_request, profile)
         units = _build_stack_units(profile_request, remaining_counts, "stable" if profile == "stable" else "high_fill")
+        units = _select_payload_units(profile_request, units, "weight" if profile == "stable" else "volume")
         merged = _merge_pallet_cartons(profile_request, units)
         stacks = _pack_units_in_regions(profile_request, merged, MaxRectsBssf, "weight" if profile == "stable" else "sku" if profile == "easy" else "volume", regions)
-        solution = _build_solution(request, stacks, profile, fixed_placements=locked, instance_offsets=dict(locked_counts))
+        solution = _build_solution(request, stacks, profile, fixed_placements=locked)
         solutions.append(solution)
     request_id = hashlib.sha256(json.dumps(request.model_dump(mode="json"), sort_keys=True).encode("utf-8")).hexdigest()[:12]
     return PackResponse(request_id=request_id, solutions=solutions, recommended_profile=request.preferred_profile)
@@ -6079,7 +6101,7 @@ def pack_order(
         if request.locked_placements:
             locked_validation = validate_solution(
                 request.container,
-                request.cargo_items,
+                [item.model_copy(update={"must_load": False}) for item in request.cargo_items],
                 request.locked_placements,
                 item_gap_mm=request.item_gap_mm,
             )
@@ -6087,9 +6109,15 @@ def pack_order(
                 first_error = locked_validation.errors[0]
                 advice = LAYOUT_ADVICE.get(first_error.code, "请调整锁定货物位置后重试")
                 raise PackingFailure("INVALID_LOCKED_LAYOUT", f"锁定布局无效：{first_error.message}", advice)
-            return _pack_order_with_locked_floor(request)
+            return _pack_order_with_locked_layout(request)
         return _pack_order_full(request)
     except PackingBudgetExceeded:
+        if request.locked_placements:
+            raise PackingFailure(
+                "LOCKED_RECALCULATION_TIMEOUT",
+                "锁定布局重算超时，原方案和锁定位置未改变",
+                "请减少本次重算的货物数量后重试",
+            )
         _packing_deadline.reset(token)
         reset_needed = False
         return _fast_pack_order(request)

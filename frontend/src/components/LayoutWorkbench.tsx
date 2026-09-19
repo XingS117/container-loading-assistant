@@ -106,10 +106,10 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
   const close = () => { if (!dirty || window.confirm("放弃本次尚未应用的调整？")) onClose(); };
   const apply = () => {
     if (!currentReview?.valid || !currentReview.metrics) return;
-    onApply({ ...solution, placements, metrics: currentReview.metrics, zones: currentReview.zones, identical_to: null,
+    onApply({ ...solution, placements: currentReview.placements ?? placements, metrics: currentReview.metrics, zones: currentReview.zones, identical_to: null,
       pros: ["人工调整已通过边界、碰撞、朝向、支撑和承重规则检查"],
       cons: ["几何校验不替代现场绑扎、运输动态稳定性和装卸可达性复核"],
-      warnings: ["人工调整后请按新布局复核装载顺序和柜门操作空间"],
+      warnings: [currentReview.placements ? "装载步骤已按新位置和上下支撑关系重新生成，请现场复核搬运通道和柜门操作空间" : "人工调整后请按新布局复核装载顺序和柜门操作空间"],
     }, locked);
   };
 
@@ -163,6 +163,7 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
           <p>{cargo.sku} · 第 {selected.instance_index + 1} 件</p>
           <label><input type="checkbox" checked={wholeCargo} onChange={e => setWholeCargo(e.target.checked)} />移动同 SKU 全部货物</label>
           <button onClick={() => setLocked(previous => { const next = new Set(previous); if (next.has(cargo.id)) next.delete(cargo.id); else next.add(cargo.id); return next; })}>{locked.has(cargo.id) ? "解锁该 SKU" : "锁定该 SKU"}</button>
+          {locked.has(cargo.id) && <small>重算保留该 SKU 的位置和朝向；上层由其他 SKU 承载时，请一并锁定下方支撑货物。</small>}
           <label className="workbench-readonly-field">货物尺寸（不可修改）<input aria-label="货物尺寸（不可修改）" value={`${cargo.length_cm} × ${cargo.width_cm} × ${cargo.height_cm} cm`} readOnly /></label>
           <div className="workbench-nudge" role="group" aria-label="按货物尺寸平移">
             <button disabled={locked.has(cargo.id)} onClick={() => move(selected.id, selected.x_mm - selected.length_mm - itemGapCm * 10, selected.y_mm)}>向柜头移一件</button>

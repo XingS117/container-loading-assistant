@@ -47,6 +47,20 @@ test('shows cargo dimensions as read-only while allowing position edits', async 
   expect(screen.getByLabelText('货物尺寸（不可修改）')).toHaveAttribute('readonly');
 });
 
+test('applies regenerated server steps instead of stale draft steps', async () => {
+  const apply = vi.fn();
+  vi.mocked(reviewLayout).mockImplementation(async (_container, _cargo, draft) => ({
+    ...valid, placements: draft.map(p => ({ ...p, step: 7 })),
+  }));
+  render(<LayoutWorkbench solution={solution} container={container} cargoItems={[cargo]} itemGapCm={0} onApply={apply} onClose={() => {}} />);
+  await userEvent.click(screen.getByRole('button', { name: 'A · 第 1 件' }));
+  fireEvent.change(screen.getByLabelText('X 柜长 cm'), { target: { value: '50' } });
+  await userEvent.click(screen.getByRole('button', { name: '预览坐标' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: '应用调整' })).toBeEnabled());
+  await userEvent.click(screen.getByRole('button', { name: '应用调整' }));
+  expect(apply).toHaveBeenCalledWith(expect.objectContaining({ placements: [expect.objectContaining({ x_mm: 500, step: 7 })] }), expect.any(Set));
+});
+
 test('floating moves are rejected before changing the layout', async () => {
   render(<LayoutWorkbench solution={solution} container={container} cargoItems={[cargo]} itemGapCm={0} onApply={vi.fn()} onClose={() => {}} />);
   await userEvent.click(screen.getByRole('button', { name: 'A · 第 1 件' }));

@@ -2,6 +2,8 @@ from copy import deepcopy
 
 from fastapi.testclient import TestClient
 from app.main import app
+from app.models import PackRequest, Placement
+from app.packing import _compute_zones
 
 client = TestClient(app)
 
@@ -22,6 +24,78 @@ def test_review_returns_authoritative_metrics():
     assert data["metrics"]["loaded_pieces"] == 2
     assert "floor_largest_gap_mm" in data["metrics"]
     assert data["zones"]
+
+
+def test_zones_count_stacked_pieces_only_in_their_own_step():
+    body = payload()
+    request = PackRequest.model_validate(body)
+    placements = [Placement.model_validate(p) for p in body["placements"]]
+    zones = _compute_zones(request, placements)
+    assert [(z.step, z.piece_count) for z in zones] == [(1, 1), (2, 1)]
+
+
+def test_zones_count_each_piece_once_with_different_footprints():
+    body = payload()
+    placements = [Placement.model_validate(p) for p in body["placements"]]
+    placements[1] = placements[1].model_copy(update={"step": 1, "length_mm": 300})
+    zones = _compute_zones(PackRequest.model_validate(body), placements)
+    assert sum(z.piece_count for z in zones) == 2
+
+
+def test_zones_keep_same_step_stack_count():
+    body = payload()
+    placements = [Placement.model_validate(p).model_copy(update={"step": 1}) for p in body["placements"]]
+    zones = _compute_zones(PackRequest.model_validate(body), placements)
+    assert len(zones) == 1
+    assert zones[0].piece_count == 2
+
+
+def test_review_regenerates_steps_after_moving_boxes():
+    body = payload()
+    body["placements"][0].update(x_mm=1000, step=1)
+    body["placements"][1].update(z_mm=0, step=2)
+    data = client.post("/api/v1/layout/review", json=body).json()
+    assert data["valid"]
+    ordered = sorted(data["placements"], key=lambda p: p["step"])
+    assert [p["id"] for p in ordered] == ["a-1", "a-0"]
+    assert sum(z["piece_count"] for z in data["zones"]) == 2
+    assert data["metrics"]["loading_steps"] == 2
+
+
+def test_review_places_support_before_upper_box_and_preserves_array_order():
+    body = payload()
+    body["cargo_items"][0].update(quantity=3, max_layers=2, max_top_load_g=2000)
+    body["placements"][0].update(x_mm=250, step=8)
+    body["placements"][1].update(x_mm=250, step=1)
+    body["placements"].append({**body["placements"][0], "id": "a-2", "instance_index": 2, "x_mm": 0, "y_mm": 500})
+    data = client.post("/api/v1/layout/review", json=body).json()
+    assert data["valid"]
+    by_id = {p["id"]: p for p in data["placements"]}
+    assert by_id["a-0"]["step"] < by_id["a-1"]["step"]
+    assert {p["step"] for p in data["placements"]} == {1, 2, 3}
+    assert [p["id"] for p in data["placements"]] == [p["id"] for p in body["placements"]]
+
+
+def test_invalid_review_does_not_return_executable_placements():
+    body = payload()
+    body["placements"][1]["z_mm"] = 750
+    data = client.post("/api/v1/layout/review", json=body).json()
+    assert not data["valid"]
+    assert data["placements"] == []
+
+
+def test_review_waits_for_all_supports_before_loading_a_bridging_box():
+    body = payload()
+    body["cargo_items"][0]["quantity"] = 3
+    body["placements"][1]["x_mm"] = 250
+    body["placements"].append({**body["placements"][0], "id": "a-2", "instance_index": 2, "x_mm": 500})
+    data = client.post("/api/v1/layout/review", json=body).json()
+    assert data["valid"]
+    by_id = {p["id"]: p for p in data["placements"]}
+    assert by_id["a-1"]["step"] > max(by_id["a-0"]["step"], by_id["a-2"]["step"])
+    for p in data["placements"]:
+        original = next(item for item in body["placements"] if item["id"] == p["id"])
+        assert {k: v for k, v in p.items() if k != "step"} == {k: v for k, v in original.items() if k != "step"}
 
 
 def test_review_rejects_removed_support():

@@ -135,6 +135,7 @@ export interface PackResponse {
 }
 
 export interface LayoutReviewResponse {
+  placements?: Placement[];
   valid: boolean;
   errors: Array<{ code: string; message: string; placement_ids: string[] }>;
   metrics: SolutionMetrics | null;

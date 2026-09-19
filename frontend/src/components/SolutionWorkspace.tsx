@@ -344,7 +344,7 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
             </div>
             <h3>风险摘要</h3>
             <p>{explainFloorRisk(solution)}</p>
-            <h3>装载步骤（从柜门向柜内）</h3>
+            <h3>装载步骤（由柜内向柜门，先下后上）</h3>
             <div className="print-steps">
               {loadingStepLabels(solution, cargoItems).length > 0
                 ? loadingStepLabels(solution, cargoItems).map((step, index) => <p key={`${index}:${step}`}>{step}</p>)

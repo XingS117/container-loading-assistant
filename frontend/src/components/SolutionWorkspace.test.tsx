@@ -93,7 +93,7 @@ test("explains whether a floor gap needs stability review", () => {
   expect(explainFloorRisk(solution)).toContain("一般可接受");
 });
 
-test("lists loading steps from door to container end", () => {
+test("lists loading steps in assigned order", () => {
   const solution = makeSolution("easy", 3);
   solution.zones = [
     { step: 2, cargo_id: "b", x_mm: 1000, y_mm: 0, length_mm: 100, width_mm: 100, piece_count: 2 },
@@ -104,6 +104,11 @@ test("lists loading steps from door to container end", () => {
     "第 1 步：A × 5 件",
     "第 2 步：B × 2 件",
   ]);
+});
+
+test("prints the loading direction from container interior towards the door", () => {
+  render(<SolutionWorkspace response={makeResponse(8, 3)} container={container} presets={presets} cargoItems={cargoItems} onBack={() => {}} onRecalculate={async () => {}} recalculating={false} />);
+  expect(screen.getAllByRole('heading', { name: '装载步骤（由柜内向柜门，先下后上）' })).toHaveLength(3);
 });
 
 

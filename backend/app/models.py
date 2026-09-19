@@ -116,6 +116,8 @@ class PackRequest(BaseModel):
         if len({item.id for item in self.cargo_items}) != len(self.cargo_items):
             raise ValueError("货物 ID 不能重复")
         cargo_by_id = {item.id: item for item in self.cargo_items}
+        if len({p.id for p in self.locked_placements}) != len(self.locked_placements):
+            raise ValueError("锁定布局中的货物标识不能重复")
         locked_instances: set[tuple[str, int]] = set()
         for placement in self.locked_placements:
             cargo = cargo_by_id.get(placement.cargo_id)
