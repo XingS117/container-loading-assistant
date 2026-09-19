@@ -1,4 +1,4 @@
-import { cargoRowsFromMatrix } from "./excel";
+import { cargoRowsFromMatrix, inspectCargoMatrix, EXCEL_HEADERS } from "./excel";
 
 
 test("maps the fixed Chinese Excel template into cargo rows", () => {
@@ -34,4 +34,34 @@ test("rejects unknown enums and fractional quantities instead of rewriting them"
   expect(() => cargoRowsFromMatrix([header, ["A", "箱", "袋装", 10, 10, 10, 1, 1, "保持正放", "是", 2, 2, "否", "否"]])).toThrow("类型");
   expect(() => cargoRowsFromMatrix([header, ["A", "箱", "散箱", 10, 10, 10, 1, 1.5, "保持正放", "是", 2, 2, "否", "否"]])).toThrow("数量");
   expect(() => cargoRowsFromMatrix([header, ["A", "箱", "散箱", 10, 10, 10, 1, 1, "斜放", "是", 2, 2, "否", "否"]])).toThrow("摆放方式");
+});
+
+const sample = ['A', '箱', '散箱', 600, 400, 400, 18000, 2, '保持正放', '是', 2, 0, '否', '否'];
+test('converts explicit units and allows zero top load without changing the goods', () => {
+  const headers = EXCEL_HEADERS.map(h => h.replace('(cm)', '（mm）').replace('(kg)', '(g)'));
+  const report = inspectCargoMatrix([headers, sample]);
+  expect(report.issues).toEqual([]);
+  expect(report.rows[0]).toMatchObject({ length_cm: 60, weight_kg: 18, max_top_load_kg: 0 });
+  expect(report.conversions.length).toBeGreaterThan(0);
+});
+test('reports all cell errors with original row numbers and never returns partial orders', () => {
+  const report = inspectCargoMatrix([[...EXCEL_HEADERS], [], ['A', '箱', '未知', -1, 0, 40, 'abc', 1.5, '斜放', '是', 101, -2, '否', '否']]);
+  expect(report.issues.length).toBeGreaterThanOrEqual(7);
+  expect(report.issues.every(i => i.row === 3)).toBe(true);
+  expect(report.rows).toEqual([]);
+});
+test('rejects ambiguous duplicate columns and unsupported units', () => {
+  expect(inspectCargoMatrix([[...EXCEL_HEADERS, '长(mm)'], [...sample, 600]]).issues.some(i => i.message.includes('重复'))).toBe(true);
+  expect(inspectCargoMatrix([EXCEL_HEADERS.map(h => h === '长(cm)' ? '长(in)' : h), sample]).issues.length).toBeGreaterThan(0);
+});
+test('rejects contradictory cell units and sub-millimeter dimensions', () => {
+  const row = [...sample]; row[3] = '60 mm'; row[4] = 0.01;
+  const report = inspectCargoMatrix([[...EXCEL_HEADERS], row]);
+  expect(report.issues.some(i => i.message.includes('单位'))).toBe(true);
+  expect(report.issues.some(i => i.message.includes('毫米'))).toBe(true);
+});
+test('supports meter and tonne columns and optional unload order', () => {
+  const headers = EXCEL_HEADERS.map(h => h.replace('(cm)', '(m)').replace('(kg)', '(t)'));
+  const report = inspectCargoMatrix([[...headers, '卸货顺序'], ['A', '箱', '散箱', .6, .4, .4, .018, 2, '保持正放', '是', 2, 0, '否', '否', 3]]);
+  expect(report.rows[0]).toMatchObject({ length_cm: 60, weight_kg: 18, unload_order: 3 });
 });

@@ -1,16 +1,17 @@
 import { Box, Calculator, FileSpreadsheet, LoaderCircle, Settings2, ShieldCheck, Trash2 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { CargoTable } from "./components/CargoTable";
 import { ContainerPicker } from "./components/ContainerPicker";
 import { SolutionWorkspace } from "./components/SolutionWorkspace";
 import { ModelSettings } from "./components/ModelSettings";
+import { CalculationProgress } from './components/CalculationProgress';
 import voyageBanner from "./assets/voyage-banner.jpg";
-import { getContainerPresets, packOrder, testAIConnection } from "./lib/api";
+import { CalculationError, getContainerPresets, packOrder, testAIConnection, type CalculationPhase } from "./lib/api";
 import { loadAIConfig, saveAIConfig } from "./lib/aiConfig";
-import { createCargo, validateCargo, validateCargoIssues } from "./lib/cargo";
+import { createCargo, validateCargo, validateCargoIssues, validateCalculationSettings } from "./lib/cargo";
 import { cloneCargoPreset } from "./lib/cargoPresets";
-import { downloadCargoTemplate, readCargoExcel } from "./lib/excel";
+import { downloadCargoTemplate, readCargoExcelReport, type ExcelReport } from "./lib/excel";
 import { trackAnalyticsEvent } from "./lib/analytics";
 import { loadSavedOrders, saveOrder } from "./lib/orderHistory";
 import type { AIModelConfig, CargoInput, CargoPreset, ContainerSpec, PackResponse, SolutionProfile } from "./types";
@@ -45,10 +46,21 @@ export default function App() {
   const [showModelSettings, setShowModelSettings] = useState(false);
   const [result, setResult] = useState<PackResponse | null>(null);
   const [loading, setLoading] = useState(false);
+  const calculationPending = useRef(false);
+  const [progress, setProgress] = useState<{phase: CalculationPhase; startedAt: number} | null>(null);
+  const [calculationFailed, setCalculationFailed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [savedOrders, setSavedOrders] = useState(() => loadSavedOrders());
+  const [importReport, setImportReport] = useState<ExcelReport | null>(null);
+  const [importing, setImporting] = useState(false);
   const cargoValidationError = validateCargo(cargoItems);
   const cargoValidationIssues = validateCargoIssues(cargoItems);
+  const settingsError = validateCalculationSettings(container, itemGapCm, clearanceCm);
+  const focusIssue = (row: number, field: string) => {
+    const inputs = document.querySelector(`[data-cargo-row="${row}"]`)?.querySelectorAll<HTMLInputElement>('input');
+    const input = Array.from(inputs ?? []).find(el => el.getAttribute('aria-label')?.startsWith(field === '货物代号' ? '货物代号或名称 ' : `${field} `));
+    input?.scrollIntoView?.({ block: 'center', behavior: 'smooth' }); input?.focus();
+  };
 
   useEffect(() => {
     getContainerPresets()
@@ -69,18 +81,33 @@ export default function App() {
   }, [container, cargoItems, itemGapCm, clearanceCm]);
 
   const calculateFor = async (nextContainer: ContainerSpec, lockedPlacements: import("./types").Placement[] = []) => {
+    if (calculationPending.current) return;
     const validationError = validateCargo(cargoItems);
     if (validationError) throw new Error(validationError);
+    const nextSettingsError = validateCalculationSettings(nextContainer, itemGapCm, clearanceCm);
+    if (nextSettingsError) throw new Error(nextSettingsError);
+    calculationPending.current = true;
+    const startedAt = Date.now();
+    const mode = result ? 'recalculate' : 'initial';
+    setProgress({phase:'submitting', startedAt});
+    setCalculationFailed(false);
     setLoading(true);
     setError(null);
-    trackAnalyticsEvent("pack_calculation_started", { cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), preferred_profile: preferredProfile });
+    trackAnalyticsEvent("pack_calculation_started", { mode, cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), preferred_profile: preferredProfile });
     try {
       const requestContainer = { ...nextContainer, clearance_mm: Math.round(clearanceCm * 10) };
-      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig, preferredProfile, lockedPlacements);
+      const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig, preferredProfile, lockedPlacements, phase => setProgress({phase, startedAt}));
+      if (!nextResult.solutions.length) throw new CalculationError('服务未返回装柜方案，清单和原方案已保留，请稍后重试。', 'service', 'EMPTY_SOLUTIONS');
       setContainer(requestContainer);
       setResult(nextResult);
-      trackAnalyticsEvent("pack_solutions_generated", { cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), recommended_profile: nextResult.recommended_profile ?? preferredProfile });
+      trackAnalyticsEvent("pack_solutions_generated", { mode, elapsed_ms: Date.now() - startedAt, cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), recommended_profile: nextResult.recommended_profile ?? preferredProfile });
+    } catch (reason) {
+      setCalculationFailed(true);
+      trackAnalyticsEvent('pack_calculation_failed', { mode, elapsed_ms: Date.now() - startedAt, category: reason instanceof CalculationError ? reason.category : 'service', reason: reason instanceof CalculationError ? reason.code : 'UNKNOWN' });
+      throw reason;
     } finally {
+      calculationPending.current = false;
+      setProgress(null);
       setLoading(false);
     }
   };
@@ -90,7 +117,6 @@ export default function App() {
     try {
       await calculateFor(container);
     } catch (reason) {
-      trackAnalyticsEvent("pack_calculation_failed", { reason: reason instanceof Error ? reason.message.slice(0, 80) : "unknown" });
       setError(reason instanceof Error ? reason.message : "计算失败，请稍后重试");
     }
   };
@@ -134,7 +160,7 @@ export default function App() {
   };
 
   if (result && container) {
-    return <SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} itemGapCm={itemGapCm} onBack={() => { trackAnalyticsEvent("pack_edit_input"); setResult(null); }} onRecalculate={calculateFor} recalculating={loading} />;
+    return <><fieldset className="calculation-fields" disabled={loading} aria-busy={loading}><SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} itemGapCm={itemGapCm} onBack={() => { trackAnalyticsEvent("pack_edit_input"); setResult(null); setCalculationFailed(false); }} onRecalculate={calculateFor} recalculating={loading} /></fieldset>{progress && <CalculationProgress {...progress} />}</>;
   }
 
   if (showModelSettings) {
@@ -143,6 +169,7 @@ export default function App() {
 
   return (
     <main className="app-shell">
+      <fieldset className="calculation-fields" disabled={loading} aria-busy={loading}>
       <header className="app-header">
         <div className="brand-mark brand-mark--cube"><Box size={28} strokeWidth={2.2} /></div>
         <div><span className="eyebrow">LOAD PLANNING</span><h1>装柜方案助手</h1></div>
@@ -171,11 +198,32 @@ export default function App() {
           onLoadPreset={loadPreset}
           onDownloadTemplate={() => downloadCargoTemplate().catch((reason: Error) => setError(reason.message))}
           onImportFile={(file) => {
-            readCargoExcel(file)
-              .then((rows) => { setCargoItems(rows); setError(null); trackAnalyticsEvent("cargo_excel_imported", { cargo_types: rows.length, pieces: rows.reduce((sum, item) => sum + item.quantity, 0) }); })
-              .catch((reason: Error) => { trackAnalyticsEvent("cargo_excel_import_failed", { reason: reason.message.slice(0, 80) }); setError(reason.message); });
+            if (importing) return;
+            setImporting(true); setImportReport(null); setError(null);
+            readCargoExcelReport(file)
+              .then(report => { setImportReport(report); if (report.issues.length) trackAnalyticsEvent('cargo_excel_import_failed', { issue_count: report.issues.length }); })
+              .catch(() => setError('无法读取 Excel，请确认是有效的 .xlsx 文件且不超过 10 MB，工作表不超过 10000 行、100 列。当前清单未改变。'))
+              .finally(() => setImporting(false));
           }}
         />
+        {importing && <p role="status">正在读取 Excel，当前清单保持不变…</p>}
+        {importReport && <section className="import-report" aria-label="Excel 数据质量报告">
+          <h2>{importReport.issues.length ? `发现 ${importReport.issues.length} 项问题，尚未导入` : '导入预览：检查通过'}</h2>
+          <p>仅读取首个工作表。当前清单在应用前不会改变。</p>
+          {importReport.conversions.length > 0 && <p>单位换算：{importReport.conversions.join('；')}</p>}
+          {importReport.issues.length > 0 ? <>
+            <p>请按下列行号和列名修正原 Excel，再点击“导入 Excel”重新选择文件；系统不会跳过错误货物。</p>
+            <ul className="import-issues">{importReport.issues.map((issue, i) => <li key={i}>第 {issue.row} 行 · {issue.column}：{issue.message}</li>)}</ul>
+          </> : <>
+            <p>{importReport.rows.length} 种货物，共 {importReport.rows.reduce((sum, row) => sum + row.quantity, 0)} 件；尺寸统一为 cm，重量统一为 kg。</p>
+            <button className="primary-outline-button" onClick={() => {
+              setCargoItems(importReport.rows.map((row, index) => ({ ...row, id: `cargo_import_${Date.now()}_${index}` })));
+              trackAnalyticsEvent('cargo_excel_imported', { cargo_types: importReport.rows.length, pieces: importReport.rows.reduce((sum, row) => sum + row.quantity, 0) });
+              setImportReport(null); setError(null);
+            }}>应用导入并替换清单</button>
+          </>}
+          <button className="text-button" onClick={() => setImportReport(null)}>关闭报告</button>
+        </section>}
 
         <section className="section-block settings-block" aria-labelledby="settings-heading">
           <div className="section-heading"><div><span className="step-index">03</span><h2 id="settings-heading">计算设置</h2></div></div>
@@ -193,17 +241,20 @@ export default function App() {
 
         {cargoValidationIssues.length > 0 && <div className="form-error" role="alert">
           <strong>请先修正货物清单</strong>
-          <ul>{cargoValidationIssues.map((issue, index) => <li key={`${issue.row}-${issue.field}-${index}`}>{issue.row ? `第 ${issue.row} 种货物：` : "整单："}{issue.field}{issue.message}</li>)}</ul>
+          <ul>{cargoValidationIssues.map((issue, index) => <li key={`${issue.row}-${issue.field}-${index}`}>{issue.row ? <button type="button" className="issue-link" onClick={() => focusIssue(issue.row, issue.field)}>第 {issue.row} 种货物：{issue.field}{issue.message} · 定位修改</button> : `整单：${issue.field}${issue.message}`}</li>)}</ul>
         </div>}
+        {settingsError && <div className="form-error" role="alert">{settingsError}</div>}
         {error && <div className="form-error" role="alert">{error}</div>}
         <div className="calculate-bar">
           <div><strong>{cargoItems.reduce((sum, item) => sum + item.quantity, 0)}</strong><span>件货物 · {container?.name ?? "读取柜型中"}</span></div>
-          <button type="button" className="calculate-button" onClick={calculate} disabled={!container || loading || Boolean(cargoValidationError)}>
+          <button type="button" className="calculate-button" onClick={calculate} disabled={!container || loading || importing || Boolean(cargoValidationError || settingsError)}>
             {loading ? <LoaderCircle className="spin" size={19} /> : <Calculator size={19} />}
-            {loading ? "正在计算" : "生成装柜方案"}
+            {loading ? "正在计算" : calculationFailed ? "重试计算" : "生成装柜方案"}
           </button>
         </div>
       </div>
+      </fieldset>
+      {progress && <CalculationProgress {...progress} />}
     </main>
   );
 }

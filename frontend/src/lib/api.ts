@@ -1,6 +1,16 @@
 import { orientationsFor, validateCargo } from "./cargo";
 import type { AIModelConfig, CargoInput, ContainerSpec, LayoutReviewResponse, PackResponse, Placement, SolutionProfile } from "../types";
 
+export type CalculationPhase = 'submitting' | 'waiting' | 'reading';
+export class CalculationError extends Error {
+  category: 'timeout' | 'network' | 'input' | 'busy' | 'service';
+  code: string;
+  constructor(message: string, category: CalculationError['category'], code: string) {
+    super(message); this.category = category; this.code = code;
+  }
+}
+const timeoutMessage = '本次计算等待超时，清单和原方案已保留。可稍后重试；若再次超时，请拆分订单或减少本次货物种类。服务器可能仍在结束本次任务，请勿连续重复提交。';
+
 function cargoPayload(cargoItems: CargoInput[]) {
   return cargoItems.map((item) => ({
     id: item.id,
@@ -48,45 +58,63 @@ export async function packOrder(
   aiConfig?: AIModelConfig,
   preferredProfile: SolutionProfile = "high_fill",
   lockedPlacements: import("../types").Placement[] = [],
+  onPhase?: (phase: CalculationPhase) => void,
 ): Promise<PackResponse> {
   const validationError = validateCargo(cargoItems);
   if (validationError) throw new Error(validationError);
   if (cargoItems.some((item) => item.weight_kg == null)) {
     throw new Error("请先补充所有货物的单托重量");
   }
-  const response = await fetch("/api/v1/pack", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...(aiConfig?.apiKey?.trim() ? {
-        "X-AI-API-Key": aiConfig.apiKey.trim(),
-        "X-AI-Provider": aiConfig.provider,
-        "X-AI-Model": aiConfig.model,
-        "X-AI-Base-URL": aiConfig.baseUrl,
-      } : {}),
-    },
-    body: JSON.stringify({
-      container,
-      item_gap_mm: Math.round(itemGapCm * 10),
-      preferred_profile: preferredProfile,
-      locked_placements: lockedPlacements,
-      cargo_items: cargoPayload(cargoItems),
-    }),
-  });
-  const payload = await readJsonResponse<PackResponse & { error?: { code?: string; message?: string; hint?: string } }>(response, "装柜服务返回了无效响应");
-  if (!response.ok) {
-    const message = payload?.error?.message ?? "计算失败，请检查货物参数";
-    const hint = payload?.error?.hint as string | undefined;
-    const code = payload?.error?.code;
-    if (code === "CALCULATION_TIMEOUT") {
-      throw new Error(`计算超时：${message}。请减少货物种类或先关闭 AI 策略后重试`);
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 80000);
+  try {
+    onPhase?.('submitting');
+    const pending = fetch("/api/v1/pack", {
+      signal: controller.signal,
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        ...(aiConfig?.apiKey?.trim() ? {
+          "X-AI-API-Key": aiConfig.apiKey.trim(),
+          "X-AI-Provider": aiConfig.provider,
+          "X-AI-Model": aiConfig.model,
+          "X-AI-Base-URL": aiConfig.baseUrl,
+        } : {}),
+      },
+      body: JSON.stringify({
+        container,
+        item_gap_mm: Math.round(itemGapCm * 10),
+        preferred_profile: preferredProfile,
+        locked_placements: lockedPlacements,
+        cargo_items: cargoPayload(cargoItems),
+      }),
+    });
+    onPhase?.('waiting');
+    const response = await pending;
+    onPhase?.('reading');
+    if (response.status === 504 || response.status === 408) throw new CalculationError(timeoutMessage, 'timeout', 'GATEWAY_TIMEOUT');
+    if (response.status === 429) throw new CalculationError('请求过于频繁，请稍后重试，原方案已保留。', 'busy', 'RATE_LIMITED');
+    const payload = await readJsonResponse<PackResponse & { error?: { code?: string; message?: string; hint?: string } }>(response, "装柜服务返回了无效响应");
+    if (!response.ok) {
+      const message = payload?.error?.message ?? "计算失败，请检查货物参数";
+      const hint = payload?.error?.hint;
+      const code = payload?.error?.code;
+      if (code === "CALCULATION_TIMEOUT" || code === 'LOCKED_RECALCULATION_TIMEOUT') {
+        throw new CalculationError(timeoutMessage, 'timeout', code);
+      }
+      if (code === "CALCULATION_BUSY") {
+        throw new CalculationError('当前计算任务较多，清单和原方案已保留，请稍后重试。', 'busy', code);
+      }
+      throw new CalculationError(hint ? `${message}\n${hint}` : message, response.status === 422 ? 'input' : 'service', code ?? `HTTP_${response.status}`);
     }
-    if (code === "CALCULATION_BUSY") {
-      throw new Error("当前计算任务较多，请稍后重试");
-    }
-    throw new Error(hint ? `${message}\n${hint}` : message);
-  }
-  return payload;
+    if (!payload || typeof payload.request_id !== 'string' || !Array.isArray(payload.solutions)) throw new CalculationError('服务返回的方案不完整，请稍后重试。清单和原方案已保留。', 'service', 'INVALID_RESPONSE');
+    return payload;
+  } catch (reason) {
+    if (controller.signal.aborted) throw new CalculationError(timeoutMessage, 'timeout', 'CLIENT_TIMEOUT');
+    if (reason instanceof CalculationError) throw reason;
+    if (reason instanceof TypeError) throw new CalculationError('网络连接中断，清单和原方案已保留。请检查网络后重试。', 'network', 'NETWORK_ERROR');
+    throw new CalculationError(reason instanceof Error ? reason.message : '装柜服务异常，请稍后重试', 'service', 'INVALID_RESPONSE');
+  } finally { window.clearTimeout(timeout); }
 }
 
 export async function reviewLayout(

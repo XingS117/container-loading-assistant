@@ -20,6 +20,11 @@ button, input, select { font: inherit; letter-spacing: 0; }
 button { cursor: pointer; }
 h1, h2, p { margin: 0; }
 .print-only { display: none; }
+.import-report { padding: 16px; margin: 16px 0; border: 1px solid var(--line); border-left: 4px solid var(--accent); border-radius: 6px; background: var(--paper); }
+.import-report h2 { font-size: 16px; margin-bottom: 10px; }
+.import-report p { font-size: 13px; line-height: 1.7; margin-bottom: 10px; }
+.import-issues { max-height: 240px; overflow: auto; font-size: 13px; line-height: 1.8; color: var(--danger); }
+.issue-link { color: inherit; border: 0; background: none; text-align: left; padding: 4px 0; text-decoration: underline; text-underline-offset: 3px; }
 
 .app-shell, .results-page { min-height: 100vh; }
 .app-header, .result-toolbar { min-height: 78px; padding: 16px clamp(18px, 4vw, 56px); display: flex; align-items: center; gap: 13px; border-bottom: 1px solid rgba(23,33,29,.12); }
@@ -452,3 +457,8 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
   .worksheet-guide small, .worksheet-signature small { font-size: 9px; }
   .worksheet-signature { font-size: 11px; }
 }
+.calculation-fields { border: 0; padding: 0; margin: 0; min-width: 0; }
+.calculation-fields[disabled] { padding-bottom: 120px; }
+.calculation-progress { position: fixed; z-index: 100; bottom: 18px; left: 50%; transform: translateX(-50%); width: min(580px, calc(100% - 32px)); padding: 16px 20px; background: #f0f6f2; border: 1px solid #b4c8bb; border-radius: 12px; box-shadow: 0 8px 32px #17211d26; color: #17211d; }
+.calculation-progress > span { float: right; font-variant-numeric: tabular-nums; }
+.calculation-progress p { margin: 8px 0 0; font-size: 13px; line-height: 1.6; }

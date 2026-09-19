@@ -2,6 +2,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import App from "./App";
+import * as excel from './lib/excel';
+import { createCargo } from './lib/cargo';
+import * as analytics from './lib/analytics';
+
+beforeEach(() => { localStorage.clear(); sessionStorage.clear(); vi.restoreAllMocks(); });
 
 
 const preset = {
@@ -55,6 +60,68 @@ const response = {
     identical_to: index ? "high_fill" : null,
   })),
 };
+
+test('preserves the input on timeout, prevents edits while waiting and allows manual retry', async () => {
+  let finish!: (value: Response) => void;
+  vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(new Response(JSON.stringify([preset])))
+    .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValueOnce(new Response(JSON.stringify(response)));
+  render(<App />);
+  await screen.findByRole('button', {name:/20GP/});
+  await userEvent.click(screen.getByRole('button', {name:'生成装柜方案'}));
+  expect(await screen.findByText('等待计算结果')).toBeInTheDocument();
+  expect(screen.getByLabelText('货物代号或名称 1')).toBeDisabled();
+  finish(new Response('<html>timeout</html>', {status:504}));
+  expect(await screen.findByText(/本次计算等待超时/)).toBeInTheDocument();
+  expect(screen.getByLabelText('货物代号或名称 1')).toHaveValue('SKU-001');
+  await userEvent.click(screen.getByRole('button', {name:'重试计算'}));
+  expect(await screen.findByText('方案比较')).toBeInTheDocument();
+});
+
+test('retains the original solution after failed recalculation and records its duration and category', async () => {
+  vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce(new Response(JSON.stringify([preset, secondPreset])))
+    .mockResolvedValueOnce(new Response(JSON.stringify(response)))
+    .mockRejectedValueOnce(new TypeError('Failed to fetch'));
+  const track = vi.spyOn(analytics, 'trackAnalyticsEvent');
+  render(<App />);
+  await screen.findByRole('button', {name:/20GP/});
+  await userEvent.click(screen.getByRole('button', {name:'生成装柜方案'}));
+  await screen.findByText('方案比较');
+  await userEvent.selectOptions(screen.getByLabelText('重算柜型'), '40hq');
+  await userEvent.click(screen.getByRole('button', {name:'确认重算'}));
+  expect(await screen.findByText(/网络连接中断/)).toBeInTheDocument();
+  expect(screen.getByText('计算结果 · abc123')).toBeInTheDocument();
+  expect(track).toHaveBeenCalledWith('pack_calculation_failed', expect.objectContaining({mode:'recalculate', category:'network', reason:'NETWORK_ERROR', elapsed_ms:expect.any(Number)}));
+});
+
+test('focuses an invalid cargo field and prevents submission', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([preset])));
+  render(<App />);
+  await screen.findByRole('button', {name:/20GP/});
+  await userEvent.clear(screen.getByLabelText('长 SKU-001'));
+  await userEvent.click(screen.getByRole('button', {name:/第 1 种货物：长.*定位修改/}));
+  expect(screen.getByLabelText('长 SKU-001')).toHaveFocus();
+  expect(screen.getByRole('button', {name:'生成装柜方案'})).toBeDisabled();
+});
+
+test('keeps the current order when Excel has errors and previews a valid replacement', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify([preset]), {status:200}));
+  const read = vi.spyOn(excel, 'readCargoExcelReport').mockResolvedValueOnce({rows:[], issues:[{row:4,column:'单重(kg)',message:'必须大于 0'}], conversions:[], rowCount:1})
+    .mockResolvedValueOnce({rows:[createCargo('IMPORT')],issues:[],conversions:['长(mm) → 长(cm)（数值 × 0.1）'],rowCount:1});
+  render(<App />);
+  await screen.findByRole('button', {name:/20GP/});
+  const file = new File(['fixture'], 'cargo.xlsx', {type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'});
+  await userEvent.upload(screen.getByLabelText('选择 Excel 文件'), file);
+  expect(await screen.findByText(/第 4 行.*单重/)).toBeInTheDocument();
+  expect(screen.getByLabelText('货物代号或名称 1')).toHaveValue('SKU-001');
+  expect(screen.queryByRole('button', {name:'应用导入并替换清单'})).not.toBeInTheDocument();
+  await userEvent.upload(screen.getByLabelText('选择 Excel 文件'), file);
+  await userEvent.click(await screen.findByRole('button', {name:'应用导入并替换清单'}));
+  expect(screen.getByLabelText('货物代号或名称 1')).toHaveValue('IMPORT');
+  read.mockRestore();
+});
 
 
 test("loads presets and switches from input to comparable solutions", async () => {

@@ -41,6 +41,7 @@ export function CargoTable({ rows, onChange, onLoadPreset, onImportFile, onDownl
     setNumericDrafts((current) => ({ ...current, [draftKey(row.id, key)]: value }));
     if (value === "") {
       if (key === "weight_kg") update(index, key, null);
+      else update(index, key, key === 'max_top_load_kg' || key === 'unload_order' ? -1 : 0);
       return;
     }
     const number = Number(value);
@@ -116,7 +117,7 @@ export function CargoTable({ rows, onChange, onLoadPreset, onImportFile, onDownl
           <span>货物代号/名称</span><span>类型</span><span>长 × 宽 × 高 (cm)</span><span>单重</span><span>数量</span><span>摆放</span><span>叠放</span><span>约束</span><span />
         </div>
         {rows.map((row, index) => (
-          <div className="cargo-row" role="row" key={row.id}>
+          <div className="cargo-row" role="row" key={row.id} data-cargo-row={index + 1}>
             <div className="cargo-identity cargo-field" data-label="货物代号/名称">
               <input
                 aria-label={`货物代号或名称 ${index + 1}`}

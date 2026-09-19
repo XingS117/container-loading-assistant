@@ -47,3 +47,10 @@ test("uses one cargo label and keeps legacy sku and name fields synchronized", a
     expect.objectContaining({ sku: "Q1", name: "Q1" }),
   ]);
 });
+
+test('clearing dimensions invalidates the draft instead of keeping old values', async () => {
+  const onChange = vi.fn();
+  render(<CargoTable rows={[createCargo('A')]} onChange={onChange} />);
+  await userEvent.clear(screen.getByLabelText('长 A'));
+  expect(onChange).toHaveBeenLastCalledWith([expect.objectContaining({length_cm:0})]);
+});

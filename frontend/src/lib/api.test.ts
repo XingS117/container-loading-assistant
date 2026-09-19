@@ -2,6 +2,9 @@ import { getContainerPresets, packOrder, testAIConnection } from "./api";
 import { createCargo } from "./cargo";
 import type { Placement } from "../types";
 
+beforeEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+afterEach(() => { vi.useRealTimers(); });
+
 const container = {
   id: "40hq",
   name: "40HQ",
@@ -97,8 +100,41 @@ test("explains a calculation timeout with a next step", async () => {
   }), { status: 504 }));
 
   await expect(packOrder(container, [createCargo("TIMEOUT")], 0)).rejects.toThrow(
-    "计算超时：订单较复杂，45 秒内未完成计算。请减少货物种类或先关闭 AI 策略后重试",
+    "本次计算等待超时",
   );
+});
+
+test('classifies gateway HTML timeouts and network failures without losing the action hint', async () => {
+  const spy = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(new Response('<html>timeout</html>', {status:504})).mockRejectedValueOnce(new TypeError('Failed to fetch'));
+  await expect(packOrder(container, [createCargo('A')], 0)).rejects.toMatchObject({category:'timeout',code:'GATEWAY_TIMEOUT'});
+  await expect(packOrder(container, [createCargo('A')], 0)).rejects.toMatchObject({category:'network'});
+  spy.mockRestore();
+});
+
+test('reports real request phases and rejects malformed successful responses', async () => {
+  vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{}', {status:200}));
+  const phase = vi.fn();
+  await expect(packOrder(container, [createCargo('A')], 0, undefined, 'high_fill', [], phase)).rejects.toMatchObject({category:'service'});
+  expect(phase.mock.calls.flat()).toEqual(['submitting','waiting','reading']);
+});
+
+test('bounds waiting with an abort signal and classifies client timeout', async () => {
+  vi.useFakeTimers();
+  vi.spyOn(globalThis, 'fetch').mockImplementation((_url, options) => new Promise((_resolve, reject) => options?.signal?.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError')))));
+  const assertion = expect(packOrder(container, [createCargo('A')], 0)).rejects.toMatchObject({category:'timeout',code:'CLIENT_TIMEOUT'});
+  await vi.advanceTimersByTimeAsync(80000);
+  await assertion;
+  vi.useRealTimers();
+});
+
+test.each([
+  [422, JSON.stringify({error:{message:'参数不合法'}}), 'input'],
+  [503, JSON.stringify({error:{code:'CALCULATION_BUSY'}}), 'busy'],
+  [429, '<html>Rate limited</html>', 'busy'],
+])('classifies HTTP %s without automatic retries', async (status, body, category) => {
+  const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(body as string, {status:status as number}));
+  await expect(packOrder(container, [createCargo('A')], 0)).rejects.toMatchObject({category});
+  expect(fetch).toHaveBeenCalledTimes(1);
 });
 
 test("explains an HTML response from the AI connection endpoint", async () => {
