@@ -1,7 +1,7 @@
 import { orientationsFor, validateCargo } from "./cargo";
 import type { AIModelConfig, CargoInput, ContainerSpec, LayoutReviewResponse, PackResponse, Placement, SolutionProfile } from "../types";
 
-export type CalculationPhase = 'submitting' | 'waiting' | 'reading';
+export type CalculationPhase = 'submitting' | 'waiting' | 'ai' | 'solving' | 'finalizing' | 'reading';
 export class CalculationError extends Error {
   category: 'timeout' | 'network' | 'input' | 'busy' | 'service';
   code: string;
@@ -51,6 +51,37 @@ export async function getContainerPresets(): Promise<ContainerSpec[]> {
   return payload;
 }
 
+async function waitForPackJob(submitted: Response, signal: AbortSignal, onPhase?: (phase: CalculationPhase) => void): Promise<Response> {
+  const accepted = await readJsonResponse<{job_id?: string}>(submitted, '提交任务失败');
+  if (!accepted || typeof accepted.job_id !== 'string' || !/^[a-f0-9]{32}$/.test(accepted.job_id)) throw new CalculationError('服务未返回有效任务编号，原订单仍保留。', 'service', 'INVALID_RESPONSE');
+  let retries = 0;
+  while (!signal.aborted) {
+    try {
+      const response = await fetch(`/api/v1/pack/jobs/${accepted.job_id}`, {signal: AbortSignal.any([signal, AbortSignal.timeout(10000)]), cache:'no-store'});
+      if ([502,503,504].includes(response.status) && retries < 3) throw new TypeError('Polling temporarily unavailable');
+      if (!response.ok) return response;
+      const state = await readJsonResponse<{phase: string; result?: PackResponse; error?: object; http_status?: number}>(response, '查询计算任务失败');
+      if (!state || typeof state.phase !== 'string') throw new CalculationError('计算任务状态无法识别，原订单仍保留。', 'service', 'INVALID_RESPONSE');
+      if (state.phase === 'complete') return new Response(JSON.stringify(state.result), {status:200});
+      if (state.phase === 'failed') return new Response(JSON.stringify({error:state.error}), {status:state.http_status ?? 500});
+      if (!['queued','ai','solving','finalizing'].includes(state.phase)) throw new CalculationError('计算任务状态无法识别，原订单仍保留。', 'service', 'INVALID_RESPONSE');
+      onPhase?.(state.phase === 'queued' ? 'waiting' : state.phase as CalculationPhase);
+      retries = 0;
+    } catch (reason) {
+      if (signal.aborted) throw reason;
+      if (!(reason instanceof TypeError || reason instanceof DOMException && reason.name === 'TimeoutError') || retries >= 3) throw reason;
+      retries++;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => { window.clearTimeout(timer); reject(new DOMException('aborted','AbortError')); };
+      const timer = window.setTimeout(() => { signal.removeEventListener('abort',abort); resolve(); }, 1000);
+      signal.addEventListener('abort',abort,{once:true});
+      if(signal.aborted) abort();
+    });
+  }
+  throw new DOMException('aborted','AbortError');
+}
+
 export async function packOrder(
   container: ContainerSpec,
   cargoItems: CargoInput[],
@@ -69,7 +100,7 @@ export async function packOrder(
   const timeout = window.setTimeout(() => controller.abort(), 80000);
   try {
     onPhase?.('submitting');
-    const pending = fetch("/api/v1/pack", {
+    const options: RequestInit = {
       signal: controller.signal,
       method: "POST",
       headers: {
@@ -88,9 +119,12 @@ export async function packOrder(
         locked_placements: lockedPlacements,
         cargo_items: cargoPayload(cargoItems),
       }),
-    });
+    };
+    const pending = fetch('/api/v1/pack/jobs', options);
     onPhase?.('waiting');
-    const response = await pending;
+    let response = await pending;
+    if (response.status === 404 || response.status === 405) response = await fetch('/api/v1/pack', options);
+    if (response.status === 202) response = await waitForPackJob(response, controller.signal, onPhase);
     onPhase?.('reading');
     if (response.status === 504 || response.status === 408) throw new CalculationError(timeoutMessage, 'timeout', 'GATEWAY_TIMEOUT');
     if (response.status === 429) throw new CalculationError('请求过于频繁，请稍后重试，原方案已保留。', 'busy', 'RATE_LIMITED');
@@ -113,6 +147,7 @@ export async function packOrder(
     if (controller.signal.aborted) throw new CalculationError(timeoutMessage, 'timeout', 'CLIENT_TIMEOUT');
     if (reason instanceof CalculationError) throw reason;
     if (reason instanceof TypeError) throw new CalculationError('网络连接中断，清单和原方案已保留。请检查网络后重试。', 'network', 'NETWORK_ERROR');
+    if (reason instanceof DOMException && reason.name === 'TimeoutError') throw new CalculationError('任务状态查询暂时无法连接，清单和原方案已保留，请稍后重试。', 'network', 'POLL_TIMEOUT');
     throw new CalculationError(reason instanceof Error ? reason.message : '装柜服务异常，请稍后重试', 'service', 'INVALID_RESPONSE');
   } finally { window.clearTimeout(timeout); }
 }

@@ -156,3 +156,28 @@ test("explains an HTML response from the AI connection endpoint", async () => {
     "AI 连接接口返回了无效响应（HTTP 502）：服务器返回了网页而不是接口数据",
   );
 });
+
+test('polls the accepted job through real stages without resubmitting the order or AI key', async () => {
+  vi.useFakeTimers();
+  const job='a'.repeat(32);
+  const fetch=vi.spyOn(globalThis,'fetch')
+    .mockResolvedValueOnce(new Response(JSON.stringify({job_id:job,phase:'queued'}),{status:202}))
+    .mockResolvedValueOnce(new Response(JSON.stringify({job_id:job,phase:'solving'})))
+    .mockRejectedValueOnce(new TypeError('connection reset'))
+    .mockResolvedValueOnce(new Response(JSON.stringify({job_id:job,phase:'complete',result:{request_id:'done',solutions:[]}})));
+  const phase=vi.fn();
+  const result=packOrder(container,[createCargo('A')],0,{provider:'deepseek',model:'test',baseUrl:'https://api.deepseek.com',apiKey:'secret'},'stable',[],phase);
+  await vi.advanceTimersByTimeAsync(5000);
+  expect((await result).request_id).toBe('done');
+  expect(fetch.mock.calls.filter(([,o])=>o?.method==='POST')).toHaveLength(1);
+  expect(fetch.mock.calls[0][0]).toBe('/api/v1/pack/jobs');
+  expect(fetch.mock.calls.slice(1).every(([url,o])=>url===`/api/v1/pack/jobs/${job}` && !new Headers(o?.headers).has('X-AI-API-Key'))).toBe(true);
+  expect(phase).toHaveBeenCalledWith('solving');
+});
+
+test('falls back only when job submission is unsupported on an older server', async () => {
+  const fetch=vi.spyOn(globalThis,'fetch').mockResolvedValueOnce(new Response('{}',{status:404}))
+    .mockResolvedValueOnce(new Response(JSON.stringify({request_id:'legacy',solutions:[]})));
+  expect((await packOrder(container,[createCargo('A')],0)).request_id).toBe('legacy');
+  expect(fetch.mock.calls.map(([url])=>url)).toEqual(['/api/v1/pack/jobs','/api/v1/pack']);
+});

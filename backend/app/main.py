@@ -6,6 +6,7 @@ import threading
 import time
 import uuid
 from collections import defaultdict, deque
+from contextlib import asynccontextmanager
 from pathlib import Path
 
 import anyio.to_process
@@ -26,9 +27,19 @@ from .ai_strategy import (
 )
 from .packing import PackingFailure, ai_coordinate_profiles_applied, pack_order
 from .layout_review import LayoutReview, LayoutReviewRequest, review_layout
+from .pack_jobs import PackJobs
 
 
-app = FastAPI(title="装柜方案助手", version="0.1.0")
+pack_jobs = PackJobs()
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    yield
+    await pack_jobs.close()
+
+
+app = FastAPI(title="装柜方案助手", version="0.1.0", lifespan=lifespan)
 logger = logging.getLogger("container_loading_assistant")
 MAX_REQUEST_BYTES = 1024 * 1024
 RATE_LIMIT_PER_MINUTE = 60
@@ -45,7 +56,7 @@ pack_slots = threading.BoundedSemaphore(2)
 
 @app.middleware("http")
 async def request_guard(request: Request, call_next):
-    if request.url.path in {"/api/v1/pack", "/api/v1/ai/test", "/api/v1/layout/review"}:
+    if request.url.path in {"/api/v1/pack", "/api/v1/pack/jobs", "/api/v1/ai/test", "/api/v1/layout/review"}:
         content_length = request.headers.get("content-length")
         try:
             declared_length = int(content_length) if content_length else 0
@@ -329,19 +340,14 @@ def _ai_hint_applied(request: PackRequest, solutions: list[PackingSolution]) -> 
     return False, []
 
 
-@app.post("/api/v1/pack", response_model=PackResponse)
-async def pack(request: PackRequest, http_request: Request) -> PackResponse | JSONResponse:
-    if not pack_slots.acquire(blocking=False):
-        return JSONResponse(
-            status_code=503,
-            content={"error": {"code": "CALCULATION_BUSY", "message": "当前计算任务较多，请稍后重试"}},
-        )
+async def execute_pack(request: PackRequest, headers, on_phase=lambda _phase: None) -> PackResponse | JSONResponse:
     try:
-        ai_key = http_request.headers.get("X-AI-API-Key")
+        ai_key = headers.get("X-AI-API-Key")
         effective_ai_key = resolve_ai_api_key(ai_key)
-        provider = http_request.headers.get("X-AI-Provider")
-        model = http_request.headers.get("X-AI-Model")
-        base_url = http_request.headers.get("X-AI-Base-URL")
+        provider = headers.get("X-AI-Provider")
+        model = headers.get("X-AI-Model")
+        base_url = headers.get("X-AI-Base-URL")
+        on_phase('ai')
         # AI is advisory only; timeout/errors leave the deterministic path unchanged.
         try:
             hint_result: LayoutHintResult = await asyncio.wait_for(
@@ -375,10 +381,12 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
             request = request.model_copy(
                 update={"ai_layout_hint": hint.as_dict(include_coordinate_candidates=True)}
             )
+        on_phase('solving')
         result = await asyncio.wait_for(
             run_pack_calculation(request),
             timeout=PACK_TIMEOUT_SECONDS,
         )
+        on_phase('finalizing')
         if hint is not None:
             coordinate_profiles = ai_coordinate_profiles_applied(request, result.solutions)
             applied, applied_groups = _ai_hint_applied(request, result.solutions)
@@ -410,8 +418,43 @@ async def pack(request: PackRequest, http_request: Request) -> PackResponse | JS
                 }
             },
         )
+
+
+def calculation_busy():
+    return JSONResponse(status_code=503, content={'error': {'code': 'CALCULATION_BUSY', 'message': '当前计算任务较多，请稍后重试'}}, headers={'Cache-Control': 'no-store'})
+
+
+@app.post('/api/v1/pack', response_model=PackResponse)
+async def pack(request: PackRequest, http_request: Request) -> PackResponse | JSONResponse:
+    if not pack_slots.acquire(blocking=False):
+        return calculation_busy()
+    try:
+        return await execute_pack(request, http_request.headers)
     finally:
         pack_slots.release()
+
+
+@app.post('/api/v1/pack/jobs')
+async def submit_pack_job(request: PackRequest, http_request: Request):
+    if not pack_slots.acquire(blocking=False):
+        return calculation_busy()
+    # Capture only optional AI headers, never a live HTTP request or its body.
+    headers = {key: http_request.headers.get(key) for key in ('X-AI-API-Key', 'X-AI-Provider', 'X-AI-Model', 'X-AI-Base-URL')}
+    release = pack_slots.release
+    try:
+        job = pack_jobs.start(lambda phase: execute_pack(request, headers, phase), release)
+    except Exception:
+        release()
+        return calculation_busy()
+    return JSONResponse(status_code=202, content={'job_id': job.id, 'phase': job.phase}, headers={'Cache-Control': 'no-store'})
+
+
+@app.get('/api/v1/pack/jobs/{job_id}')
+async def get_pack_job(job_id: str):
+    job = pack_jobs.get(job_id)
+    if job is None:
+        return JSONResponse(status_code=404, content={'error': {'code': 'JOB_EXPIRED', 'message': '任务已过期或服务已重启，请重新提交；原清单和方案仍保留'}}, headers={'Cache-Control': 'no-store'})
+    return JSONResponse(content=job.snapshot(), headers={'Cache-Control': 'no-store'})
 
 
 @app.post("/api/v1/ai/test")

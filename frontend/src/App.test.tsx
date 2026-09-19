@@ -77,7 +77,7 @@ test('automatically saves calculation and restores the selected profile after re
   app.unmount(); render(<App />);
   expect(await screen.findByText('方案比较')).toBeInTheDocument();
   expect(screen.getByRole('button',{name:/易操作/})).toHaveClass('is-active');
-  expect(fetch.mock.calls.filter(([url]) => url === '/api/v1/pack')).toHaveLength(1);
+  expect(fetch.mock.calls.filter(([url]) => url === '/api/v1/pack/jobs')).toHaveLength(1);
 });
 
 test('saved layout history can be copied as new input without reusing old results', async () => {
@@ -134,7 +134,7 @@ test('applied removal and locks survive reload, with original layout recoverable
       const {placements} = JSON.parse(init?.body as string);
       return new Response(JSON.stringify({valid:true,errors:[],placements,zones:[],metrics:{...packed.solutions[0].metrics,loaded_pieces:placements.length}}));
     }
-    return new Response(JSON.stringify(url === '/api/v1/pack' ? packed : [preset]));
+    return new Response(JSON.stringify(url === '/api/v1/pack/jobs' ? packed : [preset]));
   });
   const app = render(<App />);
   await screen.findByRole('button',{name:/20GP/});

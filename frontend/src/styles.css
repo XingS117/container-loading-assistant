@@ -41,6 +41,10 @@ h1, h2, p { margin: 0; }
 
 .input-workspace { width: min(1460px, calc(100% - 32px)); margin: 26px auto 120px; }
 .planning-brief { margin-bottom: 24px; overflow: hidden; background: #edf3ee; border: 1px solid #cbd7ce; border-radius: 7px; }
+.quick-start { display:flex; flex-wrap:wrap; align-items:center; gap:12px 24px; margin:0 0 20px; padding:16px 20px; background:#f6f9f6; border:1px solid #cbd7ce; border-radius:7px; }
+.quick-start > div { flex:1 1 280px; }
+.quick-start p { margin:6px 0 0; font-size:13px; line-height:1.6; }
+.quick-start .example-note { flex-basis:100%; color:#76551c; }
 .planning-banner { width: 100%; display: block; aspect-ratio: 8 / 1; object-fit: cover; }
 .planning-detail { min-height: 78px; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; gap: 20px; background: #edf3ee; border-top: 1px solid #cbd7ce; }
 .planning-copy { min-width: 0; }

@@ -9,8 +9,8 @@ export function CalculationProgress({ phase, startedAt }: { phase: CalculationPh
   }, []);
   const seconds = Math.max(0, Math.floor((now - startedAt) / 1000));
   return <aside className="calculation-progress no-print" aria-label="计算状态">
-    <strong role="status">{{submitting:'正在提交订单', waiting:'等待计算结果', reading:'正在读取方案'}[phase]}</strong>
+    <strong role="status">{{submitting:'正在提交订单', waiting:'等待计算结果', ai:'正在获取 AI 布局建议', solving:'正在计算布局并校验安全', finalizing:'正在整理三种方案', reading:'正在读取方案'}[phase]}</strong>
     <span>已等待 {seconds} 秒</span>
-    <p>{seconds >= 30 ? '计算仍在等待响应，请勿重复提交。' : '计算期间已暂时锁定编辑，确保方案与订单一致。'}计时仅表示等待时间，不代表算法完成进度。</p>
+    <p>{['ai','solving','finalizing'].includes(phase) ? '当前阶段由服务器返回，任务持续处理中，请勿重复提交。' : seconds >= 30 ? '计算仍在等待响应，请勿重复提交。' : '计算期间已暂时锁定编辑，确保方案与订单一致。'}计时仅表示等待时间，不代表算法完成进度。</p>
   </aside>;
 }

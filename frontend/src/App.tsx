@@ -11,7 +11,7 @@ import voyageBanner from "./assets/voyage-banner.jpg";
 import { CalculationError, getContainerPresets, packOrder, testAIConnection, type CalculationPhase } from "./lib/api";
 import { loadAIConfig, saveAIConfig } from "./lib/aiConfig";
 import { createCargo, validateCargo, validateCargoIssues, validateCalculationSettings } from "./lib/cargo";
-import { cloneCargoPreset } from "./lib/cargoPresets";
+import { cloneCargoPreset, COMMON_CARGO_PRESETS } from "./lib/cargoPresets";
 import { downloadCargoTemplate, readCargoExcelReport, type ExcelReport } from "./lib/excel";
 import { trackAnalyticsEvent } from "./lib/analytics";
 import { loadSavedOrders, saveOrder, deleteSavedOrder, updateSavedSelection, type SavedOrder, type SavedWorkspace } from "./lib/orderHistory";
@@ -69,6 +69,7 @@ export default function App() {
   const [savedOrders, setSavedOrders] = useState(() => loadSavedOrders());
   const [importReport, setImportReport] = useState<ExcelReport | null>(null);
   const [importing, setImporting] = useState(false);
+  const [exampleLoaded, setExampleLoaded] = useState(false);
   const cargoValidationError = validateCargo(cargoItems);
   const cargoValidationIssues = validateCargoIssues(cargoItems);
   const settingsError = validateCalculationSettings(container, itemGapCm, clearanceCm);
@@ -172,7 +173,7 @@ export default function App() {
 
   const loadPreset = (preset: CargoPreset) => {
     if (cargoItems.length > 0 && !window.confirm("加载常见规格将替换当前货物清单，是否继续？")) {
-      return;
+      return false;
     }
     const hintedContainer = presets.find(
       (item) =>
@@ -185,6 +186,14 @@ export default function App() {
     setResult(null);
     setActiveSavedId(null); setWorkspace(undefined);
     setError(null);
+    return true;
+  };
+
+  const loadExample = () => {
+    const example = COMMON_CARGO_PRESETS.find(p => p.id === 'common-abc');
+    if (!example || !loadPreset(example)) return;
+    setItemGapCm(0); setClearanceCm(0); setPreferredProfile('stable');
+    setOrderName('ABC 测试示例'); setExampleLoaded(true); setImportReport(null); setCalculationFailed(false);
   };
 
   const clearDraft = () => {
@@ -247,6 +256,11 @@ export default function App() {
             </div>
             <p className="planning-note">尺寸、重量与装载规则全程同步校验</p>
           </div>
+        </section>
+        <section className="quick-start" aria-label="快速开始">
+          <div><strong>第一次使用？先看一个完整示例</strong><p>40HQ · 3 种整托 · 63 托。载入后核对清单，点击“生成装柜方案”，再比较、调整或打印；无需先配置模型。</p></div>
+          <button type="button" className="primary-outline-button" disabled={!presets.some(p=>p.id==='40hq')} onClick={loadExample}>载入完整示例</button>
+          {exampleLoaded && <p className="example-note" role="status">已载入用户测试案例：ZT1 150 kg、ZT2 280 kg、ZT3 400 kg。顶部承重 500 kg、最多两层等为示例假设，不代表真实发货或包装认证，请在实际使用前核实。</p>}
         </section>
         <ContainerPicker presets={presets} selected={container} onSelect={setContainer} />
         {historyPanel}
