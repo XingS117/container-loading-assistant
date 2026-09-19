@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { classifySolutionWarning, explainFloorRisk, loadingStepLabels, recommendProfile, SolutionWorkspace } from "./SolutionWorkspace";
@@ -109,6 +109,22 @@ test("lists loading steps in assigned order", () => {
 test("prints the loading direction from container interior towards the door", () => {
   render(<SolutionWorkspace response={makeResponse(8, 3)} container={container} presets={presets} cargoItems={cargoItems} onBack={() => {}} onRecalculate={async () => {}} recalculating={false} />);
   expect(screen.getAllByRole('heading', { name: '装载步骤（由柜内向柜门，先下后上）' })).toHaveLength(3);
+});
+
+test('worksheet follows the active profile while print keeps every solution separate', async () => {
+  const response = makeResponse(8, 3);
+  response.solutions.forEach((solution, index) => {
+    solution.placements = [{ id: 'a-0', cargo_id: 'a', instance_index: 0, x_mm: index * 1000, y_mm: 0, z_mm: 0, length_mm: 500, width_mm: 500, height_mm: 500, weight_g: 1000, rotation: 'LWH', step: 1 }];
+  });
+  render(<SolutionWorkspace response={response} container={container} presets={presets} cargoItems={[{ id: 'a', sku: 'A' } as CargoInput]} onBack={() => {}} onRecalculate={async () => {}} recalculating={false} />);
+  const panel = screen.getByLabelText('当前方案作业单');
+  expect(panel).not.toHaveAttribute('open');
+  await userEvent.click(within(panel).getByText('仓库作业单'));
+  expect(within(panel).getByText('0 / 0 / 0')).toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /重心稳妥/ }));
+  expect(within(panel).queryByText('0 / 0 / 0')).not.toBeInTheDocument();
+  expect(within(panel).getByText('100 / 0 / 0')).toBeInTheDocument();
+  expect(screen.getAllByLabelText('纸面复核签名')).toHaveLength(3);
 });
 
 

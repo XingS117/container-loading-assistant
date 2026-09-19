@@ -3,7 +3,7 @@ from copy import deepcopy
 from fastapi.testclient import TestClient
 from app.main import app
 from app.models import PackRequest, Placement
-from app.packing import _compute_zones
+from app.packing import _build_solution, _compute_zones, _coordinate_placements_to_stacks
 
 client = TestClient(app)
 
@@ -24,6 +24,17 @@ def test_review_returns_authoritative_metrics():
     assert data["metrics"]["loaded_pieces"] == 2
     assert "floor_largest_gap_mm" in data["metrics"]
     assert data["zones"]
+
+
+def test_generated_solution_uses_contiguous_public_step_numbers():
+    body = payload()
+    request = PackRequest.model_validate(body)
+    placements = [Placement.model_validate(p).model_copy(update={"step": 30 + i * 10}) for i, p in enumerate(body["placements"])]
+    solution = _build_solution(request, _coordinate_placements_to_stacks(request, placements), "high_fill")
+    assert [p.step for p in solution.placements] == [1, 2]
+    assert [z.step for z in solution.zones] == [1, 2]
+    assert solution.metrics.loading_steps == 2
+    assert [p.model_dump(exclude={"step"}) for p in solution.placements] == [p.model_dump(exclude={"step"}) for p in placements]
 
 
 def test_zones_count_stacked_pieces_only_in_their_own_step():

@@ -5326,6 +5326,9 @@ def _build_solution(
         _raise_for_invalid_layout(validation)
     if fixed_placements:
         placements = regenerate_loading_steps(placements)
+    else:
+        step_numbers = {value: index + 1 for index, value in enumerate(sorted({p.step for p in placements}))}
+        placements = [p.model_copy(update={"step": step_numbers[p.step]}) for p in placements]
     loaded = Counter(item.cargo_id for item in placements)
     loaded_counts = {item.id: loaded[item.id] for item in request.cargo_items}
     unloaded_counts = {

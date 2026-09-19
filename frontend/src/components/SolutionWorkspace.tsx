@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { LoadVisualizer, StaticLayout } from "./LoadVisualizer";
 import { LayoutWorkbench } from "./LayoutWorkbench";
+import { LoadingWorksheet } from "./LoadingWorksheet";
 import type { CargoInput, ContainerSpec, PackResponse, PackingSolution, SolutionProfile } from "../types";
 import { trackAnalyticsEvent } from "../lib/analytics";
 
@@ -248,6 +249,11 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
         </aside>
       </section>
 
+      <details className="worksheet-panel no-print" aria-label="当前方案作业单">
+        <summary>仓库作业单 <span>{selected.name} · {selected.placements.length} 件 · 展开查看位置与搬运要求</span></summary>
+        <LoadingWorksheet solution={selected} cargoItems={cargoItems} clearanceMm={container.clearance_mm ?? 0} />
+      </details>
+
       <div className="solution-feedback no-print" role="group" aria-label="方案反馈">
         <span>这个方案对你有帮助吗？</span>
         <button type="button" className={feedback === "accepted" ? "is-selected" : ""} onClick={() => { setFeedback("accepted"); trackAnalyticsEvent("pack_solution_feedback", { profile: selectedProfile, result: "accepted" }); }}>满意</button>
@@ -385,6 +391,8 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
                 </p>
               </>
             )}
+            <h3>仓库逐件作业单与复核</h3>
+            <LoadingWorksheet solution={solution} cargoItems={cargoItems} clearanceMm={container.clearance_mm ?? 0} print />
           </section>
         ))}
 

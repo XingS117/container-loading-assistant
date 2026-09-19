@@ -387,6 +387,33 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
   .pros-cons-grid { grid-template-columns: 1fr; }
 }
 
+.worksheet-panel { width: min(1460px, calc(100% - 32px)); margin: 16px auto; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); }
+.worksheet-panel > summary { cursor: pointer; padding: 14px 16px; font-weight: 700; }
+.worksheet-panel > summary span { margin-left: 10px; font-size: 12px; color: var(--muted); font-weight: 400; }
+.loading-worksheet { padding: 0 16px 16px; }
+.worksheet-guide { color: #46534d; font-size: 12px; line-height: 1.7; padding: 10px 0; }
+.worksheet-guide p + p { margin-top: 5px; }
+.worksheet-guide small { display: block; color: var(--muted); }
+.worksheet-scroll { max-height: 380px; overflow: auto; border: 1px solid var(--line); }
+.worksheet-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.worksheet-table { width: 100%; min-width: 860px; table-layout: fixed; border-collapse: collapse; font-size: 12px; line-height: 1.6; }
+.worksheet-table thead { position: sticky; top: 0; background: #edf3ee; }
+.worksheet-table th, .worksheet-table td { text-align: left; vertical-align: top; padding: 8px; border-bottom: 1px solid var(--line); overflow-wrap: anywhere; }
+.worksheet-table td + td, .worksheet-table th + th { border-left: 1px solid var(--line); }
+.worksheet-table td span, .worksheet-table td small, .worksheet-table td strong { display: block; }
+.worksheet-table td small { color: #59665f; }
+.worksheet-table tbody tr:nth-child(even) { background: #f8faf8; }
+.worksheet-check { width: 12px; height: 12px; border: 1px solid #69736e; margin-top: 4px; }
+.worksheet-issue { color: var(--danger); font-size: 12px; margin: 8px 0; }
+.worksheet-empty { padding: 12px 16px; color: var(--muted); }
+.worksheet-signature { margin-top: 16px; padding: 12px 0; border-top: 1px solid #69736e; break-inside: avoid; }
+.worksheet-signature > div { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; margin: 16px 0; }
+
+@media (max-width: 600px) {
+  .worksheet-panel > summary span { display: block; margin: 6px 0 0 16px; }
+  .loading-worksheet { padding: 0 10px 10px; }
+}
+
 @media print {
   body { background: white; }
   .no-print, .solution-tabs, .workspace-grid { display: none !important; }
@@ -415,4 +442,13 @@ input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 2px r
   .print-layer-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .print-layer { page-break-inside: avoid; break-inside: avoid; }
   .print-layer .layout-svg { width: 100%; max-height: 170px; min-height: 0; padding: 0; }
+  .loading-worksheet--print { padding: 0; }
+  .worksheet-scroll { max-height: none; overflow: visible; border: 0; }
+  .worksheet-table { min-width: 0; font-size: 10px; }
+  .worksheet-table thead { position: static; display: table-header-group; }
+  .worksheet-table tr { break-inside: avoid; page-break-inside: avoid; }
+  .worksheet-table th, .worksheet-table td { border: 1px solid #b9c2bc; padding: 4px; }
+  .worksheet-guide p, .worksheet-signature p { font-size: 10px; }
+  .worksheet-guide small, .worksheet-signature small { font-size: 9px; }
+  .worksheet-signature { font-size: 11px; }
 }
