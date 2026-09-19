@@ -58,15 +58,15 @@ export function classifySolutionWarning(warning: string): WarningSeverity {
 }
 
 export function explainFloorRisk(solution: PackingSolution): string {
-  const largestGap = solution.metrics.floor_largest_gap_mm ?? 0;
-  const transverseGap = solution.metrics.floor_largest_transverse_gap_mm ?? 0;
-  if (largestGap >= 150 || transverseGap >= 150) {
-    return `底层最大空隙 ${Math.max(largestGap, transverseGap)} mm，可能降低上层支撑连续性，需要现场复核并考虑填充或固定`;
-  }
-  if (largestGap >= 50 || transverseGap >= 50) {
-    return `底层存在 ${Math.max(largestGap, transverseGap)} mm 局部空隙，建议确认上层货物底面是否被充分支撑`;
-  }
-  return `底层最大空隙 ${Math.max(largestGap, transverseGap)} mm，一般可接受，当前未发现明显支撑风险`;
+  const largestGap = solution.metrics.floor_largest_gap_mm;
+  const transverseGap = solution.metrics.floor_largest_transverse_gap_mm;
+  if (largestGap === undefined || transverseGap === undefined) return '旧方案缺少空隙数据，请重新计算或人工复核，不能按 0 mm 判断安全。';
+  const gap = `底层最大空隙 ${Math.max(largestGap, transverseGap)} mm`;
+  const d = solution.assessment?.diagnostics;
+  if (d?.complete && d.min_support_pct === 100) return `${gap}；上层底面最小直接支撑率 100%，空隙未造成底面悬空。侧向稳定、填隙与固定仍需要现场复核。`;
+  if (d?.complete && d.min_support_pct === null) return `${gap}；当前无上层货物，叠放支撑率不适用。侧向稳定、填隙与固定仍需要现场复核。`;
+  if (d?.complete && d.min_support_pct !== null) return `${gap}；最小直接支撑率 ${d.min_support_pct}%，存在底面支撑不足，请重新检查布局后再使用。`;
+  return `${gap}；缺少完整支撑分析，不能仅凭空隙大小判断支撑，需要现场复核并考虑填充或固定。`;
 }
 
 export function loadingStepLabels(solution: PackingSolution, cargoItems: CargoInput[]): string[] {

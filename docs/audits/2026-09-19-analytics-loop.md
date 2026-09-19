@@ -7,3 +7,5 @@
 本地浏览器使用真实 Umami 脚本及接收服务，8 类事件（input_started、input_completed、calculation_started、solutions_generated、solution_selected、solution_feedback、solution_adjustment_submitted、export_print）均返回 HTTP 200。input_id 一致，计算与后续行为 attempt_id 一致，is_example=true；补充文字测试标记未出现在上报中，只发送 has_note。实际接收曾乱序，因此增加客户端时间及序号用于排序，不使用响应先后作为用户操作先后。
 
 已验证的是工程上报与服务器接收。未登录 Umami 账号后台，未取得客户使用报表；不能据此声称真实成功率/满意度提高。去重、分母、历史/示例过滤与未知终态处理见 `docs/analytics-measurement.md`。发布测试需从客户统计中排除。
+
+上线复核：9ac37d4 已推送并部署，备份 `/data/packing-assistant/backups/before-9ac37d4.tar.gz`。健康正常，JS `index-B1jmKMDg.js` 与本地哈希一致。生产真实浏览器重复上述完整流程，8 类事件全部 200，event_seq 为 1..8，同一 input_id/attempt_id，示例标识 true，计算耗时 2190ms。未上传补充文字，仅 has_note=true。

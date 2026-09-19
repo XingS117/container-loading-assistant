@@ -121,7 +121,10 @@ test("explains whether a floor gap needs stability review", () => {
   solution.metrics.floor_largest_transverse_gap_mm = 0;
   expect(explainFloorRisk(solution)).toContain("需要现场复核");
   solution.metrics.floor_largest_gap_mm = 20;
-  expect(explainFloorRisk(solution)).toContain("一般可接受");
+  expect(explainFloorRisk(solution)).toContain("不能仅凭空隙大小判断支撑");
+  delete solution.metrics.floor_largest_gap_mm;
+  delete solution.metrics.floor_largest_transverse_gap_mm;
+  expect(explainFloorRisk(solution)).toContain('缺少空隙数据');
 });
 
 test("lists loading steps in assigned order", () => {

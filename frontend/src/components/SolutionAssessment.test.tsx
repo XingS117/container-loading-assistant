@@ -1,6 +1,7 @@
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { SolutionAssessmentPanel } from './SolutionAssessment';
+import { explainFloorRisk } from './SolutionWorkspace';
 import type { PackingSolution } from '../types';
 
 const solution: PackingSolution = {profile:'easy',name:'easy',placements:[],loaded_counts:{},unloaded_counts:{},zones:[],pros:[],cons:[],warnings:[],identical_to:null,
@@ -24,4 +25,10 @@ test('shows real tradeoffs and exposes region location to the viewer', async () 
 test('old history cannot display invented quality measurements', () => {
   render(<SolutionAssessmentPanel solution={{...solution,assessment:null}} baseline={solution} />);
   expect(screen.getByText(/历史方案没有几何解释数据/)).toBeInTheDocument();
+});
+
+test('full direct support is distinguished from lateral gaps and transport stability', () => {
+  const assessed={...solution,metrics:{...solution.metrics,floor_largest_gap_mm:300,floor_largest_transverse_gap_mm:0}};
+  expect(explainFloorRisk(assessed)).toContain('未造成底面悬空');
+  expect(explainFloorRisk(assessed)).toContain('侧向稳定');
 });

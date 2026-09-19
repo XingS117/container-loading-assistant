@@ -1,0 +1,21 @@
+{
+  "id": "user-abc-test",
+  "source": {
+    "kind": "historical_reproduction",
+    "evidence": "User supplied A/B/C dimensions, weights and quantities in task 019ffbef-798a-7d93-ab72-530a7cec650d; existing test_floor_first_layout.abc_request and common-abc UI example.",
+    "limitations": [
+      "User-provided test inputs, not verified actual shipment or field acceptance.",
+      "40HQ, upright rotations, two layers for A/B, one layer for C, 500 kg top load and 300 mm door reserve are test assumptions; packaging strength unverified."
+    ]
+  },
+  "acceptance": "unreviewed",
+  "request": {
+    "container": {"id":"container","name":"container","inner_length_mm":12032,"inner_width_mm":2352,"inner_height_mm":2698,"door_width_mm":2340,"door_height_mm":2585,"max_payload_g":28600000,"clearance_mm":0},
+    "cargo_items": [
+      {"id":"sku-01","sku":"sku-01","name":"sku-01","kind":"pallet","length_mm":650,"width_mm":650,"height_mm":1200,"weight_g":150000,"quantity":30,"allowed_orientations":["LWH","WLH"],"stackable":true,"max_layers":2,"max_top_load_g":500000,"fragile":false,"must_load":false,"unload_order":0},
+      {"id":"sku-02","sku":"sku-02","name":"sku-02","kind":"pallet","length_mm":890,"width_mm":750,"height_mm":1120,"weight_g":280000,"quantity":30,"allowed_orientations":["LWH","WLH"],"stackable":true,"max_layers":2,"max_top_load_g":500000,"fragile":false,"must_load":false,"unload_order":0},
+      {"id":"sku-03","sku":"sku-03","name":"sku-03","kind":"pallet","length_mm":1080,"width_mm":800,"height_mm":1250,"weight_g":400000,"quantity":3,"allowed_orientations":["LWH","WLH"],"stackable":false,"max_layers":1,"max_top_load_g":500000,"fragile":false,"must_load":false,"unload_order":0}
+    ],
+    "item_gap_mm":0,"door_buffer_mm":300,"preferred_profile":"stable","locked_placements":[],"enable_interstack":true,"support_coverage_min":0.7,"overhang_ratio_max":0.2
+  }
+}

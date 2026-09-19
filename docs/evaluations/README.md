@@ -9,10 +9,10 @@
 ```powershell
 $env:PYTHONPATH = 'backend'
 .venv/Scripts/python.exe -m evaluation run --output output/layout-current.json
-.venv/Scripts/python.exe -m evaluation run --baseline docs/evaluations/2026-09-19-baseline.json --output output/layout-compare.json
+.venv/Scripts/python.exe -m evaluation run --baseline docs/evaluations/2026-09-19-six-case-baseline.json --output output/layout-compare.json
 ```
 
-每条命令同时生成 JSON 和同名 Markdown。默认五个案例，各运行两次，每次三方案。求解器预算 15 秒、独立进程硬超时 45 秒；超时进程会结束，不将失败案例从报告删掉。`--repeats` 支持 2 至 5，`--budget`、`--timeout` 可调整，但与基线参数不同会被标为不可比。
+每条命令同时生成 JSON 和同名 Markdown。默认六个案例，各运行两次，每次三方案。求解器预算 15 秒、独立进程硬超时 45 秒；超时进程会结束，不将失败案例从报告删掉。`--repeats` 支持 2 至 5，`--budget`、`--timeout` 可调整，但与基线参数不同会被标为不可比。旧五案例 baseline/refinement 报告保留用于审计，不与新增案例后的集合直接比较。
 
 输入指纹、案例来源/验收状态、指标版本、预算、重复次数和运行环境须相同；缺案例、超时、校验失败或重复运行产生不同结果时，报告明确标为不完整且命令非零退出，不输出可能误导的质量差值。不同算法版本应使用同一套评测代码和案例，指标定义变更必须增加 `schema_version` 并重建基线。报告记录 Git 提交、未提交状态、代码指纹和依赖版本。
 
@@ -23,6 +23,7 @@ $env:PYTHONPATH = 'backend'
 | 案例 | 来源 | 可以证明什么 | 不能证明什么 |
 | --- | --- | --- | --- |
 | historical-six-sku | 既有 `_temp/user-case-40hq.json`，六 SKU、54 托历史复现 | 已保留参数下的布局和时长回归 | 原始抓取过程、实际发货重量和用户认可未经核验 |
+| user-abc-test | 原任务中用户提供 A/B/C 尺寸、重量及 30/30/3 件输入 | 可追溯用户测试输入的回归 | 实际发货、顶部承重与现场认可未经核验 |
 | customer-five-sku | 已有客户模板测试，五 SKU、55 托 | 客户规格模板的回归 | 每托 100 kg、顶部承重 500 kg 是测试值 |
 | safety-fragile-gap | 构造的必装、易碎、间隙与承重场景 | 组合约束下的安全回归 | 现场装卸顺序和用户满意度 |
 | stress-30-sku | 已有 30 SKU / 5000 件测试 | 上限输入下的可运行性与指标变化 | 全部装入或数学最优 |
@@ -41,7 +42,7 @@ $env:PYTHONPATH = 'backend'
 
 ## 后续导入真实订单
 
-本工具接收 `/api/v1/pack` 的请求体 JSON，毫米/克制，不接收整份 HAR、截图或带 Cookie/Authorization 的请求头。可以使用浏览器 F12 的 Network 选中该请求，在 Payload 中复制请求体；也可由开发者从已有资料转成相同格式。不要复制 AI 配置或请求头。
+本工具接收 `/api/v1/pack/jobs`（旧版 `/api/v1/pack`）的请求体 JSON，毫米/克制，不接收整份 HAR、截图或带 Cookie/Authorization 的请求头。可以使用浏览器 F12 的 Network 选中该请求，在 Payload 中复制请求体；也可由开发者从已有资料转成相同格式。不要复制 AI 配置或请求头。
 
 ```powershell
 $env:PYTHONPATH = 'backend'
