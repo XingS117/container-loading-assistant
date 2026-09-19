@@ -186,4 +186,4 @@ def markdown(report: dict) -> str:
             d = row['deltas']
             lines.append(f"| {row['case_id']} | {row['profile']} | {fmt(d.get('loaded_pieces'))} | {fmt(d.get('floor_bbox_void_m2'))} | {fmt(d.get('upper_layer_max_void_m2'))} | {fmt(d.get('length_imbalance_pct'))} | {fmt(d.get('loading_steps'))} | {row['solve_median_delta_s']} |")
         lines += ['', 'Deltas are current minus baseline. Fewer pieces and smaller voids are a tradeoff, not an unconditional improvement. Timing changes are observations, not a performance guarantee.']
-    return '\n'.join(lines) + '\n'
+    return '\n'.join(lines).rstrip() + '\n'

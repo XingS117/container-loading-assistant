@@ -41,6 +41,8 @@ pnpm test -- --run
 pnpm build
 ```
 
+布局质量回归与版本对比见 [离线评测说明](docs/evaluations/README.md)；首轮数据发现见 [布局评测结论](docs/evaluations/2026-09-19-findings.md)。评测工具不调用 AI、不上传订单，也不改动生产布局。
+
 ## 单容器部署
 
 ```powershell
