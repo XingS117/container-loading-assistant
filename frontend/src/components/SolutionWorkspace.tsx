@@ -4,6 +4,8 @@ import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react
 import { LoadVisualizer, StaticLayout } from "./LoadVisualizer";
 import { LayoutWorkbench } from "./LayoutWorkbench";
 import { LoadingWorksheet } from "./LoadingWorksheet";
+import { SolutionAssessmentPanel } from './SolutionAssessment';
+import type { LayoutRegion } from '../types';
 import type { CargoInput, ContainerSpec, PackResponse, PackingSolution, SolutionProfile } from "../types";
 import { trackAnalyticsEvent } from "../lib/analytics";
 import type { SavedWorkspace } from '../lib/orderHistory';
@@ -110,7 +112,9 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
   const [recalculateContainerId, setRecalculateContainerId] = useState(container.id);
   const [recalculateError, setRecalculateError] = useState<string | null>(null);
   const [workbenchOpen, setWorkbenchOpen] = useState(false);
+  const [focusedRegion,setFocusedRegion] = useState<LayoutRegion|null>(null);
   const [solutionOverrides, setSolutionOverrides] = useState<Partial<Record<SolutionProfile, PackingSolution>>>(initialWorkspace?.solutionOverrides ?? {});
+  useEffect(()=>setFocusedRegion(null),[selectedProfile,originalResponse,solutionOverrides]);
   const response = { ...originalResponse, solutions: originalResponse.solutions.map(s => solutionOverrides[s.profile] ?? s) };
   const baseSelected = response.solutions.find((solution) => solution.profile === selectedProfile) ?? response.solutions[0];
   const selected = solutionOverrides[baseSelected.profile] ?? baseSelected;
@@ -210,7 +214,7 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
       )}
 
       <section className="workspace-grid">
-        <LoadVisualizer container={container} solution={selected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={setSelectedCargoId} onSnapshot={handleSnapshot} />
+        <LoadVisualizer container={container} solution={selected} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={setSelectedCargoId} onSnapshot={handleSnapshot} focusedRegion={focusedRegion} />
         <aside className="result-inspector">
           {editMessage && <p className="edit-message" role="status">{editMessage}</p>}
           <div className="metric-strip">
@@ -256,6 +260,8 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
           </section>}
         </aside>
       </section>
+
+      <SolutionAssessmentPanel solution={selected} baseline={response.solutions.find(s=>s.profile==='high_fill') ?? selected} onFocus={region=>{setFocusedRegion(region);setSelectedCargoId(null);}} />
 
       <details className="worksheet-panel no-print" aria-label="当前方案作业单">
         <summary>仓库作业单 <span>{selected.name} · {selected.placements.length} 件 · 展开查看位置与搬运要求</span></summary>
@@ -329,7 +335,7 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
           </tbody>
         </table>
         <p className="print-recommend">推荐方案：{profileDisplayName[recommended]}（
-          {recommended === "high_fill" ? "装载率优先" : "在保持装载的前提下降低重心偏差"}）
+          {Object.keys(solutionOverrides).length ? '包含人工调整，请依据当前指标重新选择' : response.recommendation_reason ?? '按当前目标选择，未保证全局最优'}）
         </p>
         <h2>货物清单</h2>
         <table className="print-table">
@@ -358,6 +364,7 @@ export function SolutionWorkspace({ response: originalResponse, container, prese
             </div>
             <h3>风险摘要</h3>
             <p>{explainFloorRisk(solution)}</p>
+            <SolutionAssessmentPanel solution={solution} baseline={response.solutions.find(s=>s.profile==='high_fill') ?? solution} print />
             <h3>装载步骤（由柜内向柜门，先下后上）</h3>
             <div className="print-steps">
               {loadingStepLabels(solution, cargoItems).length > 0

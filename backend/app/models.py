@@ -165,6 +165,42 @@ class Zone(BaseModel):
     piece_count: int = Field(ge=1)
 
 
+class LayoutRegion(BaseModel):
+    id: str
+    x_mm: int
+    y_mm: int
+    z_mm: int
+    length_mm: int
+    width_mm: int
+    area_m2: float
+    placement_ids: list[str] = Field(default_factory=list)
+
+
+class LayoutDiagnostics(BaseModel):
+    complete: bool = True
+    floor_void_m2: float | None = None
+    upper_max_void_m2: float | None = None
+    large_void_count: int = 0
+    large_void_area_m2: float = 0
+    min_support_pct: float | None = None
+    upper_continuity_pct: float | None = None
+    upper_fragment_count: int = 0
+    sku_switches: int = 0
+    estimated_handling_distance_m: float = 0
+    regions: list[LayoutRegion] = Field(default_factory=list)
+
+
+class SolutionAssessment(BaseModel):
+    status: Literal['heuristic', 'budget_fallback', 'manual_review']
+    goal: str
+    diagnostics: LayoutDiagnostics
+    hard_constraints: list[str]
+    unmet_soft_goals: list[str] = Field(default_factory=list)
+    tradeoffs: list[str] = Field(default_factory=list)
+    deltas: dict[str, float | None] = Field(default_factory=dict)
+    limits: str
+
+
 class PackingSolution(BaseModel):
     profile: Literal["high_fill", "stable", "easy"]
     name: str
@@ -177,6 +213,7 @@ class PackingSolution(BaseModel):
     cons: list[str]
     warnings: list[str] = Field(default_factory=list)
     identical_to: str | None = None
+    assessment: SolutionAssessment | None = None
 
 
 class AIStrategyStatus(BaseModel):
@@ -202,6 +239,7 @@ class PackResponse(BaseModel):
     request_id: str
     solutions: list[PackingSolution]
     recommended_profile: Literal["high_fill", "stable", "easy"] = "high_fill"
+    recommendation_reason: str | None = None
     ai_strategy: AIStrategyStatus = Field(
         default_factory=lambda: AIStrategyStatus(
             status="disabled",

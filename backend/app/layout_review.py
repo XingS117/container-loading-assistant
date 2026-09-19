@@ -1,6 +1,7 @@
 from pydantic import Field, model_validator
 
-from .models import PackRequest, Placement, SolutionMetrics, ValidationResult, Zone
+from .models import PackRequest, Placement, SolutionMetrics, ValidationResult, Zone, LayoutDiagnostics
+from .layout_diagnostics import diagnose_layout
 from .packing import _compute_zones, _metrics
 from .validator import validate_solution
 from .loading_sequence import regenerate_loading_steps
@@ -20,6 +21,7 @@ class LayoutReview(ValidationResult):
     metrics: SolutionMetrics | None = None
     zones: list[Zone] = Field(default_factory=list)
     placements: list[Placement] = Field(default_factory=list)
+    diagnostics: LayoutDiagnostics | None = None
 
 
 def review_layout(request: LayoutReviewRequest) -> LayoutReview:
@@ -33,4 +35,5 @@ def review_layout(request: LayoutReviewRequest) -> LayoutReview:
         metrics=_metrics(request, placements) if validation.valid else None,
         zones=_compute_zones(request, placements) if validation.valid else [],
         placements=placements,
+        diagnostics=diagnose_layout(request, placements) if validation.valid else None,
     )

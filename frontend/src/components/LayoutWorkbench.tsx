@@ -126,6 +126,11 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
     const loaded = Object.fromEntries(cargoItems.map(c => [c.id, finalPlacements.filter(p => p.cargo_id === c.id).length]));
     const remaining = Object.fromEntries(cargoItems.map(c => [c.id, c.quantity - loaded[c.id]]));
     onApply({ ...solution, placements: finalPlacements, loaded_counts: loaded, unloaded_counts: remaining, metrics: currentReview.metrics, zones: currentReview.zones, identical_to: null,
+      assessment: currentReview.diagnostics && solution.assessment ? {...solution.assessment,status:'manual_review',diagnostics:currentReview.diagnostics,
+        deltas:{},tradeoffs:[],unmet_soft_goals:[...(!currentReview.diagnostics.complete?['复杂布局分析不完整，请结合分层图复核']:[]),
+          ...(currentReview.diagnostics.large_void_count?[`仍有 ${currentReview.diagnostics.large_void_count} 处大空白`]:[]),
+          ...(currentReview.metrics.length_imbalance_pct>10||currentReview.metrics.width_imbalance_pct>10?['前后或左右偏差仍超过 10%']:[]),
+          ...(Object.values(remaining).some(n=>n>0)?['仍有货物未装入，请安排后续装运']:[])]}:null,
       pros: ["人工调整已通过边界、碰撞、朝向、支撑和承重规则检查"],
       cons: ["几何校验不替代现场绑扎、运输动态稳定性和装卸可达性复核"],
       warnings: [currentReview.placements ? "装载步骤已按新位置和上下支撑关系重新生成，请现场复核搬运通道和柜门操作空间" : "人工调整后请按新布局复核装载顺序和柜门操作空间",

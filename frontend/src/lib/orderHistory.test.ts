@@ -51,3 +51,12 @@ test('does not persist unrelated model configuration or credentials alongside th
   saveOrder({...order,apiKey:'private-test-key',aiConfig:{apiKey:'private-test-key'}} as typeof order);
   expect(localStorage.getItem(key)).not.toContain('private-test-key');
 });
+
+test('rejects malformed optional diagnostics instead of crashing history rendering', () => {
+  const saved=saveOrder({...order,response});
+  const broken=JSON.parse(JSON.stringify(saved));
+  broken.response.solutions[0].assessment={status:'heuristic',diagnostics:{}};
+  localStorage.setItem(key,JSON.stringify([broken,saved]));
+  expect(loadSavedOrders()).toHaveLength(1);
+  expect(localStorage.getItem(key)).toContain('diagnostics');
+});

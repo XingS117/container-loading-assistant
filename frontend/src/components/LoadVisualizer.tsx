@@ -4,11 +4,12 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import { TransformControls } from "three/examples/jsm/controls/TransformControls.js";
 
-import type { CargoInput, ContainerSpec, PackingSolution, Placement, Zone } from "../types";
+import type { CargoInput, ContainerSpec, PackingSolution, Placement, Zone, LayoutRegion } from "../types";
 
 type ViewMode = "3d" | "top" | "side" | "door" | "layers";
 
 interface Props {
+  focusedRegion?: LayoutRegion | null;
   container: ContainerSpec;
   solution: PackingSolution;
   cargoItems: CargoInput[];
@@ -453,7 +454,8 @@ function ThreeScene({ container, placements, visibleStep, colors, selectedCargoI
   return <div className="three-scene" ref={hostRef} />;
 }
 
-export function StaticLayout({ mode, container, placements, zones, cargoItems, selectedCargoId, onSelectCargo, onMovePlacement, testId = "layout-svg", compact, onSelectPlacement, selectedPlacementId, lockedCargoIds, invalidPlacementIds, previewMove }: {
+export function StaticLayout({ mode, container, placements, zones, cargoItems, selectedCargoId, onSelectCargo, onMovePlacement, testId = "layout-svg", compact, onSelectPlacement, selectedPlacementId, lockedCargoIds, invalidPlacementIds, previewMove, focusedRegion }: {
+  focusedRegion?: LayoutRegion | null;
   mode: Exclude<ViewMode, "3d">;
   container: ContainerSpec;
   placements: Placement[];
@@ -547,11 +549,12 @@ export function StaticLayout({ mode, container, placements, zones, cargoItems, s
         </g>
       ))}
       {mode === "door" && <text x={totalWidth / 2} y={fontSize * 1.2} textAnchor="middle" fontSize={fontSize} fill="#46534d">柜门视角</text>}
+      {focusedRegion && isTop && <rect data-testid="focused-risk-region" x={focusedRegion.x_mm} y={focusedRegion.y_mm} width={focusedRegion.length_mm} height={focusedRegion.width_mm} fill="#d977061f" stroke="#b45309" strokeWidth={totalWidth/200} strokeDasharray={`${totalWidth/100} ${totalWidth/150}`} pointerEvents="none"><title>空白区域包围范围（可能含边缘货物）</title></rect>}
     </svg>
   );
 }
 
-export function LoadVisualizer({ container, solution, cargoItems, selectedCargoId, onSelectCargo, onSnapshot, lockedCargoIds, onToggleLockCargo, onRotateCargo, onSwapCargo, swapSourceCargoId, onMovePlacement, selectedPlacementId, onSelectPlacement, editing, hideLegend, invalidPlacementIds, previewMove }: Props) {
+export function LoadVisualizer({ container, solution, cargoItems, selectedCargoId, onSelectCargo, onSnapshot, lockedCargoIds, onToggleLockCargo, onRotateCargo, onSwapCargo, swapSourceCargoId, onMovePlacement, selectedPlacementId, onSelectPlacement, editing, hideLegend, invalidPlacementIds, previewMove, focusedRegion }: Props) {
   const [mode, setMode] = useState<ViewMode>("3d");
   const [threeUnavailable, setThreeUnavailable] = useState(false);
   const maxStep = Math.max(1, ...solution.placements.map((item) => item.step));
@@ -565,6 +568,11 @@ export function LoadVisualizer({ container, solution, cargoItems, selectedCargoI
   const colors = useMemo(() => cargoColorMap(cargoItems), [cargoItems]);
 
   useEffect(() => { setStep(maxStep); setPlaying(false); setLayerIndex(0); }, [solution.profile, maxStep]);
+  useEffect(()=>{
+    if (!focusedRegion) return;
+    setMode('layers');setStep(maxStep);setLayerIndex(Math.max(0,layers.indexOf(focusedRegion.z_mm)));setPlaying(false);
+    document.querySelector('[data-risk-viewer]')?.scrollIntoView?.({block:'center',behavior:'smooth'});
+  },[focusedRegion,solution.placements]);
   useEffect(() => {
     if (!playing) return;
     const timer = window.setInterval(() => {
@@ -595,7 +603,7 @@ export function LoadVisualizer({ container, solution, cargoItems, selectedCargoI
   ];
 
   return (
-    <div className="load-visualizer">
+    <div className="load-visualizer" data-risk-viewer>
       <div className="visual-controls no-print">
         <div className="view-switcher" role="group" aria-label="布局视图">
           {modes.map(({ id, label, icon: Icon }) => <button key={id} type="button" className={mode === id ? "is-active" : ""} aria-label={label} title={label} aria-pressed={mode === id} onClick={() => changeMode(id)}><Icon size={16} /><span>{label}</span></button>)}
@@ -610,7 +618,7 @@ export function LoadVisualizer({ container, solution, cargoItems, selectedCargoI
         {mode === "3d" && !threeUnavailable ? <ThreeScene container={container} placements={solution.placements} visibleStep={step} colors={colors} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onSnapshot={onSnapshot} onUnavailable={handleThreeUnavailable} selectedPlacementId={selectedPlacementId} onSelectPlacement={onSelectPlacement} onMovePlacement={onMovePlacement} editing={editing} lockedCargoIds={lockedCargoIds} invalidPlacementIds={invalidPlacementIds} previewMove={previewMove} /> : (
           <>
             {threeUnavailable && mode === "top" && <div className="visual-fallback" role="status" aria-live="polite">当前设备不支持 3D，已自动切换为二维俯视图。</div>}
-            <StaticLayout mode={mode === "3d" ? "top" : mode} container={container} placements={visible} zones={solution.zones} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onSelectPlacement={onSelectPlacement} selectedPlacementId={selectedPlacementId} lockedCargoIds={lockedCargoIds} invalidPlacementIds={invalidPlacementIds} onMovePlacement={onMovePlacement} previewMove={previewMove} />
+            <StaticLayout mode={mode === "3d" ? "top" : mode} container={container} placements={visible} zones={solution.zones} cargoItems={cargoItems} selectedCargoId={selectedCargoId} onSelectCargo={onSelectCargo} onSelectPlacement={onSelectPlacement} selectedPlacementId={selectedPlacementId} lockedCargoIds={lockedCargoIds} invalidPlacementIds={invalidPlacementIds} onMovePlacement={onMovePlacement} previewMove={previewMove} focusedRegion={mode==='layers'&&layers[layerIndex]===focusedRegion?.z_mm?focusedRegion:null} />
           </>
         )}
       </div>

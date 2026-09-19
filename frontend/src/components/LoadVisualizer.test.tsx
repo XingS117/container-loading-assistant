@@ -4,6 +4,12 @@ import userEvent from "@testing-library/user-event";
 import { LoadVisualizer } from "./LoadVisualizer";
 import type { CargoInput, ContainerSpec, PackingSolution } from "../types";
 
+test('focusing a risk switches to its layer and displays its coordinate outline', () => {
+  render(<LoadVisualizer container={container} solution={solution} cargoItems={cargoItems} focusedRegion={{id:'r',x_mm:1000,y_mm:0,z_mm:500,length_mm:500,width_mm:1000,area_m2:0.5,placement_ids:[]}} />);
+  expect(screen.getByTestId('focused-risk-region')).toHaveAttribute('x','1000');
+  expect(screen.getByLabelText('查看层高')).toHaveValue('1');
+});
+
 
 const container: ContainerSpec = {
   id: "demo",

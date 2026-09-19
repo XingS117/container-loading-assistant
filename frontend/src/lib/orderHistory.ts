@@ -28,8 +28,24 @@ const strings = (value: unknown): value is string[] => Array.isArray(value) && v
 const numbers = (value: unknown) => record(value) && Object.values(value).every(v => typeof v === 'number' && Number.isFinite(v));
 const finiteFields = (value: Record<string, unknown>, fields: string[]) => fields.every(key => typeof value[key] === 'number' && Number.isFinite(value[key]));
 
+function validAssessment(value: unknown): boolean {
+  if (value == null) return true;
+  if (!record(value) || !['heuristic','budget_fallback','manual_review'].includes(value.status as string)
+    || typeof value.goal !== 'string' || typeof value.limits !== 'string'
+    || !strings(value.hard_constraints) || !strings(value.unmet_soft_goals) || !strings(value.tradeoffs)
+    || !record(value.deltas) || !Object.values(value.deltas).every(v => v === null || typeof v === 'number' && Number.isFinite(v))
+    || !record(value.diagnostics)) return false;
+  const d=value.diagnostics;
+  return typeof d.complete === 'boolean'
+    && finiteFields(d,['large_void_count','large_void_area_m2','upper_fragment_count','sku_switches','estimated_handling_distance_m'])
+    && ['floor_void_m2','upper_max_void_m2','min_support_pct','upper_continuity_pct'].every(key => d[key] === null || typeof d[key] === 'number' && Number.isFinite(d[key]))
+    && Array.isArray(d.regions) && d.regions.length <= 20 && d.regions.every(r => record(r) && typeof r.id === 'string'
+      && finiteFields(r,['x_mm','y_mm','z_mm','length_mm','width_mm','area_m2']) && strings(r.placement_ids));
+}
+
 function validSolution(value: unknown): value is PackingSolution {
   if (!record(value) || !profiles.includes(value.profile as string) || typeof value.name !== 'string'
+    || !validAssessment(value.assessment)
     || !numbers(value.loaded_counts) || !numbers(value.unloaded_counts) || !strings(value.pros) || !strings(value.cons) || !strings(value.warnings)
     || !record(value.metrics) || !numbers(value.metrics.center_of_gravity)
     || !finiteFields(value.metrics, ['loaded_pieces','loaded_weight_g','volume_utilization_pct','weight_utilization_pct','length_imbalance_pct','width_imbalance_pct','weight_imbalance_pct','loading_steps','cargo_zones'])) return false;

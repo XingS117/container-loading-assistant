@@ -94,6 +94,42 @@ export interface Zone {
   piece_count: number;
 }
 
+export interface LayoutRegion {
+  id: string;
+  x_mm: number;
+  y_mm: number;
+  z_mm: number;
+  length_mm: number;
+  width_mm: number;
+  area_m2: number;
+  placement_ids: string[];
+}
+
+export interface LayoutDiagnostics {
+  complete: boolean;
+  floor_void_m2: number | null;
+  upper_max_void_m2: number | null;
+  large_void_count: number;
+  large_void_area_m2: number;
+  min_support_pct: number | null;
+  upper_continuity_pct: number | null;
+  upper_fragment_count: number;
+  sku_switches: number;
+  estimated_handling_distance_m: number;
+  regions: LayoutRegion[];
+}
+
+export interface SolutionAssessment {
+  status: 'heuristic' | 'budget_fallback' | 'manual_review';
+  goal: string;
+  diagnostics: LayoutDiagnostics;
+  hard_constraints: string[];
+  unmet_soft_goals: string[];
+  tradeoffs: string[];
+  deltas: Record<string, number | null>;
+  limits: string;
+}
+
 export interface PackingSolution {
   profile: SolutionProfile;
   name: string;
@@ -106,6 +142,7 @@ export interface PackingSolution {
   cons: string[];
   warnings: string[];
   identical_to: SolutionProfile | null;
+  assessment?: SolutionAssessment | null;
 }
 
 export interface AIStrategyStatus {
@@ -131,10 +168,12 @@ export interface PackResponse {
   request_id: string;
   solutions: PackingSolution[];
   recommended_profile?: SolutionProfile;
+  recommendation_reason?: string | null;
   ai_strategy?: AIStrategyStatus;
 }
 
 export interface LayoutReviewResponse {
+  diagnostics?: LayoutDiagnostics | null;
   placements?: Placement[];
   valid: boolean;
   errors: Array<{ code: string; message: string; placement_ids: string[] }>;

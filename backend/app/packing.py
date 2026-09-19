@@ -6112,8 +6112,10 @@ def pack_order(
                 first_error = locked_validation.errors[0]
                 advice = LAYOUT_ADVICE.get(first_error.code, "请调整锁定货物位置后重试")
                 raise PackingFailure("INVALID_LOCKED_LAYOUT", f"锁定布局无效：{first_error.message}", advice)
-            return _pack_order_with_locked_layout(request)
-        return _pack_order_full(request)
+            response = _pack_order_with_locked_layout(request)
+        else:
+            response = _pack_order_full(request)
+        return _explain_response(request, response, 'heuristic')
     except PackingBudgetExceeded:
         if request.locked_placements:
             raise PackingFailure(
@@ -6123,7 +6125,23 @@ def pack_order(
             )
         _packing_deadline.reset(token)
         reset_needed = False
-        return _fast_pack_order(request)
+        return _explain_response(request, _fast_pack_order(request), 'budget_fallback')
     finally:
         if reset_needed:
             _packing_deadline.reset(token)
+
+
+def _explain_response(request, response, status):
+    from .layout_diagnostics import GOALS, explain_solutions
+    from .layout_refinement import refine_rows
+    if status != 'budget_fallback':
+        response.solutions = [refine_rows(request, solution) for solution in response.solutions]
+        for index, solution in enumerate(response.solutions):
+            solution.identical_to = next((old.profile for old in response.solutions[:index]
+                if _layout_signature(solution)==_layout_signature(old)),None)
+    explain_solutions(request, response.solutions, status)
+    response.recommendation_reason = (
+        f'按本次选择目标推荐：{GOALS[response.recommended_profile]}。'
+        '推荐不代表所有指标最优，请同时查看未满足目标和方案取舍。'
+    )
+    return response
