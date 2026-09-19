@@ -5,6 +5,7 @@ import App from "./App";
 import * as excel from './lib/excel';
 import { createCargo } from './lib/cargo';
 import * as analytics from './lib/analytics';
+import { loadSavedOrders, saveOrder } from './lib/orderHistory';
 
 beforeEach(() => { localStorage.clear(); sessionStorage.clear(); vi.restoreAllMocks(); });
 
@@ -60,6 +61,108 @@ const response = {
     identical_to: index ? "high_fill" : null,
   })),
 };
+
+test('automatically saves calculation and restores the selected profile after remount without recalculating', async () => {
+  const fetch = vi.spyOn(globalThis,'fetch')
+    .mockResolvedValueOnce(new Response(JSON.stringify([preset])))
+    .mockResolvedValueOnce(new Response(JSON.stringify(response)))
+    .mockResolvedValueOnce(new Response(JSON.stringify([preset])));
+  const app = render(<App />);
+  await screen.findByRole('button',{name:/20GP/});
+  await userEvent.click(screen.getByRole('button',{name:'生成装柜方案'}));
+  await screen.findByText('方案比较');
+  expect(loadSavedOrders()).toHaveLength(1);
+  await userEvent.click(screen.getByRole('button',{name:/易操作/}));
+  expect(loadSavedOrders()[0].workspace?.selectedProfile).toBe('easy');
+  app.unmount(); render(<App />);
+  expect(await screen.findByText('方案比较')).toBeInTheDocument();
+  expect(screen.getByRole('button',{name:/易操作/})).toHaveClass('is-active');
+  expect(fetch.mock.calls.filter(([url]) => url === '/api/v1/pack')).toHaveLength(1);
+});
+
+test('saved layout history can be copied as new input without reusing old results', async () => {
+  const cargo = createCargo('COPY');
+  saveOrder({name:'可复制订单',container:preset,cargoItems:[cargo],itemGapCm:2,clearanceCm:1,response:response as never,workspace:{selectedProfile:'easy',solutionOverrides:{},lockedCargoIds:[]},preferredProfile:'stable'});
+  vi.spyOn(globalThis,'fetch').mockResolvedValue(new Response(JSON.stringify([preset])));
+  render(<App />);
+  await screen.findByRole('button',{name:/20GP/});
+  await userEvent.click(screen.getByText(/本机历史/));
+  await userEvent.click(screen.getByRole('button',{name:'复制为新订单'}));
+  expect(screen.getByLabelText('货物代号或名称 1')).toHaveValue('COPY');
+  expect(screen.queryByText('方案比较')).not.toBeInTheDocument();
+  expect(screen.getByLabelText('本次优先目标')).toHaveValue('stable');
+  expect(loadSavedOrders()).toHaveLength(1);
+});
+
+test('deleting a saved version requires confirmation and never clears the visible result', async () => {
+  vi.spyOn(globalThis,'fetch').mockResolvedValueOnce(new Response(JSON.stringify([preset]))).mockResolvedValueOnce(new Response(JSON.stringify(response)));
+  const confirm = vi.spyOn(window,'confirm').mockReturnValueOnce(false).mockReturnValueOnce(true);
+  render(<App />);
+  await screen.findByRole('button',{name:/20GP/});
+  await userEvent.click(screen.getByRole('button',{name:'生成装柜方案'}));
+  await screen.findByText('方案比较');
+  await userEvent.click(screen.getByText(/本机历史/));
+  await userEvent.click(screen.getByRole('button',{name:'删除版本'}));
+  expect(loadSavedOrders()).toHaveLength(1);
+  await userEvent.click(screen.getByRole('button',{name:'删除版本'}));
+  expect(confirm).toHaveBeenCalledTimes(2);
+  expect(loadSavedOrders()).toHaveLength(0);
+  expect(screen.getByText('方案比较')).toBeInTheDocument();
+  expect(JSON.parse(localStorage.getItem('container-loading-assistant-draft-v1')!).activeSavedId).toBeNull();
+});
+
+test('storage failures keep calculated results visible and show an explicit unsaved warning', async () => {
+  vi.spyOn(globalThis,'fetch').mockResolvedValueOnce(new Response(JSON.stringify([preset]))).mockResolvedValueOnce(new Response(JSON.stringify(response)));
+  const write = Storage.prototype.setItem;
+  vi.spyOn(Storage.prototype,'setItem').mockImplementation(function(this: Storage, key,value) {
+    if (key === 'container-loading-assistant-orders-v1') throw new DOMException('full','QuotaExceededError');
+    write.call(this,key,value);
+  });
+  render(<App />);
+  await screen.findByRole('button',{name:/20GP/});
+  await userEvent.click(screen.getByRole('button',{name:'生成装柜方案'}));
+  expect(await screen.findByText('方案比较')).toBeInTheDocument();
+  expect(screen.getByText(/本机空间不足.*未保存/)).toBeInTheDocument();
+});
+
+test('applied removal and locks survive reload, with original layout recoverable as a new version', async () => {
+  const cargo = {...createCargo('HISTORY'),id:'history',quantity:2};
+  localStorage.setItem('container-loading-assistant-draft-v1',JSON.stringify({containerId:preset.id,container:preset,cargoItems:[cargo],itemGapCm:0,clearanceCm:0}));
+  const packed = {...response,solutions:response.solutions.map(s => ({...s,placements:[0,1].map(i => ({id:`history-${i}`,cargo_id:'history',instance_index:i,x_mm:i*600,y_mm:0,z_mm:0,length_mm:600,width_mm:400,height_mm:400,rotation:'LWH',weight_g:18000,step:1})),loaded_counts:{history:2},unloaded_counts:{history:0},metrics:{...s.metrics,loaded_pieces:2}}))};
+  vi.spyOn(globalThis,'fetch').mockImplementation(async (url,init) => {
+    if (url === '/api/v1/layout/review') {
+      const {placements} = JSON.parse(init?.body as string);
+      return new Response(JSON.stringify({valid:true,errors:[],placements,zones:[],metrics:{...packed.solutions[0].metrics,loaded_pieces:placements.length}}));
+    }
+    return new Response(JSON.stringify(url === '/api/v1/pack' ? packed : [preset]));
+  });
+  const app = render(<App />);
+  await screen.findByRole('button',{name:/20GP/});
+  await userEvent.click(screen.getByRole('button',{name:'生成装柜方案'}));
+  await userEvent.click(await screen.findByRole('button',{name:'编辑布局'}));
+  await userEvent.click(screen.getByRole('button',{name:'HISTORY · 第 1 件'}));
+  await userEvent.click(screen.getByRole('button',{name:'移出选中单件'}));
+  await waitFor(() => expect(screen.queryByRole('button',{name:'HISTORY · 第 1 件'})).not.toBeInTheDocument());
+  await userEvent.click(screen.getByRole('button',{name:'HISTORY · 第 2 件'}));
+  await userEvent.click(screen.getByRole('button',{name:'锁定该 SKU'}));
+  await waitFor(() => expect(screen.getByRole('button',{name:'应用调整'})).toBeEnabled());
+  await userEvent.click(screen.getByRole('button',{name:'应用调整'}));
+  expect(loadSavedOrders()).toHaveLength(2);
+  const saved = loadSavedOrders()[0];
+  expect(saved.workspace?.lockedCargoIds).toEqual(['history']);
+  expect(saved.workspace?.solutionOverrides.high_fill?.unloaded_counts).toEqual({history:1});
+  app.unmount(); render(<App />);
+  expect(await screen.findByText('当前方案已人工调整')).toBeInTheDocument();
+  expect(loadSavedOrders()).toHaveLength(2);
+  await userEvent.click(screen.getByRole('button',{name:'编辑布局'}));
+  await userEvent.click(screen.getByRole('button',{name:/HISTORY · 第 2 件\s*已锁定/}));
+  expect(screen.getByRole('button',{name:'移出选中单件'})).toBeDisabled();
+  await userEvent.click(screen.getByRole('button',{name:'返回方案'}));
+  await userEvent.click(screen.getByRole('button',{name:'恢复原始布局'}));
+  expect(loadSavedOrders()).toHaveLength(3);
+  expect(loadSavedOrders()[0].workspace?.solutionOverrides).toEqual({});
+  expect(loadSavedOrders()[1].workspace?.solutionOverrides.high_fill?.placements).toHaveLength(1);
+});
 
 test('preserves the input on timeout, prevents edits while waiting and allows manual retry', async () => {
   let finish!: (value: Response) => void;

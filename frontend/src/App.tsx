@@ -3,7 +3,8 @@ import { useEffect, useRef, useState } from "react";
 
 import { CargoTable } from "./components/CargoTable";
 import { ContainerPicker } from "./components/ContainerPicker";
-import { SolutionWorkspace } from "./components/SolutionWorkspace";
+import { SolutionWorkspace, recommendProfile } from "./components/SolutionWorkspace";
+import { OrderHistory } from './components/OrderHistory';
 import { ModelSettings } from "./components/ModelSettings";
 import { CalculationProgress } from './components/CalculationProgress';
 import voyageBanner from "./assets/voyage-banner.jpg";
@@ -13,7 +14,7 @@ import { createCargo, validateCargo, validateCargoIssues, validateCalculationSet
 import { cloneCargoPreset } from "./lib/cargoPresets";
 import { downloadCargoTemplate, readCargoExcelReport, type ExcelReport } from "./lib/excel";
 import { trackAnalyticsEvent } from "./lib/analytics";
-import { loadSavedOrders, saveOrder } from "./lib/orderHistory";
+import { loadSavedOrders, saveOrder, deleteSavedOrder, updateSavedSelection, type SavedOrder, type SavedWorkspace } from "./lib/orderHistory";
 import type { AIModelConfig, CargoInput, CargoPreset, ContainerSpec, PackResponse, SolutionProfile } from "./types";
 
 const STORAGE_KEY = "container-loading-assistant-draft-v1";
@@ -24,27 +25,42 @@ interface Draft {
   cargoItems: CargoInput[];
   itemGapCm: number;
   clearanceCm: number;
+  activeSavedId?: string | null;
+  orderName?: string;
+  preferredProfile?: SolutionProfile;
 }
 
 function loadDraft(): Partial<Draft> {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
+    const value = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "{}");
+    return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
   } catch {
     return {};
   }
 }
 
 export default function App() {
-  const draft = loadDraft();
+  const [boot] = useState(() => {
+    const draft = loadDraft();
+    const restored = loadSavedOrders().find(order => order.id === draft.activeSavedId && order.response);
+    return {draft,restored};
+  });
+  const draft = boot.restored ?? boot.draft;
   const [presets, setPresets] = useState<ContainerSpec[]>([]);
-  const [container, setContainer] = useState<ContainerSpec | null>(null);
+  const [container, setContainer] = useState<ContainerSpec | null>(boot.restored?.container ?? null);
   const [cargoItems, setCargoItems] = useState<CargoInput[]>(draft.cargoItems?.length ? draft.cargoItems : [createCargo("SKU-001")]);
   const [itemGapCm, setItemGapCm] = useState(draft.itemGapCm ?? 0);
   const [clearanceCm, setClearanceCm] = useState(draft.clearanceCm ?? 0);
-  const [preferredProfile, setPreferredProfile] = useState<SolutionProfile>("high_fill");
+  const [preferredProfile, setPreferredProfile] = useState<SolutionProfile>(draft.preferredProfile ?? "high_fill");
+  const [orderName, setOrderName] = useState(boot.restored?.name ?? boot.draft.orderName ?? `订单 ${new Date().toLocaleDateString('zh-CN')}`);
+  const [activeSavedId, setActiveSavedId] = useState<string | null>(boot.restored?.id ?? null);
+  const [workspace, setWorkspace] = useState<SavedWorkspace | undefined>(boot.restored?.workspace);
+  const [workspaceKey, setWorkspaceKey] = useState(0);
+  const [historyMessage, setHistoryMessage] = useState(boot.restored ? '已恢复上次保存的完整方案。历史快照未按当前规则重新复核。' : '');
+  const [draftError, setDraftError] = useState('');
   const [aiConfig, setAIConfig] = useState<AIModelConfig>(loadAIConfig);
   const [showModelSettings, setShowModelSettings] = useState(false);
-  const [result, setResult] = useState<PackResponse | null>(null);
+  const [result, setResult] = useState<PackResponse | null>(boot.restored?.response ?? null);
   const [loading, setLoading] = useState(false);
   const calculationPending = useRef(false);
   const [progress, setProgress] = useState<{phase: CalculationPhase; startedAt: number} | null>(null);
@@ -68,17 +84,40 @@ export default function App() {
         setPresets(items);
         const selected = draft.container?.id === "custom"
           ? draft.container
-          : items.find((item) => item.id === draft.containerId) ?? items[0];
-        setContainer(selected ?? null);
+          : items.find((item) => item.id === boot.draft.containerId) ?? items[0];
+        setContainer(current => current ?? selected ?? null);
       })
       .catch((reason: Error) => setError(reason.message));
   }, []);
 
   useEffect(() => {
     if (!container) return;
-    const nextDraft: Draft = { containerId: container.id, container, cargoItems, itemGapCm, clearanceCm };
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(nextDraft));
-  }, [container, cargoItems, itemGapCm, clearanceCm]);
+    const nextDraft: Draft = { containerId: container.id, container, cargoItems, itemGapCm, clearanceCm, activeSavedId, orderName, preferredProfile };
+    try { localStorage.setItem(STORAGE_KEY, JSON.stringify(nextDraft)); setDraftError(''); }
+    catch { setDraftError('草稿及自动恢复位置未保存，请释放本机空间；当前页面仍可使用。'); }
+  }, [container, cargoItems, itemGapCm, clearanceCm, activeSavedId, orderName, preferredProfile]);
+
+  const persistOrder = (nextContainer: ContainerSpec, nextResult: PackResponse | undefined, nextWorkspace: SavedWorkspace | undefined, source: SavedOrder['source']) => {
+    try {
+      const saved = saveOrder({name:orderName.trim() || '未命名订单',container:nextContainer,cargoItems,itemGapCm,clearanceCm,preferredProfile,response:nextResult,workspace:nextWorkspace,source});
+      setSavedOrders(loadSavedOrders());
+      setActiveSavedId(nextResult ? saved.id : null);
+      setHistoryMessage(`已保存到本机 · ${new Date(saved.savedAt).toLocaleTimeString('zh-CN')} · ${nextResult ? '完整方案版本' : '输入清单'}`);
+    } catch (reason) {
+      setActiveSavedId(null);
+      setHistoryMessage(reason instanceof Error ? reason.message : '本次未保存，当前页面仍保留。');
+    }
+  };
+
+  const workspaceChanged = (next: SavedWorkspace, reason: 'selection' | 'adjustment' | 'restore') => {
+    setWorkspace(next);
+    if (!container || !result) return;
+    if (reason === 'selection') {
+      if (!activeSavedId) return;
+      try { updateSavedSelection(activeSavedId,next.selectedProfile); setSavedOrders(loadSavedOrders()); }
+      catch (error) { setHistoryMessage(error instanceof Error ? error.message : '方案选择未保存'); }
+    } else persistOrder(container,result,next,reason);
+  };
 
   const calculateFor = async (nextContainer: ContainerSpec, lockedPlacements: import("./types").Placement[] = []) => {
     if (calculationPending.current) return;
@@ -99,7 +138,11 @@ export default function App() {
       const nextResult = await packOrder(requestContainer, cargoItems, itemGapCm, aiConfig, preferredProfile, lockedPlacements, phase => setProgress({phase, startedAt}));
       if (!nextResult.solutions.length) throw new CalculationError('服务未返回装柜方案，清单和原方案已保留，请稍后重试。', 'service', 'EMPTY_SOLUTIONS');
       setContainer(requestContainer);
+      const nextWorkspace: SavedWorkspace = {selectedProfile:recommendProfile(nextResult),solutionOverrides:{},lockedCargoIds:[]};
+      setWorkspace(nextWorkspace);
+      setWorkspaceKey(key => key + 1);
       setResult(nextResult);
+      persistOrder(requestContainer,nextResult,nextWorkspace,'calculation');
       trackAnalyticsEvent("pack_solutions_generated", { mode, elapsed_ms: Date.now() - startedAt, cargo_types: cargoItems.length, pieces: cargoItems.reduce((sum, item) => sum + item.quantity, 0), recommended_profile: nextResult.recommended_profile ?? preferredProfile });
     } catch (reason) {
       setCalculationFailed(true);
@@ -140,11 +183,13 @@ export default function App() {
     setCargoItems(cloneCargoPreset(preset));
     trackAnalyticsEvent("cargo_preset_loaded", { preset: preset.id });
     setResult(null);
+    setActiveSavedId(null); setWorkspace(undefined);
     setError(null);
   };
 
   const clearDraft = () => {
-    localStorage.removeItem(STORAGE_KEY);
+    try { localStorage.removeItem(STORAGE_KEY); } catch { setDraftError('无法清除本机草稿，当前页面已重置。'); }
+    setActiveSavedId(null); setWorkspace(undefined);
     setCargoItems([createCargo("SKU-001")]);
     setContainer(presets[0] ?? null);
     setItemGapCm(0);
@@ -154,13 +199,29 @@ export default function App() {
 
   const saveCurrentOrder = () => {
     if (!container) return;
-    const saved = saveOrder({ name: `订单 ${new Date().toLocaleDateString("zh-CN")}`, container, cargoItems, itemGapCm, clearanceCm });
-    setSavedOrders((current) => [saved, ...current.filter((item) => item.name !== saved.name)].slice(0, 10));
-    setError("订单已保存到本机，可在下方恢复");
+    persistOrder(container,result ?? undefined,result ? workspace : undefined,result ? 'manual' : 'input');
   };
 
+  const restoreOrder = (order: SavedOrder, copy: boolean) => {
+    setContainer(order.container); setCargoItems(order.cargoItems); setItemGapCm(order.itemGapCm); setClearanceCm(order.clearanceCm);
+    setPreferredProfile(order.preferredProfile ?? 'high_fill'); setOrderName(copy ? `${order.name} 副本` : order.name);
+    setResult(copy ? null : order.response ?? null); setWorkspace(copy ? undefined : order.workspace); setWorkspaceKey(key => key + 1);
+    setActiveSavedId(!copy && order.response ? order.id : null); setError(null); setCalculationFailed(false); setImportReport(null);
+    setHistoryMessage(copy ? '已复制输入为新订单，原版本保留；请重新计算。' : order.response ? '已恢复完整历史方案，未按当前规则重新复核。' : '已恢复历史输入清单。');
+    trackAnalyticsEvent(copy ? 'order_copied' : 'order_restored',{order_id:order.id});
+  };
+  const removeOrder = (order: SavedOrder) => {
+    if (!window.confirm(`删除“${order.name}”的这个本机版本？当前页面布局不会改变。`)) return;
+    try {
+      deleteSavedOrder(order.id); setSavedOrders(loadSavedOrders());
+      if (activeSavedId === order.id) setActiveSavedId(null);
+      setHistoryMessage(activeSavedId === order.id ? '当前版本已删除，页面仍保留；如需刷新恢复，请重新保存。' : '历史版本已删除。');
+    } catch (error) { setHistoryMessage(error instanceof Error ? error.message : '删除失败'); }
+  };
+  const historyPanel = <OrderHistory orders={savedOrders} name={orderName} onNameChange={setOrderName} onSave={saveCurrentOrder} onRestore={restoreOrder} onDelete={removeOrder} hasResult={Boolean(result)} message={[historyMessage,draftError].filter(Boolean).join(' ')} />;
+
   if (result && container) {
-    return <><fieldset className="calculation-fields" disabled={loading} aria-busy={loading}><SolutionWorkspace response={result} container={container} presets={presets} cargoItems={cargoItems} itemGapCm={itemGapCm} onBack={() => { trackAnalyticsEvent("pack_edit_input"); setResult(null); setCalculationFailed(false); }} onRecalculate={calculateFor} recalculating={loading} /></fieldset>{progress && <CalculationProgress {...progress} />}</>;
+    return <><fieldset className="calculation-fields" disabled={loading} aria-busy={loading}><SolutionWorkspace key={workspaceKey} response={result} container={container} presets={presets} cargoItems={cargoItems} itemGapCm={itemGapCm} initialWorkspace={workspace} onWorkspaceChange={workspaceChanged} historyPanel={historyPanel} onBack={() => { trackAnalyticsEvent("pack_edit_input"); setResult(null); setActiveSavedId(null); setWorkspace(undefined); setCalculationFailed(false); }} onRecalculate={calculateFor} recalculating={loading} /></fieldset>{progress && <CalculationProgress {...progress} />}</>;
   }
 
   if (showModelSettings) {
@@ -188,10 +249,7 @@ export default function App() {
           </div>
         </section>
         <ContainerPicker presets={presets} selected={container} onSelect={setContainer} />
-        <section className="saved-orders" aria-label="本机订单">
-          <div><strong>本机订单</strong><button type="button" onClick={saveCurrentOrder}>保存当前订单</button></div>
-          {savedOrders.length > 0 && <select aria-label="恢复本机订单" defaultValue="" onChange={(event) => { const order = savedOrders.find((item) => item.id === event.target.value); if (!order) return; setContainer(order.container); setCargoItems(order.cargoItems); setItemGapCm(order.itemGapCm); setClearanceCm(order.clearanceCm); setResult(null); setError(null); trackAnalyticsEvent("order_restored", { order_id: order.id }); }}><option value="">选择已保存订单</option>{savedOrders.map((order) => <option value={order.id} key={order.id}>{order.name} · {new Date(order.savedAt).toLocaleDateString("zh-CN")}</option>)}</select>}
-        </section>
+        {historyPanel}
         <CargoTable
           rows={cargoItems}
           onChange={setCargoItems}
