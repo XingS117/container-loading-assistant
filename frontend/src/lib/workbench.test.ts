@@ -1,9 +1,55 @@
 import { createCargo } from './cargo';
-import { moveDraft, rotateDraft, editHistory, constrainMove, geometryError, relocateDraft } from './workbench';
+import { moveDraft, rotateDraft, editHistory, constrainMove, geometryError, relocateDraft, removeDraft, swapDraft } from './workbench';
 import type { ContainerSpec, Placement } from '../types';
 
 const a: Placement = { id: 'a-0', cargo_id: 'a', instance_index: 0, x_mm: 100, y_mm: 100, z_mm: 0, length_mm: 600, width_mm: 400, height_mm: 400, rotation: 'LWH', weight_g: 18000, step: 1 };
 const box = { inner_length_mm: 3000, inner_width_mm: 2000, inner_height_mm: 2000, clearance_mm: 0 } as ContainerSpec;
+
+test('removes a single sparse instance, settles its stack and can undo the whole change', () => {
+  const top = {...a, id:'a-8', instance_index:8, z_mm:400};
+  const list = [a, top];
+  const result = removeDraft(list, a.id, new Set(), box);
+  expect(result.error).toBeNull();
+  expect(result.placements).toEqual([{...top, z_mm:0}]);
+  expect(list[1].z_mm).toBe(400);
+  const history = editHistory({past:[],present:list,future:[]}, {type:'edit',placements:result.placements});
+  expect(editHistory(history, {type:'undo'}).present).toEqual(list);
+  expect(removeDraft([a], a.id, new Set(), box).placements).toEqual([]);
+});
+
+test('removal cannot move locked supporters or leave partial support', () => {
+  const top = {...a, id:'top', cargo_id:'b', z_mm:400};
+  const list = [a, top];
+  expect(removeDraft(list, a.id, new Set(['a']), box).placements).toBe(list);
+  expect(removeDraft(list, a.id, new Set(['b']), box).error).toContain('锁定');
+  const half = {...a, length_mm:300};
+  const bridge = [half, {...half,id:'right',x_mm:400}, top];
+  const failed = removeDraft(bridge, a.id, new Set(), box);
+  expect(failed.error).toContain('支撑');
+  expect(failed.placements).toBe(bridge);
+});
+
+test('swaps exact instance positions with sparse indices preserving identity, size and rotation', () => {
+  const other = {...a,id:'b-7',cargo_id:'b',instance_index:7,x_mm:1800,y_mm:900,rotation:'WLH' as const,length_mm:400,width_mm:600};
+  const result = swapDraft([a,other], a.id, other.id, new Set(), box, 20);
+  expect(result.error).toBeNull();
+  expect(result.placements).toEqual([{...a,x_mm:1800,y_mm:900}, {...other,x_mm:100,y_mm:100}]);
+  expect(swapDraft([a,{...other,cargo_id:'a'}], a.id, other.id, new Set(), box).error).toBeNull();
+});
+
+test('swap rejects locks, identical selections, boundary, collision and lost support atomically', () => {
+  const other = {...a,id:'b',cargo_id:'b',x_mm:2600,length_mm:400};
+  const list = [a,other];
+  expect(swapDraft(list,a.id,other.id,new Set(['b']),box).error).toContain('锁定');
+  expect(swapDraft(list,a.id,a.id,new Set(),box).error).toBeTruthy();
+  expect(swapDraft(list,a.id,other.id,new Set(),box).placements).toBe(list);
+  const short = {...a,id:'short',x_mm:1800,height_mm:200};
+  const stack = [a,{...a,id:'top',z_mm:400},short];
+  expect(swapDraft(stack,a.id,short.id,new Set(),box).error).toContain('支撑');
+  const small = {...a,id:'small',x_mm:1000,length_mm:300};
+  const neighbor = {...a,id:'neighbor',x_mm:1400};
+  expect(swapDraft([a,small,neighbor],a.id,small.id,new Set(),box).error).toContain('重叠');
+});
 test('snaps to all cabinet walls while respecting clearance', () => {
   const cabinet = { ...box, clearance_mm: 20 };
   const p = { ...a, z_mm: 20 };

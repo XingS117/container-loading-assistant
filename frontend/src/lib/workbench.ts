@@ -121,6 +121,39 @@ export interface EditHistory {
   future: Placement[][];
 }
 
+export function removeDraft(placements: Placement[], id: string, locked: Set<string>, container: ContainerSpec, gap = 0): { placements: Placement[]; error: string | null } {
+  const selected = placements.find(p => p.id === id);
+  const fail = (error: string) => ({ placements, error });
+  if (!selected) return fail('找不到要移出的货物');
+  if (locked.has(selected.cargo_id)) return fail('该货物已锁定，请先解锁');
+  const settled: Placement[] = [];
+  for (const p of placements.filter(p => p.id !== id).sort((a, b) => a.z_mm - b.z_mm)) {
+    const supports = settled.filter(b => p.x_mm < b.x_mm + b.length_mm && b.x_mm < p.x_mm + p.length_mm
+      && p.y_mm < b.y_mm + b.width_mm && b.y_mm < p.y_mm + p.width_mm);
+    const z = Math.max(container.clearance_mm ?? 0, ...supports.map(b => b.z_mm + b.height_mm));
+    if (locked.has(p.cargo_id) && z !== p.z_mm) return fail('移出会改变已锁定货物的支撑，请先解锁相关 SKU');
+    settled.push({ ...p, z_mm: z });
+  }
+  const byId = new Map(settled.map(p => [p.id, p]));
+  const next = placements.filter(p => p.id !== id).map(p => byId.get(p.id)!);
+  const error = geometryError(next, container, gap);
+  return error ? fail(error) : { placements: next, error: null };
+}
+
+export function swapDraft(placements: Placement[], firstId: string, secondId: string, locked: Set<string>, container: ContainerSpec, gap = 0): { placements: Placement[]; error: string | null } {
+  const first = placements.find(p => p.id === firstId);
+  const second = placements.find(p => p.id === secondId);
+  const fail = (error: string) => ({ placements, error });
+  if (!first || !second || firstId === secondId) return fail('请选择两件不同的货物');
+  if (locked.has(first.cargo_id) || locked.has(second.cargo_id)) return fail('锁定货物不能交换位置，请先解锁');
+  const next = placements.map(p => {
+    const target = p.id === firstId ? second : p.id === secondId ? first : null;
+    return target ? { ...p, x_mm: target.x_mm, y_mm: target.y_mm, z_mm: target.z_mm } : p;
+  });
+  const error = geometryError(next, container, gap);
+  return error ? fail(error) : { placements: next, error: null };
+}
+
 export type EditAction =
   | { type: "edit"; placements: Placement[] }
   | { type: "undo" }

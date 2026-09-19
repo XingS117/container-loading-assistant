@@ -2,7 +2,7 @@ import { useEffect, useReducer, useRef, useState } from "react";
 import { LoadVisualizer } from "./LoadVisualizer";
 import { reviewLayout } from "../lib/api";
 import { orientationsFor } from "../lib/cargo";
-import { constrainMove, editHistory, geometryError, relocateDraft } from "../lib/workbench";
+import { constrainMove, editHistory, geometryError, relocateDraft, removeDraft, swapDraft } from "../lib/workbench";
 import type { CargoInput, ContainerSpec, LayoutReviewResponse, Orientation, PackingSolution, Placement } from "../types";
 
 interface Props {
@@ -18,6 +18,7 @@ interface Props {
 export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, onApply, onClose, initialLockedCargoIds }: Props) {
   const [history, dispatch] = useReducer(editHistory, { past: [], present: solution.placements, future: [] });
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [swapTargetId, setSwapTargetId] = useState('');
   const [locked, setLocked] = useState<Set<string>>(new Set(initialLockedCargoIds));
   const [wholeCargo, setWholeCargo] = useState(false);
   const [moving, setMoving] = useState(false);
@@ -39,6 +40,8 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
   const invalidIds = currentReview?.errors.flatMap(e => e.placement_ids) ?? [];
   const dirty = JSON.stringify(placements) !== JSON.stringify(solution.placements) || [...locked].sort().join('|') !== [...(initialLockedCargoIds ?? [])].sort().join('|');
   const names = Object.fromEntries(cargoItems.map(c => [c.id, c.sku]));
+  const loadedCounts = Object.fromEntries(cargoItems.map(c => [c.id, placements.filter(p => p.cargo_id === c.id).length]));
+  const unloaded = cargoItems.map(c => ({ cargo: c, count: c.quantity - loadedCounts[c.id] })).filter(item => item.count > 0);
 
   useEffect(() => {
     aliveRef.current = true;
@@ -103,13 +106,30 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
     const result = relocateDraft(placements, id, [x, y], wholeCargo, locked, container, itemGapCm * 10);
     return result.error ? null : result.placements.find(p => p.id === id) ?? null;
   };
+  const removeSelected = () => {
+    if (!selected || !cargo || cargo.must_load) return;
+    const result = removeDraft(placements, selected.id, locked, container, itemGapCm * 10);
+    if (result.error) { setActionError(result.error); return; }
+    const settledCount = result.placements.filter(p => p.z_mm !== placements.find(original => original.id === p.id)?.z_mm).length;
+    edit(result.placements, `已移出 ${cargo.sku} 第 ${selected.instance_index + 1} 件并转入未装清单，订单数量不变。${settledCount ? `${settledCount} 件上层货物已向下归位。` : ''}可撤销恢复。`);
+  };
+  const swapSelected = () => {
+    if (!selected) return;
+    const result = swapDraft(placements, selected.id, swapTargetId, locked, container, itemGapCm * 10);
+    if (result.error) { setActionError(result.error); return; }
+    edit(result.placements, '两件货物的位置已交换，尺寸、朝向和订单数量不变；可撤销。');
+  };
   const close = () => { if (!dirty || window.confirm("放弃本次尚未应用的调整？")) onClose(); };
   const apply = () => {
     if (!currentReview?.valid || !currentReview.metrics) return;
-    onApply({ ...solution, placements: currentReview.placements ?? placements, metrics: currentReview.metrics, zones: currentReview.zones, identical_to: null,
+    const finalPlacements = currentReview.placements ?? placements;
+    const loaded = Object.fromEntries(cargoItems.map(c => [c.id, finalPlacements.filter(p => p.cargo_id === c.id).length]));
+    const remaining = Object.fromEntries(cargoItems.map(c => [c.id, c.quantity - loaded[c.id]]));
+    onApply({ ...solution, placements: finalPlacements, loaded_counts: loaded, unloaded_counts: remaining, metrics: currentReview.metrics, zones: currentReview.zones, identical_to: null,
       pros: ["人工调整已通过边界、碰撞、朝向、支撑和承重规则检查"],
       cons: ["几何校验不替代现场绑扎、运输动态稳定性和装卸可达性复核"],
-      warnings: [currentReview.placements ? "装载步骤已按新位置和上下支撑关系重新生成，请现场复核搬运通道和柜门操作空间" : "人工调整后请按新布局复核装载顺序和柜门操作空间"],
+      warnings: [currentReview.placements ? "装载步骤已按新位置和上下支撑关系重新生成，请现场复核搬运通道和柜门操作空间" : "人工调整后请按新布局复核装载顺序和柜门操作空间",
+        ...cargoItems.filter(c => remaining[c.id] > 0).map(c => `${c.sku} 未装 ${remaining[c.id]} 件，仍保留在订单中，请安排后续装运`)],
     }, locked);
   };
 
@@ -146,6 +166,11 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
           {names[p.cargo_id]} · 第 {p.instance_index + 1} 件{locked.has(p.cargo_id) && <small>已锁定</small>}
         </button>)}</div>
         {placements.length > 300 && <p>列表最多显示 300 件，请搜索缩小范围，也可在图中选择。</p>}
+        <section className="workbench-unloaded" aria-label="未装清单">
+          <h2>未装清单 <small>{unloaded.reduce((sum, item) => sum + item.count, 0)} 件</small></h2>
+          {unloaded.length ? unloaded.map(({cargo, count}) => <p key={cargo.id}>{cargo.sku}：未装 {count} / {cargo.quantity} 件</p>) : <p>当前订单已全部装入</p>}
+          <small>移出不会删除订单货物。可用“撤销”或“恢复原方案”恢复本次编辑中的移出操作；应用后可在方案页恢复原始布局。</small>
+        </section>
       </aside>
       <div className="workbench-canvas">
         <LoadVisualizer container={container} solution={{ ...solution, placements, zones: [] }} cargoItems={cargoItems}
@@ -161,6 +186,16 @@ export function LayoutWorkbench({ solution, container, cargoItems, itemGapCm, on
         {selected && cargo ? <>
           <fieldset disabled={checking} className="workbench-edit-fields">
           <p>{cargo.sku} · 第 {selected.instance_index + 1} 件</p>
+          <div className="workbench-piece-actions">
+            <button disabled={locked.has(cargo.id) || cargo.must_load} onClick={removeSelected}>移出选中单件</button>
+            <small>{cargo.must_load ? '该货物为本柜必装，不能移出；如需改变要求，请返回订单修改。' : '仅移出当前这一件，上层安全归位后转入未装清单；不受整批移动开关影响。'}</small>
+            <label>交换对象<select aria-label="交换对象" value={swapTargetId} disabled={locked.has(cargo.id)} onChange={e => setSwapTargetId(e.target.value)}>
+              <option value="">选择另一件货物</option>
+              {placements.filter(p => p.id !== selected.id).map(p => <option key={p.id} value={p.id} disabled={locked.has(p.cargo_id)}>{names[p.cargo_id]} · 第 {p.instance_index + 1} 件{locked.has(p.cargo_id) ? '（已锁定）' : ''}</option>)}
+            </select></label>
+            <button disabled={locked.has(cargo.id) || !swapTargetId || swapTargetId === selected.id || !placements.some(p => p.id === swapTargetId && !locked.has(p.cargo_id))} onClick={swapSelected}>交换两件位置</button>
+            <small>交换两件的位置，保留各自尺寸和朝向；重叠、悬空或承重不符时保留原布局。</small>
+          </div>
           <label><input type="checkbox" checked={wholeCargo} onChange={e => setWholeCargo(e.target.checked)} />移动同 SKU 全部货物</label>
           <button onClick={() => setLocked(previous => { const next = new Set(previous); if (next.has(cargo.id)) next.delete(cargo.id); else next.add(cargo.id); return next; })}>{locked.has(cargo.id) ? "解锁该 SKU" : "锁定该 SKU"}</button>
           {locked.has(cargo.id) && <small>重算保留该 SKU 的位置和朝向；上层由其他 SKU 承载时，请一并锁定下方支撑货物。</small>}

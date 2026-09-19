@@ -1,8 +1,10 @@
-import { render, screen, within } from "@testing-library/react";
+import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { classifySolutionWarning, explainFloorRisk, loadingStepLabels, recommendProfile, SolutionWorkspace } from "./SolutionWorkspace";
 import type { CargoInput, ContainerSpec, PackResponse, SolutionProfile } from "../types";
+import * as api from '../lib/api';
+import { createCargo } from '../lib/cargo';
 
 
 const container: ContainerSpec = {
@@ -57,6 +59,35 @@ function makeResponse(highFillImbalance: number, stableImbalance: number): PackR
     ],
   };
 }
+
+test('removal updates only the edited profile and its printed counts, and restoring recovers them', async () => {
+  const cargo = {...createCargo('REMOVE-PRINT'),id:'a',quantity:1};
+  const response = makeResponse(0,0);
+  response.solutions.forEach(s => {
+    s.placements = [{id:'a-0',cargo_id:'a',instance_index:0,x_mm:0,y_mm:0,z_mm:0,length_mm:600,width_mm:400,height_mm:400,rotation:'LWH',weight_g:18000,step:1}];
+    s.loaded_counts = {a:1}; s.unloaded_counts = {a:0}; s.metrics.loaded_pieces = 1;
+  });
+  const review = vi.spyOn(api,'reviewLayout').mockImplementation(async (_c,_items,placements) => ({valid:true,errors:[],placements,metrics:{...response.solutions[0].metrics,loaded_pieces:placements.length},zones:[]}));
+  try {
+    const {container:root} = render(<SolutionWorkspace response={response} container={container} presets={presets} cargoItems={[cargo]} onBack={() => {}} onRecalculate={async () => {}} recalculating={false} />);
+    await userEvent.click(screen.getByRole('button',{name:'编辑布局'}));
+    await userEvent.click(screen.getByRole('button',{name:'REMOVE-PRINT · 第 1 件'}));
+    await userEvent.click(screen.getByRole('button',{name:'移出选中单件'}));
+    await waitFor(() => expect(screen.getByRole('button',{name:'应用调整'})).toBeEnabled());
+    await userEvent.click(screen.getByRole('button',{name:'应用调整'}));
+    expect(screen.getByText('0 / 1')).toBeInTheDocument();
+    expect(screen.getByText('余 1 件')).toBeInTheDocument();
+    const printRows = Array.from(root.querySelectorAll('.print-solution-page .print-table tbody tr')).filter(row => row.textContent?.includes('REMOVE-PRINT'));
+    expect(printRows).toHaveLength(3);
+    expect(printRows[0].textContent).toMatch(/0 件.*1 件/);
+    expect(printRows[1].textContent).toMatch(/1 件.*0 件/);
+    expect(printRows[2].textContent).toMatch(/1 件.*0 件/);
+    expect(response.solutions[0].placements).toHaveLength(1);
+    await userEvent.click(screen.getByRole('button',{name:'恢复原始布局'}));
+    expect(screen.getByText('1 / 1')).toBeInTheDocument();
+    expect(screen.queryByText('余 1 件')).not.toBeInTheDocument();
+  } finally { review.mockRestore(); }
+});
 
 
 test("recommends stable when high_fill is imbalanced and stable improves it", () => {

@@ -13,6 +13,66 @@ const solution = { profile: 'easy', name: '易操作', placements: [{ id: 'a-0',
 const valid = { valid: true, errors: [], metrics: solution.metrics, zones: [] };
 beforeEach(() => { vi.mocked(reviewLayout).mockReset().mockResolvedValue(valid); });
 
+test('removes only the selected piece, settles above, shows unloaded counts and undoes', async () => {
+  const stack = {...solution, placements:[...solution.placements, {...solution.placements[0],id:'a-1',instance_index:1,z_mm:400}]};
+  render(<LayoutWorkbench solution={stack} container={container} cargoItems={[{...cargo,quantity:2}]} itemGapCm={0} onApply={vi.fn()} onClose={() => {}} />);
+  await userEvent.click(screen.getByRole('button', {name:'A · 第 1 件'}));
+  await userEvent.click(screen.getByLabelText('移动同 SKU 全部货物'));
+  await userEvent.click(screen.getByRole('button', {name:'移出选中单件'}));
+  await waitFor(() => expect(screen.queryByRole('button', {name:'A · 第 1 件'})).not.toBeInTheDocument());
+  expect(screen.getByText('A：未装 1 / 2 件')).toBeInTheDocument();
+  expect(reviewLayout).toHaveBeenCalledWith(container, [{...cargo,quantity:2}], [expect.objectContaining({id:'a-1',z_mm:0})], 0);
+  await userEvent.click(screen.getByRole('button', {name:'撤销'}));
+  await userEvent.click(screen.getByRole('button', {name:'A · 第 2 件'}));
+  expect(screen.getByLabelText('Z 高度 cm')).toHaveValue(40);
+  expect(screen.queryByText('A：未装 1 / 2 件')).not.toBeInTheDocument();
+});
+
+test('cannot remove must-load or locked cargo, and server rejection keeps the piece', async () => {
+  const props = {solution,container,cargoItems:[{...cargo,must_load:true}],itemGapCm:0,onApply:vi.fn(),onClose:() => {}};
+  const {rerender} = render(<LayoutWorkbench {...props} />);
+  await userEvent.click(screen.getByRole('button', {name:'A · 第 1 件'}));
+  expect(screen.getByRole('button', {name:'移出选中单件'})).toBeDisabled();
+  rerender(<LayoutWorkbench {...props} cargoItems={[cargo]} />);
+  await userEvent.click(screen.getByRole('button', {name:'锁定该 SKU'}));
+  expect(screen.getByRole('button', {name:'移出选中单件'})).toBeDisabled();
+  await userEvent.click(screen.getByRole('button', {name:'解锁该 SKU'}));
+  vi.mocked(reviewLayout).mockResolvedValue({...valid,valid:false,errors:[{code:'TOP_LOAD_EXCEEDED',message:'落位后承重超限',placement_ids:[]}],metrics:null});
+  await userEvent.click(screen.getByRole('button', {name:'移出选中单件'}));
+  expect(await screen.findByRole('alert')).toHaveTextContent('落位后承重超限');
+  expect(screen.getByRole('button', {name:'A · 第 1 件'})).toBeInTheDocument();
+  expect(screen.getByRole('button', {name:'撤销'})).toBeDisabled();
+});
+
+test('swaps two sparse instances and leaves the original positions when server rejects', async () => {
+  const other = {...cargo,id:'b',sku:'B'};
+  const second = {...solution.placements[0],id:'b-7',cargo_id:'b',instance_index:7,x_mm:1400};
+  const pair = {...solution,placements:[solution.placements[0],second]};
+  render(<LayoutWorkbench solution={pair} container={container} cargoItems={[cargo,other]} itemGapCm={0} onApply={vi.fn()} onClose={() => {}} />);
+  await userEvent.click(screen.getByRole('button', {name:'A · 第 1 件'}));
+  await userEvent.selectOptions(screen.getByLabelText('交换对象'), 'b-7');
+  await userEvent.click(screen.getByRole('button', {name:'交换两件位置'}));
+  await waitFor(() => expect(screen.getByLabelText('X 柜长 cm')).toHaveValue(140));
+  expect(reviewLayout).toHaveBeenCalledWith(container,[cargo,other],[expect.objectContaining({id:'a-0',x_mm:1400}),expect.objectContaining({id:'b-7',x_mm:0})],0);
+  vi.mocked(reviewLayout).mockResolvedValue({...valid,valid:false,errors:[{code:'TOP_LOAD_EXCEEDED',message:'承重超限',placement_ids:[]}],metrics:null});
+  await userEvent.click(screen.getByRole('button', {name:'交换两件位置'}));
+  expect(await screen.findByRole('alert')).toHaveTextContent('承重超限');
+  expect(screen.getByLabelText('X 柜长 cm')).toHaveValue(140);
+});
+
+test('applying an empty layout recomputes loaded/unloaded counts without changing the order', async () => {
+  const apply = vi.fn();
+  const order = [{...cargo,quantity:1}];
+  vi.mocked(reviewLayout).mockImplementation(async (_container,_cargo,draft) => ({...valid,placements:draft,metrics:{...solution.metrics,loaded_pieces:draft.length}}));
+  render(<LayoutWorkbench solution={{...solution,loaded_counts:{a:1},unloaded_counts:{a:0}}} container={container} cargoItems={order} itemGapCm={0} onApply={apply} onClose={() => {}} />);
+  await userEvent.click(screen.getByRole('button', {name:'A · 第 1 件'}));
+  await userEvent.click(screen.getByRole('button', {name:'移出选中单件'}));
+  await waitFor(() => expect(screen.getByRole('button', {name:'应用调整'})).toBeEnabled());
+  await userEvent.click(screen.getByRole('button', {name:'应用调整'}));
+  expect(apply).toHaveBeenCalledWith(expect.objectContaining({placements:[],loaded_counts:{a:0},unloaded_counts:{a:1},metrics:expect.objectContaining({loaded_pieces:0}),warnings:expect.arrayContaining([expect.stringContaining('未装 1 件')])}),expect.any(Set));
+  expect(order[0].quantity).toBe(1);
+});
+
 test('relocates a bottom box, settles its upper box and undoes the complete operation', async () => {
   const stack = { ...solution, placements: [...solution.placements, { ...solution.placements[0], id: 'a-1', instance_index: 1, z_mm: 400 }] };
   render(<LayoutWorkbench solution={stack} container={container} cargoItems={[cargo]} itemGapCm={0} onApply={vi.fn()} onClose={() => {}} />);

@@ -26,6 +26,30 @@ def test_review_returns_authoritative_metrics():
     assert data["zones"]
 
 
+def test_review_after_removal_preserves_sparse_identity_and_accepts_empty_layout():
+    body = payload()
+    body["placements"] = [dict(body["placements"][1], z_mm=0)]
+    data = client.post("/api/v1/layout/review", json=body).json()
+    assert data["valid"] is True
+    assert data["metrics"]["loaded_pieces"] == 1
+    assert data["placements"][0]["instance_index"] == 1
+    assert sum(z["piece_count"] for z in data["zones"]) == 1
+    body["placements"] = []
+    data = client.post("/api/v1/layout/review", json=body).json()
+    assert data["valid"] is True
+    assert data["metrics"]["loaded_pieces"] == 0
+    assert data["placements"] == data["zones"] == []
+
+
+def test_review_rejects_removing_must_load_cargo():
+    body = payload()
+    body["cargo_items"][0]["must_load"] = True
+    body["placements"] = body["placements"][:1]
+    data = client.post("/api/v1/layout/review", json=body).json()
+    assert data["valid"] is False
+    assert any(e["code"] == "MUST_LOAD_MISSING" for e in data["errors"])
+
+
 def test_generated_solution_uses_contiguous_public_step_numbers():
     body = payload()
     request = PackRequest.model_validate(body)
