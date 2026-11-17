@@ -5,9 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "vite --config frontend/vite.config.mjs --configLoader native --host 0.0.0.0",
-    "build": "tsc -p tsconfig.app.json && vite build --config frontend/vite.config.mjs --configLoader native",
+    "build": "tsc -p tsconfig.app.json && vite build --config frontend/vite.config.mjs --configLoader native && node scripts/generate-sitemap.mjs",
     "test": "vitest --config frontend/vite.config.mjs --configLoader native",
-    "preview": "vite preview --config frontend/vite.config.mjs --configLoader native --host 0.0.0.0"
+    "preview": "vite preview --config frontend/vite.config.mjs --configLoader native --host 0.0.0.0",
+    "sitemap": "node scripts/generate-sitemap.mjs"
   },
   "dependencies": {
     "exceljs": "^4.4.0",

@@ -1,0 +1,190 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Excel 装柜模板下载与导入教程（3 分钟学会） · 装柜方案助手</title>
+<meta name="description" content="装柜方案助手支持 Excel 模板导入：下载模板 → 在 Excel 中填写货物清单（尺寸/重量/数量）→ 一键导入工具。本文图解 3 分钟完成批量装柜清单录入。" />
+<meta name="keywords" content="装柜Excel模板,装柜清单模板,Excel导入装柜,装柜助手Excel,SKU表格,装柜方案助手" />
+<meta name="robots" content="index,follow" />
+<meta name="author" content="装柜方案助手" />
+<link rel="canonical" href="https://packing.xingshuwen.com/tutorial/excel-import/" />
+
+<meta property="og:type" type="article" />
+<meta property="og:title" content="Excel 装柜模板下载与导入教程（3 分钟学会）" />
+<meta property="og:description" content="3 分钟学会用 Excel 批量导入装柜清单。" />
+<meta property="og:url" content="https://packing.xingshuwen.com/tutorial/excel-import/" />
+<meta property="og:site_name" content="装柜方案助手" />
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "HowTo",
+  "headline": "Excel 装柜模板下载与导入教程（3 分钟学会）",
+  "description": "装柜方案助手支持 Excel 模板导入：下载模板 → 填写货物清单 → 一键导入工具。",
+  "step": [
+    {"@type": "HowToStep", "name": "下载 Excel 模板", "text": "在装柜方案助手货物清单右上角点击「模板」下载固定格式的 xlsx 文件。"},
+    {"@type": "HowToStep", "name": "填写货物清单", "text": "在 Excel 中按列填写：货物代号、长度(cm)、宽度(cm)、高度(cm)、重量(kg)、数量。"},
+    {"@type": "HowToStep", "name": "导入工具", "text": "回到工具界面点击「导入 Excel」选择文件，自动校验后即可计算装柜方案。"}
+  ],
+  "author": {"@type": "Organization", "name": "装柜方案助手"},
+  "publisher": {"@type": "Organization", "name": "装柜方案助手", "url": "https://packing.xingshuwen.com"},
+  "datePublished": "2026-09-26",
+  "dateModified": "2026-09-26",
+  "inLanguage": "zh-CN",
+  "mainEntityOfPage": "https://packing.xingshuwen.com/tutorial/excel-import/"
+}
+</script>
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #1a2a3a; background: #f3f5f2; line-height: 1.7; }
+  .header { background: #fff; border-bottom: 1px solid #e3e7e5; padding: 16px 24px; }
+  .header-inner { max-width: 960px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; }
+  .brand { font-size: 18px; font-weight: 700; color: #009AC9; text-decoration: none; }
+  .brand-sub { font-size: 12px; color: #7a8a99; margin-left: 8px; }
+  .nav a { font-size: 14px; color: #4a5a6a; text-decoration: none; margin-left: 20px; }
+  .nav a:hover { color: #009AC9; }
+  .container { max-width: 880px; margin: 32px auto; padding: 0 24px; }
+  .breadcrumb { font-size: 13px; color: #7a8a99; margin-bottom: 16px; }
+  .breadcrumb a { color: #7a8a99; text-decoration: none; }
+  h1 { font-size: 30px; line-height: 1.3; margin-bottom: 16px; color: #1a2a3a; }
+  .meta { font-size: 13px; color: #7a8a99; margin-bottom: 32px; padding-bottom: 16px; border-bottom: 1px solid #e3e7e5; }
+  h2 { font-size: 22px; margin: 32px 0 12px; color: #1a2a3a; padding-left: 12px; border-left: 4px solid #009AC9; }
+  h3 { font-size: 18px; margin: 20px 0 8px; color: #2a3a4a; }
+  p { font-size: 15px; margin-bottom: 14px; color: #2a3a4a; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0 24px; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  th { background: #eef3f1; color: #1a2a3a; text-align: left; padding: 10px 12px; font-size: 13px; font-weight: 600; }
+  td { padding: 10px 12px; border-top: 1px solid #e3e7e5; font-size: 14px; color: #2a3a4a; }
+  tr:nth-child(even) td { background: #fafcfb; }
+  .highlight { background: #fff8e1; padding: 16px; border-radius: 8px; margin: 16px 0; border-left: 4px solid #ffc107; }
+  .step-box { background: #fff; border-left: 4px solid #009AC9; padding: 16px 20px; border-radius: 8px; margin: 16px 0; }
+  .step-box h3 { margin-top: 0; }
+  .cta-block { background: linear-gradient(135deg, #009AC9 0%, #0078a3 100%); color: #fff; padding: 28px; border-radius: 12px; margin: 32px 0; text-align: center; }
+  .cta-block h3 { font-size: 22px; margin-bottom: 8px; color: #fff; }
+  .cta-block p { color: rgba(255,255,255,0.92); margin-bottom: 18px; }
+  .cta-block a { display: inline-block; background: #fff; color: #009AC9; padding: 12px 28px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 15px; }
+  .cta-block a:hover { background: #f3f5f2; }
+  ul, ol { margin: 8px 0 16px 24px; font-size: 15px; color: #2a3a4a; }
+  li { margin-bottom: 6px; }
+  .related { background: #fff; padding: 24px; border-radius: 8px; margin-top: 32px; }
+  .related h3 { font-size: 17px; margin-bottom: 14px; color: #1a2a3a; }
+  .related ul { list-style: none; margin: 0; padding: 0; }
+  .related li { padding: 8px 0; border-top: 1px dashed #e3e7e5; }
+  .related li:first-child { border-top: none; }
+  .related a { color: #009AC9; text-decoration: none; font-size: 14px; }
+  .related a:hover { text-decoration: underline; }
+  .footer { background: #1a2a3a; color: #c8d4dc; padding: 24px; text-align: center; margin-top: 48px; font-size: 13px; }
+  .footer a { color: #4dbedc; text-decoration: none; margin: 0 8px; }
+  .footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-inner">
+    <a href="https://packing.xingshuwen.com/" class="brand">装柜方案助手<span class="brand-sub">Packing Assistant</span></a>
+    <nav class="nav">
+      <a href="https://packing.xingshuwen.com/">在线工具</a>
+      <a href="/case/40hq-loading/">案例</a>
+      <a href="/tutorial/weight-balancing/">教程</a>
+    </nav>
+  </div>
+</header>
+
+<div class="container">
+
+  <div class="breadcrumb"><a href="https://packing.xingshuwen.com/">首页</a> · <a href="/tutorial/">教程</a> · Excel 模板导入</div>
+
+  <h1>Excel 装柜模板下载与导入教程（3 分钟学会）</h1>
+  <div class="meta">2026-09-26 · 教程 · Excel 模板 · 批量导入 · 数据安全</div>
+
+  <h2>为什么要用 Excel 导入</h2>
+  <p>手敲 10 个 SKU 慢？客户发来的装箱清单是 xlsx？装柜方案助手支持 Excel 一键导入，<strong>几秒钟搞定批量录入</strong>。</p>
+
+  <div class="highlight">
+    <strong>数据安全承诺：</strong>Excel 文件<strong>只在浏览器内解析</strong>，原始数据不会上传服务器。计算服务只接收解析后的结构化数据（长度/宽度/高度/重量/数量），也不保存订单。这一条对外贸货代很重要——客户 SKU 尺寸是商业机密。
+  </div>
+
+  <h2>3 步搞定 Excel 导入</h2>
+
+  <div class="step-box">
+    <h3>步骤 1：下载模板</h3>
+    <p>打开 <a href="https://packing.xingshuwen.com/">装柜方案助手</a>，在货物清单区域右上角点击「<strong>模板</strong>」按钮，浏览器会自动下载一个固定格式的 <code>cargo-template.xlsx</code> 文件。</p>
+  </div>
+
+  <div class="step-box">
+    <h3>步骤 2：填写货物清单</h3>
+    <p>用 Excel/WPS 打开下载的模板，按以下列填写：</p>
+    <table>
+      <thead><tr><th>列名</th><th>填写要求</th><th>示例</th></tr></thead>
+      <tbody>
+        <tr><td>货物代号</td><td>字符串，必填</td><td>ZT1</td></tr>
+        <tr><td>长度（cm）</td><td>数字，&gt; 0</td><td>65</td></tr>
+        <tr><td>宽度（cm）</td><td>数字，&gt; 0</td><td>65</td></tr>
+        <tr><td>高度（cm）</td><td>数字，&gt; 0</td><td>120</td></tr>
+        <tr><td>重量（kg）</td><td>数字，&gt; 0</td><td>150</td></tr>
+        <tr><td>数量</td><td>整数，&gt; 0</td><td>30</td></tr>
+      </tbody>
+    </table>
+    <p>多 SKU 时按行依次填写，每行一种 SKU。模板支持 100 列 × 10000 行，足以应对大多数订单。</p>
+  </div>
+
+  <div class="step-box">
+    <h3>步骤 3：导入工具</h3>
+    <p>回到装柜方案助手，点击货物清单区域的「<strong>导入 Excel</strong>」按钮，选择填写好的文件。</p>
+    <p>系统会自动做：</p>
+    <ul>
+      <li>读取首个工作表</li>
+      <li>校验必填字段、尺寸/重量/数量范围</li>
+      <li>单位换算（如果你填了 mm，会自动换算为 cm）</li>
+      <li>展示「数据质量报告」——有问题列出，没问题直接进入预览</li>
+    </ul>
+    <p>点击「应用导入并替换清单」即可。</p>
+  </div>
+
+  <h2>常见问题</h2>
+
+  <h3>Q：导入后数量不对？</h3>
+  <p>A：检查「数量」列是否填成小数（如 30.0 应改为 30），或非数字字符（如「30 件」应改为「30」）。</p>
+
+  <h3>Q：单位是 mm 怎么办？</h3>
+  <p>A：导入器会自动识别 mm 单位并换算为 cm（显示在「数据质量报告」的「单位换算」行）。例如 650 mm 会被识别为 65 cm。</p>
+
+  <h3>Q：导入失败了但没说明原因？</h3>
+  <p>A：先确认文件是 <code>.xlsx</code> 格式（旧版 .xls 需要另存为 .xlsx），且文件大小不超过 10 MB，工作表不超过 10000 行 100 列。</p>
+
+  <h3>Q：导入的清单能用多久？</h3>
+  <p>A：导入后会写入你本机的草稿（localStorage），关闭浏览器再打开还在。但<strong>只是临时保存</strong>，要长期保留请用工具内的「保存到本机订单」功能。</p>
+
+  <h2>立即试试</h2>
+
+  <div class="cta-block">
+    <h3>免费在线装柜方案计算</h3>
+    <p>5 方案对比 · Excel 模板一键导入 · 数据本地解析不上传</p>
+    <a href="https://packing.xingshuwen.com/">立即打开装柜方案助手 →</a>
+  </div>
+
+  <div class="related">
+    <h3>相关阅读</h3>
+    <ul>
+      <li>📦 <a href="/case/40hq-loading/">40HQ 装柜案例：6 SKU 54 托混装载全过程</a></li>
+      <li>⚖️ <a href="/tutorial/weight-balancing/">装柜偏柜怎么办？3 个方法避免海运甩柜</a></li>
+      <li>🤖 <a href="/blog/container-loading-algorithm/">3D 装柜算法是怎么实现的？程序员视角深度解析</a></li>
+    </ul>
+  </div>
+
+</div>
+
+<footer class="footer">
+  <div>
+    <a href="https://packing.xingshuwen.com/">装柜方案助手</a> ·
+    <a href="/case/">案例库</a> ·
+    <a href="/tutorial/">教程</a> ·
+    <a href="/blog/">算法科普</a>
+  </div>
+  <div style="margin-top:8px;">© 2026 装柜方案助手 · 数据本地解析，不上传服务器</div>
+</footer>
+
+</body>
+</html>

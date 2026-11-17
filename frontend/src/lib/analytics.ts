@@ -74,3 +74,50 @@ export function trackAnalyticsEvent(eventName: string, eventData?: Record<string
   if (window.umami) { flush(); send([eventName,safe]); }
   else if (initialized && pending.length<32) pending.push([eventName,safe]);
 }
+
+// ─────────────────────────────────────────────────────────────
+// 推广归因追踪（增量添加于 2026-09-26，不破坏既有事件协议）
+// ─────────────────────────────────────────────────────────────
+
+const UTM_STORAGE_KEY = "wb_utm_v1";
+
+type UtmParams = {
+  utm_source?: string;
+  utm_medium?: string;
+  utm_campaign?: string;
+  utm_keyword?: string;
+};
+
+function isUtmKey(key: string): key is keyof UtmParams {
+  return key === "utm_source" || key === "utm_medium" || key === "utm_campaign" || key === "utm_keyword";
+}
+
+export function readUtmParams(): UtmParams {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = sessionStorage.getItem(UTM_STORAGE_KEY);
+    return raw ? (JSON.parse(raw) as UtmParams) : {};
+  } catch {
+    return {};
+  }
+}
+
+export function captureUtmParams(): UtmParams {
+  if (typeof window === "undefined") return {};
+  const params = new URLSearchParams(window.location.search);
+  const utm: UtmParams = {};
+  for (const [key, value] of params.entries()) {
+    if (!isUtmKey(key)) continue;
+    const trimmed = value.trim();
+    if (trimmed.length > 80) continue;
+    utm[key] = trimmed;
+  }
+  if (Object.keys(utm).length > 0) {
+    try {
+      sessionStorage.setItem(UTM_STORAGE_KEY, JSON.stringify(utm));
+    } catch {
+      /* 推广归因失败不影响主流程 */
+    }
+  }
+  return utm;
+}

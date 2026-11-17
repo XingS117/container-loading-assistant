@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>3D 装柜算法是怎么实现的？程序员视角深度解析 · 装柜方案助手</title>
+<meta name="description" content="装柜算法核心是「多目标优化 + 物理约束」：怎么在 12 米长的集装箱里，把 6 SKU 54 托货物按装载率/重心/操作三个目标摆得又稳又满。本文用代码示例解析 3D 装柜算法的 5 个关键步骤。" />
+<meta name="keywords" content="装柜算法,3D装箱,装箱算法,装柜优化,贪心算法,物理约束,多目标优化,装柜方案助手" />
+<meta name="robots" content="index,follow" />
+<meta name="author" content="装柜方案助手" />
+<link rel="canonical" href="https://packing.xingshuwen.com/blog/container-loading-algorithm/" />
+
+<meta property="og:type" content="article" />
+<meta property="og:title" content="3D 装柜算法是怎么实现的？程序员视角深度解析" />
+<meta property="og:description" content="装柜算法核心：多目标优化 + 物理约束的实战解析。" />
+<meta property="og:url" content="https://packing.xingshuwen.com/blog/container-loading-algorithm/" />
+<meta property="og:site_name" content="装柜方案助手" />
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "TechArticle",
+  "headline": "3D 装柜算法是怎么实现的？程序员视角深度解析",
+  "description": "装柜算法的核心是「多目标优化 + 物理约束」。本文用真实代码示例解析 3D 装柜算法的 5 个关键步骤：候选生成、物理校验、目标评估、解码输出、用户调整接口。",
+  "author": {"@type": "Organization", "name": "装柜方案助手"},
+  "publisher": {"@type": "Organization", "name": "装柜方案助手", "url": "https://packing.xingshuwen.com"},
+  "datePublished": "2026-09-26",
+  "dateModified": "2026-09-26",
+  "inLanguage": "zh-CN",
+  "mainEntityOfPage": "https://packing.xingshuwen.com/blog/container-loading-algorithm/"
+}
+</script>
+
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif; color: #1a2a3a; background: #f3f5f2; line-height: 1.7; }
+  .header { background: #fff; border-bottom: 1px solid #e3e7e5; padding: 16px 24px; }
+  .header-inner { max-width: 960px; margin: 0 auto; display: flex; justify-content: space-between; align-items: center; }
+  .brand { font-size: 18px; font-weight: 700; color: #009AC9; text-decoration: none; }
+  .brand-sub { font-size: 12px; color: #7a8a99; margin-left: 8px; }
+  .nav a { font-size: 14px; color: #4a5a6a; text-decoration: none; margin-left: 20px; }
+  .nav a:hover { color: #009AC9; }
+  .container { max-width: 880px; margin: 32px auto; padding: 0 24px; }
+  .breadcrumb { font-size: 13px; color: #7a8a99; margin-bottom: 16px; }
+  .breadcrumb a { color: #7a8a99; text-decoration: none; }
+  h1 { font-size: 30px; line-height: 1.3; margin-bottom: 16px; color: #1a2a3a; }
+  .meta { font-size: 13px; color: #7a8a99; margin-bottom: 32px; padding-bottom: 16px; border-bottom: 1px solid #e3e7e5; }
+  h2 { font-size: 22px; margin: 32px 0 12px; color: #1a2a3a; padding-left: 12px; border-left: 4px solid #009AC9; }
+  h3 { font-size: 18px; margin: 20px 0 8px; color: #2a3a4a; }
+  p { font-size: 15px; margin-bottom: 14px; color: #2a3a4a; }
+  pre { background: #1a2a3a; color: #e3e7e5; padding: 16px; border-radius: 8px; overflow-x: auto; margin: 12px 0 20px; font-size: 13px; line-height: 1.5; }
+  code { background: #eef3f1; color: #d6336c; padding: 2px 6px; border-radius: 3px; font-family: "Fira Code", Consolas, monospace; font-size: 13px; }
+  pre code { background: transparent; color: inherit; padding: 0; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0 24px; background: #fff; border-radius: 8px; overflow: hidden; box-shadow: 0 1px 3px rgba(0,0,0,0.06); }
+  th { background: #eef3f1; color: #1a2a3a; text-align: left; padding: 10px 12px; font-size: 13px; font-weight: 600; }
+  td { padding: 10px 12px; border-top: 1px solid #e3e7e5; font-size: 14px; color: #2a3a4a; }
+  tr:nth-child(even) td { background: #fafcfb; }
+  .highlight { background: #fff8e1; padding: 16px; border-radius: 8px; margin: 16px 0; border-left: 4px solid #ffc107; }
+  .cta-block { background: linear-gradient(135deg, #009AC9 0%, #0078a3 100%); color: #fff; padding: 28px; border-radius: 12px; margin: 32px 0; text-align: center; }
+  .cta-block h3 { font-size: 22px; margin-bottom: 8px; color: #fff; }
+  .cta-block p { color: rgba(255,255,255,0.92); margin-bottom: 18px; }
+  .cta-block a { display: inline-block; background: #fff; color: #009AC9; padding: 12px 28px; border-radius: 6px; text-decoration: none; font-weight: 600; font-size: 15px; }
+  .cta-block a:hover { background: #f3f5f2; }
+  ul, ol { margin: 8px 0 16px 24px; font-size: 15px; color: #2a3a4a; }
+  li { margin-bottom: 6px; }
+  .related { background: #fff; padding: 24px; border-radius: 8px; margin-top: 32px; }
+  .related h3 { font-size: 17px; margin-bottom: 14px; color: #1a2a3a; }
+  .related ul { list-style: none; margin: 0; padding: 0; }
+  .related li { padding: 8px 0; border-top: 1px dashed #e3e7e5; }
+  .related li:first-child { border-top: none; }
+  .related a { color: #009AC9; text-decoration: none; font-size: 14px; }
+  .related a:hover { text-decoration: underline; }
+  .footer { background: #1a2a3a; color: #c8d4dc; padding: 24px; text-align: center; margin-top: 48px; font-size: 13px; }
+  .footer a { color: #4dbedc; text-decoration: none; margin: 0 8px; }
+  .footer a:hover { text-decoration: underline; }
+</style>
+</head>
+<body>
+
+<header class="header">
+  <div class="header-inner">
+    <a href="https://packing.xingshuwen.com/" class="brand">装柜方案助手<span class="brand-sub">Packing Assistant</span></a>
+    <nav class="nav">
+      <a href="https://packing.xingshuwen.com/">在线工具</a>
+      <a href="/case/40hq-loading/">案例</a>
+      <a href="/blog/container-loading-algorithm/">算法科普</a>
+    </nav>
+  </div>
+</header>
+
+<div class="container">
+
+  <div class="breadcrumb"><a href="https://packing.xingshuwen.com/">首页</a> · <a href="/blog/">博客</a> · 3D 装柜算法解析</div>
+
+  <h1>3D 装柜算法是怎么实现的？程序员视角深度解析</h1>
+  <div class="meta">2026-09-26 · 算法 · 程序员视角 · Python · 6 SKU 54 托实测</div>
+
+  <h2>装柜算法的本质</h2>
+  <p>装柜不是一道数学题，而是<strong>多目标优化 + 物理约束</strong>的综合题。装一个 12 米长的集装箱，要把 6 种 SKU 共 54 个托盘摆进去，必须同时满足：</p>
+  <ul>
+    <li><strong>物理约束</strong>：边界、碰撞、完整支撑、顶部承重、叠放层数、柜门朝向</li>
+    <li><strong>目标</strong>：体积利用率、左右重心偏差、前后重心偏差、操作步骤数</li>
+    <li><strong>必装货物</strong>：订单上写明的货物一件不能少</li>
+  </ul>
+
+  <p>装柜方案助手采用 <strong>保守的完整支撑货物栈模型</strong>，不生成悬空或跨箱搭接。这一点很关键——很多装柜软件为了"装得多"会做悬空，但实际运输会侧倾。</p>
+
+  <h2>5 个关键步骤</h2>
+
+  <h3>步骤 ① 候选生成器（贪心搜索）</h3>
+  <p>核心思路：逐层放货物，每放一件，搜索下一个候选位置。</p>
+  <pre><code>def generate_candidates(container, placed_items, cargo_type):
+    """生成下一个货物的候选位置"""
+    candidates = []
+    for x in grid_x_positions(container, cargo_type):
+        for y in grid_y_positions(container, cargo_type):
+            for z in [next_layer_z(placed_items, x, y)]:
+                for rotation in cargo_type.allowed_rotations:
+                    pos = Placement(x, y, z, rotation)
+                    if validate_physics(container, placed_items, pos):
+                        candidates.append(pos)
+    return candidates</code></pre>
+
+  <h3>步骤 ② 物理校验器（5 个约束）</h3>
+  <p>所有候选位置都要过校验：</p>
+  <pre><code>def validate_physics(container, placed, new):
+    return all([
+        inside_container(container, new),                  # 边界
+        no_collision(placed, new),                         # 碰撞
+        full_support(placed, new),                         # 完整支撑（关键）
+        top_load_safe(placed, new),                        # 顶部承重
+        allowed_orientation(new),                          # 朝向约束
+    ])</code></pre>
+
+  <h3>步骤 ③ 三方案并行评估</h3>
+  <p>一个求解产出 3 个方案，每个方案目标函数不同：</p>
+  <table>
+    <thead><tr><th>方案</th><th>目标函数</th><th>实测数据（6 SKU 54 托）</th></tr></thead>
+    <tbody>
+      <tr><td>高装载率</td><td>最大化体积利用率</td><td>左右偏差 9.56%，上层空白 2.24 m²</td></tr>
+      <tr><td>重心稳妥</td><td>最小化左右 + 前后偏差</td><td>左右偏差 1.78%，上层空白 4.71 m²</td></tr>
+      <tr><td>易操作</td><td>最小化 SKU 切换数</td><td>左右偏差 6.32%，步骤数优先压缩</td></tr>
+    </tbody>
+  </table>
+
+  <h3>步骤 ④ 解码输出（3D + 俯视 + 侧视）</h3>
+  <p>布局生成后，输出三视图供人工核对：</p>
+  <ul>
+    <li><strong>3D 视图</strong>：Three.js 渲染，鼠标拖拽旋转</li>
+    <li><strong>俯视图</strong>：柜门视角的二维投影</li>
+    <li><strong>侧视图</strong>：左右两侧投影，核对重心</li>
+    <li><strong>柜门图</strong>：实际装柜师傅看到的第一眼</li>
+    <li><strong>分层图</strong>：每层单独导出，便于仓库师傅按层装</li>
+  </ul>
+
+  <h3>步骤 ⑤ 用户调整接口</h3>
+  <p>算法给的方案不一定 100% 满足现场约束（包装强度、固定方式、叉车可达性），所以必须有"人工调整"能力：</p>
+  <ul>
+    <li>移动：把某一件货物挪到指定位置</li>
+    <li>旋转：在允许朝向内切换方向</li>
+    <li>交换：两件货物位置互换</li>
+    <li>锁定重算：保留已摆好的货物，剩余空间重新搜索</li>
+    <li>移出：暂时移除某件（不计入必装）</li>
+  </ul>
+
+  <h2>为什么装柜这么难</h2>
+  <p>6 SKU 54 托实测求解时长 7.88 秒（含三方案），30 SKU 1295 件 1.5 秒，5000 件 5.6 秒。看似很快，但每一次搜索都在 <code>O(n!)</code> 量级的组合空间里找可行解。</p>
+
+  <p>业界常用的算法：</p>
+  <ul>
+    <li><strong>贪心搜索</strong>（我们用的）：速度快，但不一定全局最优</li>
+    <li><strong>回溯 + 剪枝</strong>：能找到更优解，但慢</li>
+    <li><strong>遗传算法</strong>：能跳出局部最优，但调参难</li>
+    <li><strong>深度学习</strong>（新兴）：训练时间长，泛化能力待验证</li>
+  </ul>
+
+  <h2>实测数据：6 SKU 54 托</h2>
+  <p>同一个订单，三套方案核心指标对比（来源：装柜方案助手 2026-09-19 离线评测）：</p>
+  <table>
+    <thead><tr><th>指标</th><th>高装载率</th><th>重心稳妥</th><th>易操作</th></tr></thead>
+    <tbody>
+      <tr><td>装入件数</td><td>54</td><td>54</td><td>54</td></tr>
+      <tr><td>最小支撑率</td><td>100%</td><td>100%</td><td>100%</td></tr>
+      <tr><td>左右偏差</td><td>9.56%</td><td><strong>1.78%</strong></td><td>6.32%</td></tr>
+      <tr><td>上层最大空白</td><td>2.24 m²</td><td>4.71 m²</td><td>2.37 m²</td></tr>
+      <tr><td>装载步骤</td><td>13</td><td>13</td><td>13</td></tr>
+    </tbody>
+  </table>
+
+  <div class="highlight">
+    <strong>没有"整体最优"</strong>——三套方案都装下了全部 54 托、支撑率都 100%，但只在"装得多 / 重心稳 / 好操作"三个目标间取舍。
+  </div>
+
+  <h2>试试这个工具</h2>
+  <p>上面这些不是 PPT，是装柜方案助手的真实运行结果。任何人都能用它免费复现：</p>
+
+  <div class="cta-block">
+    <h3>免费在线装柜方案计算</h3>
+    <p>5 方案对比 · 3D 视图 · 真实数据 · Excel 导入</p>
+    <a href="https://packing.xingshuwen.com/">立即打开装柜方案助手 →</a>
+  </div>
+
+  <div class="related">
+    <h3>相关阅读</h3>
+    <ul>
+      <li>📦 <a href="/case/40hq-loading/">40HQ 装柜案例：6 SKU 54 托混装载全过程</a></li>
+      <li>⚖️ <a href="/tutorial/weight-balancing/">装柜偏柜怎么办？3 个方法避免海运甩柜</a></li>
+      <li>📊 <a href="/tutorial/excel-import/">Excel 装柜模板下载与导入教程（3 分钟学会）</a></li>
+    </ul>
+  </div>
+
+</div>
+
+<footer class="footer">
+  <div>
+    <a href="https://packing.xingshuwen.com/">装柜方案助手</a> ·
+    <a href="/case/">案例库</a> ·
+    <a href="/tutorial/">教程</a> ·
+    <a href="/blog/">算法科普</a>
+  </div>
+  <div style="margin-top:8px;">© 2026 装柜方案助手 · 数据本地解析，不上传服务器</div>
+</footer>
+
+</body>
+</html>

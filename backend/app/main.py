@@ -499,6 +499,12 @@ def resolve_frontend_path(path: str, dist_dir: Path = DIST_DIR) -> Path:
     candidate = (root / path).resolve()
     if candidate.is_relative_to(root) and candidate.is_file():
         return candidate
+    # 目录式 URL（如 /case/40hq-loading/，也兼容不带尾斜杠）回落到该目录下的 index.html，
+    # 这样静态 SEO 内容页可以按标准目录结构发布（/case/x/index.html -> /case/x/）。
+    if candidate.is_relative_to(root) and candidate.is_dir():
+        index = candidate / "index.html"
+        if index.is_file():
+            return index
     return root / "index.html"
 
 
